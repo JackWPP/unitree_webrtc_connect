@@ -1,0 +1,34 @@
+{
+  "system": {
+    "log_level": "INFO",
+    "log_dir": "logs",
+    "cleanup_logs_days": 7,
+    "monitor_interval": 5,
+    "heartbeat_timeout": 30
+  },
+  "dogs": {
+    "dog1": {
+      "name": "MyDog",
+      "ip": "192.168.31.245",
+      "serial_number": "",
+      "connection_method": "LocalSTA",
+      "enabled": true
+    }
+  },
+  "movement": {
+    "default_speed": 0.5,
+    "default_turn_speed": 1.0,
+    "default_duration": 1.0,
+    "square_walk_speed": 1.0,
+    "square_walk_step_duration": 2.0,
+    "dance_duration": 5.0,
+    "safety_stop_enabled": true
+  },
+  "gui": {
+    "window_width": 1000,
+    "window_height": 700,
+    "theme": "clam",
+    "auto_scroll_log": true,
+    "status_update_interval": 1000
+  }
+}
