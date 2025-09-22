@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-双机器狗控制系统GUI界面
-使用tkinter实现的用户友好界面，支持所有控制功能
+增强版双机器狗控制系统GUI界面
 新增功能：网络扫描和键盘WASD控制
 """
 
@@ -20,8 +19,8 @@ from network_scanner import NetworkScanner, NetworkScannerGUI
 from keyboard_controller import KeyboardController, KeyboardControlGUI
 
 
-class DualDogGUI:
-    """双机器狗控制GUI主类"""
+class EnhancedDualDogGUI:
+    """增强版双机器狗控制GUI主类"""
     
     def __init__(self):
         self.root = tk.Tk()
@@ -40,9 +39,9 @@ class DualDogGUI:
         self.asyncio_thread = None
         
         # 新增：网络扫描器和键盘控制器
-        self.network_scanner = None
+        self.network_scanner = NetworkScanner()
         self.network_scanner_gui = None
-        self.keyboard_controller = None
+        self.keyboard_controller = KeyboardController()
         self.keyboard_control_gui = None
         
         # GUI变量
@@ -52,8 +51,8 @@ class DualDogGUI:
         self.log_level_var = tk.StringVar(value="INFO")
         
         # 控制模式变量
-        self.control_mode_var = tk.StringVar(value="all")  # "all", "single", "dog1", "dog2"
-        self.selected_dog_var = tk.StringVar(value="Dog1")  # 当前选中的机器狗
+        self.control_mode_var = tk.StringVar(value="all")
+        self.selected_dog_var = tk.StringVar(value="Dog1")
         
         # 机器狗配置
         self.dog1_name_var = tk.StringVar(value="Dog1")
@@ -61,51 +60,19 @@ class DualDogGUI:
         self.dog2_name_var = tk.StringVar(value="Dog2")
         self.dog2_ip_var = tk.StringVar(value="192.168.31.246")
         
+        # 日志
+        self.logger = logging.getLogger("EnhancedDualDogGUI")
+        
         # 初始化GUI
         self._setup_gui()
         self._setup_logging()
         self._start_asyncio_thread()
-        
-        # 在 asyncio 线程启动后设置其他组件
-        self._setup_network_scanner()
-        self._setup_keyboard_controller()
-        self._setup_additional_gui_components()
         
         # 绑定关闭事件
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
         
         # 定期更新状态显示
         self._update_status_display()
-    
-    def _setup_additional_gui_components(self):
-        """设置额外的GUI组件"""
-        # 网络扫描器GUI组件
-        if self.network_scanner_gui:
-            self.network_scanner_gui.set_device_selection_callback(self._on_device_from_scanner_selected)
-        
-        # 键盘控制GUI组件
-        if self.keyboard_control_gui:
-            self.keyboard_control_gui.set_control_mode_vars(self.control_mode_var, self.selected_dog_var)
-    
-    def _setup_network_scanner(self):
-        """设置网络扫描器"""
-        self.network_scanner = NetworkScanner()
-        
-    def _setup_keyboard_controller(self):
-        """设置键盘控制器"""
-        self.keyboard_controller = KeyboardController()
-    
-    def _on_device_from_scanner_selected(self, ip: str, serial: str, device_name: str):
-        """从网络扫描器选择设备的回调"""
-        # 自动填充到第一个或第二个机器狗配置
-        if not self.dog1_ip_var.get() or self.dog1_ip_var.get() == "192.168.31.245":
-            self.dog1_name_var.set(device_name)
-            self.dog1_ip_var.set(ip)
-        elif not self.dog2_ip_var.get() or self.dog2_ip_var.get() == "192.168.31.246":
-            self.dog2_name_var.set(device_name)
-            self.dog2_ip_var.set(ip)
-        
-        self.logger.info(f"已选择设备: {device_name} ({ip})")
     
     def _setup_gui(self):
         """设置GUI界面"""
@@ -117,13 +84,16 @@ class DualDogGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(2, weight=1)
+        main_frame.rowconfigure(3, weight=1)  # 调整为4行布局
         
-        # 左侧面板 - 连接配置
+        # 左侧面板 - 连接配置和网络扫描
         self._create_connection_panel(main_frame)
         
         # 右侧面板 - 控制面板
         self._create_control_panel(main_frame)
+        
+        # 键盘控制面板
+        self._create_keyboard_panel(main_frame)
         
         # 底部面板 - 日志显示
         self._create_log_panel(main_frame)
@@ -139,55 +109,53 @@ class DualDogGUI:
         scanner_frame.grid(row=0, column=0, columnspan=2, sticky=tk.W+tk.E, pady=(0, 10))
         
         # 创建网络扫描器GUI
-        if self.network_scanner:
-            self.network_scanner_gui = NetworkScannerGUI(scanner_frame, self.network_scanner)
-            self.network_scanner_gui.set_device_selection_callback(self._on_device_from_scanner_selected)
+        self.network_scanner_gui = NetworkScannerGUI(scanner_frame, self.network_scanner)
+        self.network_scanner_gui.set_device_selection_callback(self._on_device_from_scanner_selected)
+        
+        # 手动配置分隔线
+        ttk.Separator(conn_frame, orient='horizontal').grid(row=1, column=0, columnspan=2, sticky=tk.W+tk.E, pady=10)
         
         # 机器狗1配置
-        ttk.Label(conn_frame, text="机器狗1:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        ttk.Label(conn_frame, text="名称:").grid(row=1, column=0, sticky=tk.W, padx=(20, 0))
-        ttk.Entry(conn_frame, textvariable=self.dog1_name_var, width=15).grid(row=1, column=1, sticky=tk.W+tk.E, padx=5)
-        ttk.Label(conn_frame, text="IP:").grid(row=2, column=0, sticky=tk.W, padx=(20, 0))
-        ttk.Entry(conn_frame, textvariable=self.dog1_ip_var, width=15).grid(row=2, column=1, sticky=tk.W+tk.E, padx=5)
+        ttk.Label(conn_frame, text="机器狗1:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Label(conn_frame, text="名称:").grid(row=3, column=0, sticky=tk.W, padx=(20, 0))
+        ttk.Entry(conn_frame, textvariable=self.dog1_name_var, width=15).grid(row=3, column=1, sticky=tk.W+tk.E, padx=5)
+        ttk.Label(conn_frame, text="IP:").grid(row=4, column=0, sticky=tk.W, padx=(20, 0))
+        ttk.Entry(conn_frame, textvariable=self.dog1_ip_var, width=15).grid(row=4, column=1, sticky=tk.W+tk.E, padx=5)
         
         # 状态显示
-        ttk.Label(conn_frame, text="状态:").grid(row=3, column=0, sticky=tk.W, padx=(20, 0))
-        status1_label = ttk.Label(conn_frame, textvariable=self.dog1_status_var, foreground="red")
-        status1_label.grid(row=3, column=1, sticky=tk.W, padx=5)
+        ttk.Label(conn_frame, text="状态:").grid(row=5, column=0, sticky=tk.W, padx=(20, 0))
+        self.status1_label = ttk.Label(conn_frame, textvariable=self.dog1_status_var, foreground="red")
+        self.status1_label.grid(row=5, column=1, sticky=tk.W, padx=5)
         
         # 机器狗2配置
-        ttk.Separator(conn_frame, orient='horizontal').grid(row=4, column=0, columnspan=2, sticky=tk.W+tk.E, pady=10)
-        ttk.Label(conn_frame, text="机器狗2:").grid(row=5, column=0, sticky=tk.W, pady=2)
-        ttk.Label(conn_frame, text="名称:").grid(row=6, column=0, sticky=tk.W, padx=(20, 0))
-        ttk.Entry(conn_frame, textvariable=self.dog2_name_var, width=15).grid(row=6, column=1, sticky=tk.W+tk.E, padx=5)
-        ttk.Label(conn_frame, text="IP:").grid(row=7, column=0, sticky=tk.W, padx=(20, 0))
-        ttk.Entry(conn_frame, textvariable=self.dog2_ip_var, width=15).grid(row=7, column=1, sticky=tk.W+tk.E, padx=5)
+        ttk.Separator(conn_frame, orient='horizontal').grid(row=6, column=0, columnspan=2, sticky=tk.W+tk.E, pady=10)
+        ttk.Label(conn_frame, text="机器狗2:").grid(row=7, column=0, sticky=tk.W, pady=2)
+        ttk.Label(conn_frame, text="名称:").grid(row=8, column=0, sticky=tk.W, padx=(20, 0))
+        ttk.Entry(conn_frame, textvariable=self.dog2_name_var, width=15).grid(row=8, column=1, sticky=tk.W+tk.E, padx=5)
+        ttk.Label(conn_frame, text="IP:").grid(row=9, column=0, sticky=tk.W, padx=(20, 0))
+        ttk.Entry(conn_frame, textvariable=self.dog2_ip_var, width=15).grid(row=9, column=1, sticky=tk.W+tk.E, padx=5)
         
         # 状态显示
-        ttk.Label(conn_frame, text="状态:").grid(row=8, column=0, sticky=tk.W, padx=(20, 0))
-        status2_label = ttk.Label(conn_frame, textvariable=self.dog2_status_var, foreground="red")
-        status2_label.grid(row=8, column=1, sticky=tk.W, padx=5)
+        ttk.Label(conn_frame, text="状态:").grid(row=10, column=0, sticky=tk.W, padx=(20, 0))
+        self.status2_label = ttk.Label(conn_frame, textvariable=self.dog2_status_var, foreground="red")
+        self.status2_label.grid(row=10, column=1, sticky=tk.W, padx=5)
         
         # 连接按钮
-        ttk.Separator(conn_frame, orient='horizontal').grid(row=9, column=0, columnspan=2, sticky=tk.W+tk.E, pady=10)
+        ttk.Separator(conn_frame, orient='horizontal').grid(row=11, column=0, columnspan=2, sticky=tk.W+tk.E, pady=10)
         btn_frame = ttk.Frame(conn_frame)
-        btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
+        btn_frame.grid(row=12, column=0, columnspan=2, pady=5)
         
         self.connect_btn = ttk.Button(btn_frame, text="连接所有", command=self._on_connect_all)
         self.connect_btn.pack(side=tk.LEFT, padx=2)
         
         self.disconnect_btn = ttk.Button(btn_frame, text="断开所有", command=self._on_disconnect_all, state="disabled")
         self.disconnect_btn.pack(side=tk.LEFT, padx=2)
-        
-        # 存储状态标签引用
-        self.status1_label = status1_label
-        self.status2_label = status2_label
     
     def _create_control_panel(self, parent):
         """创建控制面板"""
         # 控制面板框架
         control_frame = ttk.LabelFrame(parent, text="运动控制", padding="10")
-        control_frame.grid(row=0, column=1, sticky=tk.W+tk.E+tk.N, padx=(5, 0))
+        control_frame.grid(row=0, column=1, rowspan=2, sticky=tk.W+tk.E+tk.N, padx=(5, 0))
         
         # 控制模式选择
         mode_selection_frame = ttk.LabelFrame(control_frame, text="控制模式选择", padding="5")
@@ -220,48 +188,33 @@ class DualDogGUI:
         auto_frame = ttk.LabelFrame(control_frame, text="自动运动模式", padding="5")
         auto_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # 运动模式按钮
-        mode_frame = ttk.Frame(auto_frame)
-        mode_frame.pack(fill=tk.X)
+        # 自动运动控制按钮（第一排）
+        control_btn_frame = ttk.Frame(auto_frame)
+        control_btn_frame.pack(fill=tk.X, pady=5)
         
-        self.square_walk_btn = ttk.Button(mode_frame, text="正方形走路", command=self._on_square_walk)
-        self.square_walk_btn.pack(side=tk.LEFT, padx=2)
+        self.start_square_btn = ttk.Button(control_btn_frame, text="🏃 开始正方形走路", command=self._on_start_square_walk)
+        self.start_square_btn.pack(side=tk.LEFT, padx=5)
         
-        self.dance_party_btn = ttk.Button(mode_frame, text="舞蹈派对", command=self._on_dance_party)
-        self.dance_party_btn.pack(side=tk.LEFT, padx=2)
+        self.start_dance_btn = ttk.Button(control_btn_frame, text="💃 开始舞蹈派对", command=self._on_start_dance_party)
+        self.start_dance_btn.pack(side=tk.LEFT, padx=5)
         
-        self.stop_auto_btn = ttk.Button(mode_frame, text="停止自动", command=self._on_stop_auto)
-        self.stop_auto_btn.pack(side=tk.LEFT, padx=2)
+        self.stop_auto_btn = ttk.Button(control_btn_frame, text="⏹️ 停止自动运动", command=self._on_stop_auto_movement)
+        self.stop_auto_btn.pack(side=tk.LEFT, padx=5)
         
-        # 触发跳舞按钮
-        trigger_frame = ttk.Frame(auto_frame)
-        trigger_frame.pack(pady=5)
+        self.emergency_stop_btn = ttk.Button(control_btn_frame, text="🚨 紧急停止", command=self._on_emergency_stop)
+        self.emergency_stop_btn.pack(side=tk.LEFT, padx=10)
         
-        # 第一排触发按钮
-        trigger_frame1 = ttk.Frame(trigger_frame)
-        trigger_frame1.pack(pady=2)
+        # 扑跃动作按钮（第二排）
+        pounce_frame = ttk.Frame(auto_frame)
+        pounce_frame.pack(fill=tk.X, pady=5)
         
-        self.trigger_dance_btn = ttk.Button(trigger_frame1, text="🎭 触发跳舞", command=self._on_trigger_dance)
-        self.trigger_dance_btn.pack(side=tk.LEFT, padx=2)
+        # 单次扑跃按钮
+        self.pounce_once_btn = ttk.Button(pounce_frame, text="🦘 扑跃一次", command=self._on_pounce_once)
+        self.pounce_once_btn.pack(side=tk.LEFT, padx=5)
         
-        self.trigger_stretch_btn = ttk.Button(trigger_frame1, text="🤸 触发伸展", command=self._on_trigger_stretch)
-        self.trigger_stretch_btn.pack(side=tk.LEFT, padx=2)
-        
-        self.trigger_wallow_btn = ttk.Button(trigger_frame1, text="🔄 触发打滚", command=self._on_trigger_wallow)
-        self.trigger_wallow_btn.pack(side=tk.LEFT, padx=2)
-        
-        # 第二排触发按钮
-        trigger_frame2 = ttk.Frame(trigger_frame)
-        trigger_frame2.pack(pady=2)
-        
-        self.trigger_flip_btn = ttk.Button(trigger_frame2, text="🤸 触发空翻", command=self._on_trigger_flip)
-        self.trigger_flip_btn.pack(side=tk.LEFT, padx=2)
-        
-        self.trigger_pounce_btn = ttk.Button(trigger_frame2, text="🦘 触发扑跃", command=self._on_trigger_pounce)
-        self.trigger_pounce_btn.pack(side=tk.LEFT, padx=2)
-        
-        self.trigger_heart_btn = ttk.Button(trigger_frame2, text="❤️ 触发比心", command=self._on_trigger_heart)
-        self.trigger_heart_btn.pack(side=tk.LEFT, padx=2)
+        # 连续三次扑跃按钮
+        self.pounce_triple_btn = ttk.Button(pounce_frame, text="🦘🦘🦘 扑跃三次", command=self._on_pounce_triple)
+        self.pounce_triple_btn.pack(side=tk.LEFT, padx=5)
         
         # 运动状态显示
         status_frame = ttk.Frame(auto_frame)
@@ -364,11 +317,20 @@ class DualDogGUI:
         # 初始状态设置为禁用
         self._set_control_buttons_state("disabled")
     
+    def _create_keyboard_panel(self, parent):
+        """创建键盘控制面板"""
+        # 键盘控制框架
+        keyboard_frame = ttk.LabelFrame(parent, text="键盘控制 (WASD)", padding="10")
+        keyboard_frame.grid(row=1, column=0, sticky=tk.W+tk.E+tk.N, padx=(0, 5), pady=(10, 0))
+        
+        # 创建键盘控制GUI
+        self.keyboard_control_gui = KeyboardControlGUI(keyboard_frame, self.keyboard_controller, None)
+    
     def _create_log_panel(self, parent):
         """创建日志面板"""
         # 日志框架
         log_frame = ttk.LabelFrame(parent, text="系统日志", padding="5")
-        log_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=(10, 0))
+        log_frame.grid(row=3, column=0, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=(10, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(1, weight=1)
         
@@ -383,11 +345,11 @@ class DualDogGUI:
         log_level_combo.pack(side=tk.LEFT, padx=5)
         log_level_combo.bind("<<ComboboxSelected>>", self._on_log_level_change)
         
-        self.clear_log_btn = ttk.Button(log_control_frame, text="清空日志", command=self._clear_log)
-        self.clear_log_btn.pack(side=tk.RIGHT)
+        clear_log_btn = ttk.Button(log_control_frame, text="清空日志", command=self._clear_log)
+        clear_log_btn.pack(side=tk.RIGHT)
         
         # 日志文本框
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, width=80)
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, width=80)
         self.log_text.grid(row=1, column=0, sticky=tk.W+tk.E+tk.N+tk.S)
     
     def _setup_logging(self):
@@ -434,6 +396,11 @@ class DualDogGUI:
             self.controller = DualDogController()
             self.movement = DualDogMovement(self.controller)
             
+            # 为键盘控制设置运动模块
+            if self.keyboard_control_gui:
+                self.keyboard_control_gui.movement_module = self.movement
+                self.keyboard_control_gui.set_control_mode_vars(self.control_mode_var, self.selected_dog_var)
+            
             # 添加状态回调
             self.controller.add_status_callback(self._on_dog_status_change)
             self.movement.add_movement_callback(self._on_movement_status_change)
@@ -458,6 +425,18 @@ class DualDogGUI:
         return None
     
     # 事件处理方法
+    def _on_device_from_scanner_selected(self, ip: str, serial: str, device_name: str):
+        """从网络扫描器选择设备的回调"""
+        # 自动填充到第一个或第二个机器狗配置
+        if not self.dog1_ip_var.get() or self.dog1_ip_var.get() == "192.168.31.245":
+            self.dog1_name_var.set(device_name)
+            self.dog1_ip_var.set(ip)
+        elif not self.dog2_ip_var.get() or self.dog2_ip_var.get() == "192.168.31.246":
+            self.dog2_name_var.set(device_name)
+            self.dog2_ip_var.set(ip)
+        
+        self.logger.info(f"已选择设备: {device_name} ({ip})")
+    
     def _on_connect_all(self):
         """连接所有机器狗"""
         # 添加机器狗配置
@@ -519,15 +498,76 @@ class DualDogGUI:
         if self.movement:
             self._run_async(self.movement.start_pattern(MovementPattern.DANCE_PARTY))
     
-    def _on_stop_auto(self):
+    def _on_start_square_walk(self):
+        """开始正方形走路"""
+        if self.movement:
+            self._run_async(self.movement.start_pattern(MovementPattern.SQUARE_WALK))
+            self.logger.info("开始正方形走路模式")
+    
+    def _on_start_dance_party(self):
+        """开始舞蹈派对"""
+        if self.movement:
+            self._run_async(self.movement.start_pattern(MovementPattern.DANCE_PARTY))
+            self.logger.info("开始舞蹈派对模式")
+    
+    def _on_stop_auto_movement(self):
         """停止自动运动"""
         if self.movement:
             self._run_async(self.movement.stop_movement())
+            self.logger.info("停止自动运动模式")
     
-    def _on_trigger_dance(self):
-        """触发跳舞"""
+    def _on_emergency_stop(self):
+        """紧急停止"""
         if self.movement:
-            self._run_async(self.movement.trigger_dance())
+            self._run_async(self.movement.emergency_stop())
+            self.logger.warning("执行紧急停止")
+    
+    def _on_stop_auto(self):
+        """停止自动运动（用于扑跃模式的停止按钮）"""
+        if self.movement:
+            self._run_async(self.movement.stop_movement())
+    
+    def _on_manual_mode(self):
+        """启用手动控制模式"""
+        if self.movement:
+            self._run_async(self.movement.start_pattern(MovementPattern.MANUAL_CONTROL))
+    
+    def _on_pounce_once(self):
+        """单次扑跃动作"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.front_pounce_single(dog_name))
+            else:
+                self._run_async(self.movement.front_pounce())
+            self.logger.info("执行单次扑跃动作")
+    
+    def _on_pounce_triple(self):
+        """连续三次扑跃动作"""
+        if self.movement:
+            # 启动连续扑跃模式
+            self._run_async(self._execute_triple_pounce())
+            self.logger.info("启动连续三次扑跃动作")
+    
+    async def _execute_triple_pounce(self):
+        """执行连续三次扑跃动作"""
+        try:
+            for i in range(3):
+                self.logger.info(f"执行第 {i+1} 次扑跃动作")
+                
+                if self.control_mode_var.get() == "single":
+                    dog_name = self.selected_dog_var.get()
+                    await self.movement.front_pounce_single(dog_name)
+                else:
+                    await self.movement.front_pounce()
+                
+                # 在两次动作之间稍停片刻，等待动作完成
+                if i < 2:  # 最后一次不需要等待
+                    await asyncio.sleep(3.0)  # 等待3秒让动作完成
+            
+            self.logger.info("连续三次扑跃动作完成")
+        except Exception as e:
+            self.logger.error(f"连续扑跃动作执行失败: {e}")
     
     def _on_trigger_stretch(self):
         """触发伸展动作"""
@@ -553,11 +593,6 @@ class DualDogGUI:
         """触发比心动作"""
         if self.movement:
             self._run_async(self.movement.trigger_specific_action("FingerHeart"))
-    
-    def _on_manual_mode(self):
-        """启用手动控制模式"""
-        if self.movement:
-            self._run_async(self.movement.start_pattern(MovementPattern.MANUAL_CONTROL))
     
     def _on_move_forward(self):
         """前进"""
@@ -800,11 +835,12 @@ class DualDogGUI:
     def _set_control_buttons_state(self, state):
         """设置控制按钮状态"""
         buttons = [
-            self.square_walk_btn, self.dance_party_btn, self.stop_auto_btn,
-            self.trigger_dance_btn, self.trigger_stretch_btn, self.trigger_wallow_btn,
-            self.trigger_flip_btn, self.trigger_pounce_btn, self.trigger_heart_btn,
+            # 扑跃动作按钮
+            self.pounce_once_btn, self.pounce_triple_btn, self.stop_auto_btn,
+            # 手动控制按钮
             self.manual_mode_btn, self.forward_btn, self.backward_btn, self.left_btn, 
             self.right_btn, self.turn_left_btn, self.turn_right_btn, self.stop_btn, 
+            # 姿态控制按钮
             self.sit_btn, self.stand_btn, self.hello_btn, self.stretch_btn, 
             self.wallow_btn, self.scrape_btn, self.wiggle_hips_btn, self.finger_heart_btn, 
             self.handstand_btn, self.front_flip_btn, self.back_flip_btn, self.pounce_btn
@@ -830,6 +866,14 @@ class DualDogGUI:
                 self._run_async(self.controller.disconnect_all())
                 self._run_async(self.controller.stop_monitoring())
             
+            # 停止网络扫描
+            if self.network_scanner:
+                self.network_scanner.stop_continuous_scan()
+            
+            # 停止键盘控制
+            if self.keyboard_controller:
+                self.keyboard_controller.disable()
+            
             # 停止asyncio循环
             if self.asyncio_loop:
                 self.asyncio_loop.call_soon_threadsafe(self.asyncio_loop.stop)
@@ -844,7 +888,7 @@ class DualDogGUI:
 
 def main():
     """主函数"""
-    app = DualDogGUI()
+    app = EnhancedDualDogGUI()
     app.run()
 
 
