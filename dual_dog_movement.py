@@ -106,7 +106,7 @@ class DualDogMovement:
                 pass
         
         # 发送停止指令
-        await self.controller.send_command_to_all("StopMove")
+        await self.controller.send_command_to_selected("StopMove")
         
         self.current_pattern = MovementPattern.STOP
         self.logger.info("运动已停止")
@@ -127,7 +127,7 @@ class DualDogMovement:
             self._notify_movement_change(self.current_pattern, f"正在跳舞 ({dance_type})")
             
             # 发送跳舞指令
-            results = await self.controller.send_command_to_all(dance_type)
+            results = await self.controller.send_command_to_selected(dance_type)
             
             # 等待跳舞动作完成
             dance_duration = 5.0 if dance_type == "Dance1" else 8.0
@@ -175,8 +175,8 @@ class DualDogMovement:
                     f"步骤 {self.square_walk_step + 1}: {current_step.description}"
                 )
                 
-                # 发送运动指令
-                results = await self.controller.send_command_to_all(
+                    # 发送运动指令
+                results = await self.controller.send_command_to_selected(
                     current_step.command, 
                     current_step.parameters
                 )
@@ -223,7 +223,7 @@ class DualDogMovement:
                     )
                     
                     # 发送指令
-                    await self.controller.send_command_to_all(command, parameters)
+                    await self.controller.send_command_to_selected(command, parameters)
                     
                     # 如果有持续时间，等待完成
                     if duration > 0:
@@ -280,6 +280,16 @@ class DualDogMovement:
             self.logger.error(f"发送手动指令失败: {e}")
             return False
     
+    async def send_manual_command_to_specific_dog(self, dog_name: str, command: str, parameters: Optional[Dict] = None) -> bool:
+        """向指定机器狗发送手动控制指令"""
+        try:
+            result = await self.controller.send_command_to_dog(dog_name, command, parameters)
+            self.logger.info(f"向机器狗 {dog_name} 发送手动指令: {command} {parameters or ''}")
+            return result
+        except Exception as e:
+            self.logger.error(f"向机器狗 {dog_name} 发送手动指令失败: {e}")
+            return False
+    
     # 便捷的手动控制方法
     async def move_forward(self, speed: float = 0.5, duration: float = 1.0) -> bool:
         """向前移动"""
@@ -317,10 +327,75 @@ class DualDogMovement:
         """打招呼"""
         return await self.send_manual_command("Hello")
     
+    # 单个机器狗控制方法
+    async def move_forward_single(self, dog_name: str, speed: float = 0.5, duration: float = 1.0) -> bool:
+        """单个机器狗向前移动"""
+        result = await self.send_manual_command_to_specific_dog(dog_name, "Move", {"x": speed, "y": 0, "z": 0})
+        if result and duration > 0:
+            await asyncio.sleep(duration)
+            await self.send_manual_command_to_specific_dog(dog_name, "StopMove")
+        return result
+    
+    async def move_backward_single(self, dog_name: str, speed: float = 0.5, duration: float = 1.0) -> bool:
+        """单个机器狗向后移动"""
+        result = await self.send_manual_command_to_specific_dog(dog_name, "Move", {"x": -speed, "y": 0, "z": 0})
+        if result and duration > 0:
+            await asyncio.sleep(duration)
+            await self.send_manual_command_to_specific_dog(dog_name, "StopMove")
+        return result
+    
+    async def move_left_single(self, dog_name: str, speed: float = 0.5, duration: float = 1.0) -> bool:
+        """单个机器狗向左移动"""
+        result = await self.send_manual_command_to_specific_dog(dog_name, "Move", {"x": 0, "y": speed, "z": 0})
+        if result and duration > 0:
+            await asyncio.sleep(duration)
+            await self.send_manual_command_to_specific_dog(dog_name, "StopMove")
+        return result
+    
+    async def move_right_single(self, dog_name: str, speed: float = 0.5, duration: float = 1.0) -> bool:
+        """单个机器狗向右移动"""
+        result = await self.send_manual_command_to_specific_dog(dog_name, "Move", {"x": 0, "y": -speed, "z": 0})
+        if result and duration > 0:
+            await asyncio.sleep(duration)
+            await self.send_manual_command_to_specific_dog(dog_name, "StopMove")
+        return result
+    
+    async def turn_left_single(self, dog_name: str, speed: float = 1.0, duration: float = 1.0) -> bool:
+        """单个机器狗左转"""
+        result = await self.send_manual_command_to_specific_dog(dog_name, "Move", {"x": 0, "y": 0, "z": speed})
+        if result and duration > 0:
+            await asyncio.sleep(duration)
+            await self.send_manual_command_to_specific_dog(dog_name, "StopMove")
+        return result
+    
+    async def turn_right_single(self, dog_name: str, speed: float = 1.0, duration: float = 1.0) -> bool:
+        """单个机器狗右转"""
+        result = await self.send_manual_command_to_specific_dog(dog_name, "Move", {"x": 0, "y": 0, "z": -speed})
+        if result and duration > 0:
+            await asyncio.sleep(duration)
+            await self.send_manual_command_to_specific_dog(dog_name, "StopMove")
+        return result
+    
+    async def sit_down_single(self, dog_name: str) -> bool:
+        """单个机器狗坐下"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "Sit")
+    
+    async def stand_up_single(self, dog_name: str) -> bool:
+        """单个机器狗站立"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "StandUp")
+    
+    async def say_hello_single(self, dog_name: str) -> bool:
+        """单个机器狗打招呼"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "Hello")
+    
+    async def stop_move_single(self, dog_name: str) -> bool:
+        """单个机器狗停止移动"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "StopMove")
+    
     async def stop_move(self) -> bool:
         """停止移动（紧急停止）"""
         try:
-            await self.controller.send_command_to_all("StopMove")
+            await self.controller.send_command_to_selected("StopMove")
             return True
         except Exception as e:
             self.logger.error(f"紧急停止失败: {e}")

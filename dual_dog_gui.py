@@ -42,6 +42,10 @@ class DualDogGUI:
         self.movement_status_var = tk.StringVar(value="停止")
         self.log_level_var = tk.StringVar(value="INFO")
         
+        # 控制模式变量
+        self.control_mode_var = tk.StringVar(value="all")  # "all", "single", "dog1", "dog2"
+        self.selected_dog_var = tk.StringVar(value="Dog1")  # 当前选中的机器狗
+        
         # 机器狗配置
         self.dog1_name_var = tk.StringVar(value="Dog1")
         self.dog1_ip_var = tk.StringVar(value="192.168.31.245")
@@ -131,6 +135,33 @@ class DualDogGUI:
         # 控制面板框架
         control_frame = ttk.LabelFrame(parent, text="运动控制", padding="10")
         control_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N), padx=(5, 0))
+        
+        # 控制模式选择
+        mode_selection_frame = ttk.LabelFrame(control_frame, text="控制模式选择", padding="5")
+        mode_selection_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # 控制模式单选按钮
+        mode_frame = ttk.Frame(mode_selection_frame)
+        mode_frame.pack(fill=tk.X, pady=2)
+        
+        self.mode_all_radio = ttk.Radiobutton(mode_frame, text="同时控制两台", 
+                                             variable=self.control_mode_var, value="all",
+                                             command=self._on_control_mode_change)
+        self.mode_all_radio.pack(side=tk.LEFT, padx=5)
+        
+        self.mode_single_radio = ttk.Radiobutton(mode_frame, text="单独控制：", 
+                                                variable=self.control_mode_var, value="single",
+                                                command=self._on_control_mode_change)
+        self.mode_single_radio.pack(side=tk.LEFT, padx=5)
+        
+        # 机器狗选择下拉框
+        self.dog_selection_combo = ttk.Combobox(mode_frame, textvariable=self.selected_dog_var,
+                                               values=["Dog1", "Dog2"], state="readonly", width=8)
+        self.dog_selection_combo.pack(side=tk.LEFT, padx=5)
+        self.dog_selection_combo.bind("<<ComboboxSelected>>", self._on_dog_selection_change)
+        
+        # 初始状态设置
+        self.dog_selection_combo.config(state="disabled")
         
         # 自动运动模式
         auto_frame = ttk.LabelFrame(control_frame, text="自动运动模式", padding="5")
@@ -315,6 +346,7 @@ class DualDogGUI:
     def _on_connect_all(self):
         """连接所有机器狗"""
         # 添加机器狗配置
+        connected_dogs = []
         if self.controller:
             # 只连接启用的机器狗
             dog1_name = self.dog1_name_var.get()
@@ -325,6 +357,7 @@ class DualDogGUI:
                     dog1_ip,
                     connection_method=WebRTCConnectionMethod.LocalSTA
                 )
+                connected_dogs.append(dog1_name)
             
             dog2_name = self.dog2_name_var.get()
             dog2_ip = self.dog2_ip_var.get()
@@ -335,6 +368,13 @@ class DualDogGUI:
                     dog2_ip,
                     connection_method=WebRTCConnectionMethod.LocalSTA
                 )
+                connected_dogs.append(dog2_name)
+        
+        # 更新机器狗选择列表
+        if connected_dogs:
+            self.dog_selection_combo.config(values=connected_dogs)
+            if connected_dogs[0] not in ["Dog1", "Dog2"]:
+                self.selected_dog_var.set(connected_dogs[0])
         
         # 异步连接
         self._run_async(self.controller.connect_all())
@@ -381,52 +421,115 @@ class DualDogGUI:
     def _on_move_forward(self):
         """前进"""
         if self.movement:
-            self._run_async(self.movement.move_forward())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.move_forward_single(dog_name))
+            else:
+                self._run_async(self.movement.move_forward())
     
     def _on_move_backward(self):
         """后退"""
         if self.movement:
-            self._run_async(self.movement.move_backward())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.move_backward_single(dog_name))
+            else:
+                self._run_async(self.movement.move_backward())
     
     def _on_move_left(self):
         """左移"""
         if self.movement:
-            self._run_async(self.movement.move_left())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.move_left_single(dog_name))
+            else:
+                self._run_async(self.movement.move_left())
     
     def _on_move_right(self):
         """右移"""
         if self.movement:
-            self._run_async(self.movement.move_right())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.move_right_single(dog_name))
+            else:
+                self._run_async(self.movement.move_right())
     
     def _on_turn_left(self):
         """左转"""
         if self.movement:
-            self._run_async(self.movement.turn_left())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.turn_left_single(dog_name))
+            else:
+                self._run_async(self.movement.turn_left())
     
     def _on_turn_right(self):
         """右转"""
         if self.movement:
-            self._run_async(self.movement.turn_right())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.turn_right_single(dog_name))
+            else:
+                self._run_async(self.movement.turn_right())
     
     def _on_stop_move(self):
         """停止移动"""
         if self.movement:
-            self._run_async(self.movement.stop_move())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.stop_move_single(dog_name))
+            else:
+                self._run_async(self.movement.stop_move())
     
     def _on_sit(self):
         """坐下"""
         if self.movement:
-            self._run_async(self.movement.sit_down())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.sit_down_single(dog_name))
+            else:
+                self._run_async(self.movement.sit_down())
     
     def _on_stand(self):
         """站立"""
         if self.movement:
-            self._run_async(self.movement.stand_up())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.stand_up_single(dog_name))
+            else:
+                self._run_async(self.movement.stand_up())
     
     def _on_hello(self):
         """打招呼"""
         if self.movement:
-            self._run_async(self.movement.say_hello())
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.say_hello_single(dog_name))
+            else:
+                self._run_async(self.movement.say_hello())
+    
+    def _on_control_mode_change(self):
+        """控制模式变化回调"""
+        mode = self.control_mode_var.get()
+        
+        if mode == "single":
+            self.dog_selection_combo.config(state="readonly")
+        else:
+            self.dog_selection_combo.config(state="disabled")
+        
+        # 更新控制器模式
+        if self.controller:
+            if mode == "all":
+                self.controller.set_control_mode("all")
+            else:  # single
+                selected_dog = self.selected_dog_var.get()
+                self.controller.set_control_mode("single", [selected_dog])
+    
+    def _on_dog_selection_change(self, event):
+        """机器狗选择变化回调"""
+        if self.control_mode_var.get() == "single" and self.controller:
+            selected_dog = self.selected_dog_var.get()
+            self.controller.set_control_mode("single", [selected_dog])
     
     def _on_log_level_change(self, event):
         """日志级别变化"""

@@ -50,6 +50,10 @@ class DualDogController:
         self.is_running = False
         self._monitor_task = None
         
+        # 选择性控制设置
+        self.control_mode = "all"  # "all", "single", "selected"
+        self.selected_dogs: List[str] = []  # 选中的机器狗列表
+        
     def _setup_logger(self) -> logging.Logger:
         """设置日志系统"""
         logger = logging.getLogger("DualDogController")
@@ -286,13 +290,29 @@ class DualDogController:
     
     async def send_command_to_all(self, command: str, parameters: Optional[Dict] = None) -> Dict[str, bool]:
         """向所有连接的机器狗发送相同指令"""
+        return await self.send_command_to_targets(command, parameters, self._get_all_connected_dogs())
+    
+    async def send_command_to_selected(self, command: str, parameters: Optional[Dict] = None) -> Dict[str, bool]:
+        """向选中的机器狗发送指令"""
+        target_dogs = self._get_target_dogs_by_mode()
+        return await self.send_command_to_targets(command, parameters, target_dogs)
+    
+    async def send_command_to_targets(self, command: str, parameters: Optional[Dict] = None, target_dogs: List[str] = None) -> Dict[str, bool]:
+        """向指定的机器狗发送指令"""
         results = {}
         command_tasks = []
         
-        for name, dog in self.dogs.items():
-            if dog.connection and dog.status not in [DogStatus.DISCONNECTED, DogStatus.ERROR]:
-                task = asyncio.create_task(self.send_command_to_dog(name, command, parameters))
-                command_tasks.append((name, task))
+        if target_dogs is None:
+            target_dogs = self._get_all_connected_dogs()
+        
+        for name in target_dogs:
+            if name in self.dogs:
+                dog = self.dogs[name]
+                if dog.connection and dog.status not in [DogStatus.DISCONNECTED, DogStatus.ERROR]:
+                    task = asyncio.create_task(self.send_command_to_dog(name, command, parameters))
+                    command_tasks.append((name, task))
+                else:
+                    results[name] = False
             else:
                 results[name] = False
         
@@ -328,6 +348,59 @@ class DualDogController:
     def add_status_callback(self, callback: Callable):
         """添加状态变化回调函数"""
         self.status_callbacks.append(callback)
+    
+    def set_control_mode(self, mode: str, selected_dogs: List[str] = None):
+        """设置控制模式
+        
+        Args:
+            mode: "all" (所有), "single" (单个), "selected" (选中的)
+            selected_dogs: 当mode为"single"或"selected"时，指定要控制的机器狗列表
+        """
+        if mode not in ["all", "single", "selected"]:
+            self.logger.error(f"不支持的控制模式: {mode}")
+            return False
+        
+        self.control_mode = mode
+        
+        if mode == "all":
+            self.selected_dogs = list(self.dogs.keys())
+        elif mode in ["single", "selected"] and selected_dogs:
+            # 验证选中的机器狗是否存在
+            valid_dogs = []
+            for dog_name in selected_dogs:
+                if dog_name in self.dogs:
+                    valid_dogs.append(dog_name)
+                else:
+                    self.logger.warning(f"机器狗 {dog_name} 不存在")
+            self.selected_dogs = valid_dogs
+        else:
+            self.selected_dogs = []
+        
+        self.logger.info(f"控制模式已设置为: {mode}, 选中的机器狗: {self.selected_dogs}")
+        return True
+    
+    def get_control_mode(self) -> tuple:
+        """获取当前控制模式"""
+        return self.control_mode, self.selected_dogs.copy()
+    
+    def _get_target_dogs_by_mode(self) -> List[str]:
+        """根据控制模式获取目标机器狗列表"""
+        if self.control_mode == "all":
+            return self._get_all_connected_dogs()
+        elif self.control_mode in ["single", "selected"]:
+            # 只返回在线的选中机器狗
+            connected_dogs = self._get_all_connected_dogs()
+            return [dog for dog in self.selected_dogs if dog in connected_dogs]
+        else:
+            return []
+    
+    def _get_all_connected_dogs(self) -> List[str]:
+        """获取所有已连接的机器狗列表"""
+        connected_dogs = []
+        for name, dog in self.dogs.items():
+            if dog.connection and dog.status not in [DogStatus.DISCONNECTED, DogStatus.ERROR]:
+                connected_dogs.append(name)
+        return connected_dogs
     
     def _notify_status_change(self, dog_name: str, status: DogStatus):
         """通知状态变化"""
