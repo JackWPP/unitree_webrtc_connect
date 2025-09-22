@@ -120,6 +120,40 @@ class DualDogMovement:
         self.logger.info("跳舞动作已触发")
         return True
     
+    async def trigger_specific_action(self, action: str) -> bool:
+        """触发特定动作（可在任何运动模式中调用）"""
+        try:
+            self.logger.info(f"触发特定动作: {action}")
+            
+            # 发送动作指令
+            results = await self.controller.send_command_to_selected(action)
+            
+            # 等待动作完成
+            action_duration = self._get_action_duration(action)
+            await asyncio.sleep(action_duration)
+            
+            success_count = sum(results.values())
+            self.logger.info(f"特定动作 {action} 完成: {success_count}/{len(results)} 台机器狗成功执行")
+            
+            return success_count > 0
+            
+        except Exception as e:
+            self.logger.error(f"执行特定动作 {action} 失败: {e}")
+            return False
+    
+    def _get_action_duration(self, action: str) -> float:
+        """获取动作持续时间"""
+        # 根据动作类型返回不同的持续时间
+        high_difficulty_actions = ["FrontFlip", "BackFlip", "Handstand"]
+        medium_actions = ["Wallow", "Scrape", "FrontPounce"]
+        
+        if action in high_difficulty_actions:
+            return 6.0  # 高难度动作时间更长
+        elif action in medium_actions:
+            return 4.0  # 中等难度动作
+        else:
+            return 3.0  # 常规动作
+    
     async def _perform_dance(self, dance_type: str = "Dance1") -> bool:
         """执行跳舞动作"""
         try:
@@ -240,8 +274,13 @@ class DualDogMovement:
             self.logger.error(f"手动控制循环出错: {e}")
     
     async def _dance_party_loop(self):
-        """舞蹈派对循环"""
-        dance_sequence = ["Dance1", "Dance2", "Hello", "WiggleHips", "FingerHeart"]
+        """舞蹈派对循环 - 包含更多动作选项"""
+        # 扩展舞蹈序列，包含更多姿态和动作
+        dance_sequence = [
+            "Dance1", "Dance2", "Hello", "WiggleHips", "FingerHeart", 
+            "Stretch", "Wallow", "Scrape", "FrontFlip", "BackFlip", 
+            "FrontPounce", "Handstand"
+        ]
         dance_index = 0
         
         try:
@@ -256,8 +295,11 @@ class DualDogMovement:
                 
                 await self._perform_dance(current_dance)
                 
-                # 休息一下
-                await asyncio.sleep(2)
+                # 休息时间根据动作难度调整
+                if current_dance in ["FrontFlip", "BackFlip", "Handstand"]:
+                    await asyncio.sleep(3)  # 高难度动作休息更久
+                else:
+                    await asyncio.sleep(2)  # 常规动作休息时间
                 
                 dance_index += 1
                 
@@ -327,6 +369,42 @@ class DualDogMovement:
         """打招呼"""
         return await self.send_manual_command("Hello")
     
+    async def stretch(self) -> bool:
+        """伸展"""
+        return await self.send_manual_command("Stretch")
+    
+    async def wallow(self) -> bool:
+        """打滚"""
+        return await self.send_manual_command("Wallow")
+    
+    async def scrape(self) -> bool:
+        """刨地"""
+        return await self.send_manual_command("Scrape")
+    
+    async def wiggle_hips(self) -> bool:
+        """扭臀"""
+        return await self.send_manual_command("WiggleHips")
+    
+    async def finger_heart(self) -> bool:
+        """比心"""
+        return await self.send_manual_command("FingerHeart")
+    
+    async def handstand(self) -> bool:
+        """倒立"""
+        return await self.send_manual_command("Handstand")
+    
+    async def front_flip(self) -> bool:
+        """前空翻"""
+        return await self.send_manual_command("FrontFlip")
+    
+    async def back_flip(self) -> bool:
+        """后空翻"""
+        return await self.send_manual_command("BackFlip")
+    
+    async def front_pounce(self) -> bool:
+        """前扑跃"""
+        return await self.send_manual_command("FrontPounce")
+    
     # 单个机器狗控制方法
     async def move_forward_single(self, dog_name: str, speed: float = 0.5, duration: float = 1.0) -> bool:
         """单个机器狗向前移动"""
@@ -387,6 +465,42 @@ class DualDogMovement:
     async def say_hello_single(self, dog_name: str) -> bool:
         """单个机器狗打招呼"""
         return await self.send_manual_command_to_specific_dog(dog_name, "Hello")
+    
+    async def stretch_single(self, dog_name: str) -> bool:
+        """单个机器狗伸展"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "Stretch")
+    
+    async def wallow_single(self, dog_name: str) -> bool:
+        """单个机器狗打滚"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "Wallow")
+    
+    async def scrape_single(self, dog_name: str) -> bool:
+        """单个机器狗刨地"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "Scrape")
+    
+    async def wiggle_hips_single(self, dog_name: str) -> bool:
+        """单个机器狗扭臀"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "WiggleHips")
+    
+    async def finger_heart_single(self, dog_name: str) -> bool:
+        """单个机器狗比心"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "FingerHeart")
+    
+    async def handstand_single(self, dog_name: str) -> bool:
+        """单个机器狗倒立"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "Handstand")
+    
+    async def front_flip_single(self, dog_name: str) -> bool:
+        """单个机器狗前空翻"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "FrontFlip")
+    
+    async def back_flip_single(self, dog_name: str) -> bool:
+        """单个机器狗后空翻"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "BackFlip")
+    
+    async def front_pounce_single(self, dog_name: str) -> bool:
+        """单个机器狗前扑跃"""
+        return await self.send_manual_command_to_specific_dog(dog_name, "FrontPounce")
     
     async def stop_move_single(self, dog_name: str) -> bool:
         """单个机器狗停止移动"""

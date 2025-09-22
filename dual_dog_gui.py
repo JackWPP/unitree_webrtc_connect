@@ -67,7 +67,7 @@ class DualDogGUI:
         """设置GUI界面"""
         # 主框架
         main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame.grid(row=0, column=0, sticky=tk.W+tk.E+tk.N+tk.S)
         
         # 配置网格权重
         self.root.columnconfigure(0, weight=1)
@@ -88,14 +88,14 @@ class DualDogGUI:
         """创建连接配置面板"""
         # 连接配置框架
         conn_frame = ttk.LabelFrame(parent, text="机器狗连接配置", padding="10")
-        conn_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N), padx=(0, 5))
+        conn_frame.grid(row=0, column=0, sticky=tk.W+tk.E+tk.N, padx=(0, 5))
         
         # 机器狗1配置
         ttk.Label(conn_frame, text="机器狗1:").grid(row=0, column=0, sticky=tk.W, pady=2)
         ttk.Label(conn_frame, text="名称:").grid(row=1, column=0, sticky=tk.W, padx=(20, 0))
-        ttk.Entry(conn_frame, textvariable=self.dog1_name_var, width=15).grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5)
+        ttk.Entry(conn_frame, textvariable=self.dog1_name_var, width=15).grid(row=1, column=1, sticky=tk.W+tk.E, padx=5)
         ttk.Label(conn_frame, text="IP:").grid(row=2, column=0, sticky=tk.W, padx=(20, 0))
-        ttk.Entry(conn_frame, textvariable=self.dog1_ip_var, width=15).grid(row=2, column=1, sticky=(tk.W, tk.E), padx=5)
+        ttk.Entry(conn_frame, textvariable=self.dog1_ip_var, width=15).grid(row=2, column=1, sticky=tk.W+tk.E, padx=5)
         
         # 状态显示
         ttk.Label(conn_frame, text="状态:").grid(row=3, column=0, sticky=tk.W, padx=(20, 0))
@@ -103,12 +103,12 @@ class DualDogGUI:
         status1_label.grid(row=3, column=1, sticky=tk.W, padx=5)
         
         # 机器狗2配置
-        ttk.Separator(conn_frame, orient='horizontal').grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
+        ttk.Separator(conn_frame, orient='horizontal').grid(row=4, column=0, columnspan=2, sticky=tk.W+tk.E, pady=10)
         ttk.Label(conn_frame, text="机器狗2:").grid(row=5, column=0, sticky=tk.W, pady=2)
         ttk.Label(conn_frame, text="名称:").grid(row=6, column=0, sticky=tk.W, padx=(20, 0))
-        ttk.Entry(conn_frame, textvariable=self.dog2_name_var, width=15).grid(row=6, column=1, sticky=(tk.W, tk.E), padx=5)
+        ttk.Entry(conn_frame, textvariable=self.dog2_name_var, width=15).grid(row=6, column=1, sticky=tk.W+tk.E, padx=5)
         ttk.Label(conn_frame, text="IP:").grid(row=7, column=0, sticky=tk.W, padx=(20, 0))
-        ttk.Entry(conn_frame, textvariable=self.dog2_ip_var, width=15).grid(row=7, column=1, sticky=(tk.W, tk.E), padx=5)
+        ttk.Entry(conn_frame, textvariable=self.dog2_ip_var, width=15).grid(row=7, column=1, sticky=tk.W+tk.E, padx=5)
         
         # 状态显示
         ttk.Label(conn_frame, text="状态:").grid(row=8, column=0, sticky=tk.W, padx=(20, 0))
@@ -116,7 +116,7 @@ class DualDogGUI:
         status2_label.grid(row=8, column=1, sticky=tk.W, padx=5)
         
         # 连接按钮
-        ttk.Separator(conn_frame, orient='horizontal').grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
+        ttk.Separator(conn_frame, orient='horizontal').grid(row=9, column=0, columnspan=2, sticky=tk.W+tk.E, pady=10)
         btn_frame = ttk.Frame(conn_frame)
         btn_frame.grid(row=10, column=0, columnspan=2, pady=5)
         
@@ -134,7 +134,7 @@ class DualDogGUI:
         """创建控制面板"""
         # 控制面板框架
         control_frame = ttk.LabelFrame(parent, text="运动控制", padding="10")
-        control_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N), padx=(5, 0))
+        control_frame.grid(row=0, column=1, sticky=tk.W+tk.E+tk.N, padx=(5, 0))
         
         # 控制模式选择
         mode_selection_frame = ttk.LabelFrame(control_frame, text="控制模式选择", padding="5")
@@ -181,8 +181,34 @@ class DualDogGUI:
         self.stop_auto_btn.pack(side=tk.LEFT, padx=2)
         
         # 触发跳舞按钮
-        self.trigger_dance_btn = ttk.Button(auto_frame, text="🎭 触发跳舞", command=self._on_trigger_dance)
-        self.trigger_dance_btn.pack(pady=5)
+        trigger_frame = ttk.Frame(auto_frame)
+        trigger_frame.pack(pady=5)
+        
+        # 第一排触发按钮
+        trigger_frame1 = ttk.Frame(trigger_frame)
+        trigger_frame1.pack(pady=2)
+        
+        self.trigger_dance_btn = ttk.Button(trigger_frame1, text="🎭 触发跳舞", command=self._on_trigger_dance)
+        self.trigger_dance_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.trigger_stretch_btn = ttk.Button(trigger_frame1, text="🤸 触发伸展", command=self._on_trigger_stretch)
+        self.trigger_stretch_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.trigger_wallow_btn = ttk.Button(trigger_frame1, text="🔄 触发打滚", command=self._on_trigger_wallow)
+        self.trigger_wallow_btn.pack(side=tk.LEFT, padx=2)
+        
+        # 第二排触发按钮
+        trigger_frame2 = ttk.Frame(trigger_frame)
+        trigger_frame2.pack(pady=2)
+        
+        self.trigger_flip_btn = ttk.Button(trigger_frame2, text="🤸 触发空翻", command=self._on_trigger_flip)
+        self.trigger_flip_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.trigger_pounce_btn = ttk.Button(trigger_frame2, text="🦘 触发扑跃", command=self._on_trigger_pounce)
+        self.trigger_pounce_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.trigger_heart_btn = ttk.Button(trigger_frame2, text="❤️ 触发比心", command=self._on_trigger_heart)
+        self.trigger_heart_btn.pack(side=tk.LEFT, padx=2)
         
         # 运动状态显示
         status_frame = ttk.Frame(auto_frame)
@@ -234,17 +260,53 @@ class DualDogGUI:
         posture_frame = ttk.LabelFrame(control_frame, text="姿态控制", padding="5")
         posture_frame.pack(fill=tk.X, pady=(0, 10))
         
-        posture_btn_frame = ttk.Frame(posture_frame)
-        posture_btn_frame.pack()
+        # 基础姿态按钮（第一排）
+        posture_btn_frame1 = ttk.Frame(posture_frame)
+        posture_btn_frame1.pack(pady=2)
         
-        self.sit_btn = ttk.Button(posture_btn_frame, text="坐下", command=self._on_sit)
+        self.sit_btn = ttk.Button(posture_btn_frame1, text="坐下", command=self._on_sit)
         self.sit_btn.pack(side=tk.LEFT, padx=2)
         
-        self.stand_btn = ttk.Button(posture_btn_frame, text="站立", command=self._on_stand)
+        self.stand_btn = ttk.Button(posture_btn_frame1, text="站立", command=self._on_stand)
         self.stand_btn.pack(side=tk.LEFT, padx=2)
         
-        self.hello_btn = ttk.Button(posture_btn_frame, text="👋 打招呼", command=self._on_hello)
+        self.hello_btn = ttk.Button(posture_btn_frame1, text="👋 打招呼", command=self._on_hello)
         self.hello_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.stretch_btn = ttk.Button(posture_btn_frame1, text="🤸 伸展", command=self._on_stretch)
+        self.stretch_btn.pack(side=tk.LEFT, padx=2)
+        
+        # 特技动作按钮（第二排）
+        posture_btn_frame2 = ttk.Frame(posture_frame)
+        posture_btn_frame2.pack(pady=2)
+        
+        self.wallow_btn = ttk.Button(posture_btn_frame2, text="🔄 打滚", command=self._on_wallow)
+        self.wallow_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.scrape_btn = ttk.Button(posture_btn_frame2, text="🐾 刨地", command=self._on_scrape)
+        self.scrape_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.wiggle_hips_btn = ttk.Button(posture_btn_frame2, text="💃 扭臀", command=self._on_wiggle_hips)
+        self.wiggle_hips_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.finger_heart_btn = ttk.Button(posture_btn_frame2, text="❤️ 比心", command=self._on_finger_heart)
+        self.finger_heart_btn.pack(side=tk.LEFT, padx=2)
+        
+        # 高难度动作按钮（第三排）
+        posture_btn_frame3 = ttk.Frame(posture_frame)
+        posture_btn_frame3.pack(pady=2)
+        
+        self.handstand_btn = ttk.Button(posture_btn_frame3, text="🤸 倒立", command=self._on_handstand)
+        self.handstand_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.front_flip_btn = ttk.Button(posture_btn_frame3, text="🔄 前空翻", command=self._on_front_flip)
+        self.front_flip_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.back_flip_btn = ttk.Button(posture_btn_frame3, text="🔄 后空翻", command=self._on_back_flip)
+        self.back_flip_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.pounce_btn = ttk.Button(posture_btn_frame3, text="🦘 扑跃", command=self._on_front_pounce)
+        self.pounce_btn.pack(side=tk.LEFT, padx=2)
         
         # 初始状态设置为禁用
         self._set_control_buttons_state("disabled")
@@ -253,13 +315,13 @@ class DualDogGUI:
         """创建日志面板"""
         # 日志框架
         log_frame = ttk.LabelFrame(parent, text="系统日志", padding="5")
-        log_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        log_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W+tk.E+tk.N+tk.S, pady=(10, 0))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(1, weight=1)
         
         # 日志控制栏
         log_control_frame = ttk.Frame(log_frame)
-        log_control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        log_control_frame.grid(row=0, column=0, sticky=tk.W+tk.E, pady=(0, 5))
         
         ttk.Label(log_control_frame, text="日志级别:").pack(side=tk.LEFT)
         log_level_combo = ttk.Combobox(log_control_frame, textvariable=self.log_level_var, 
@@ -273,7 +335,7 @@ class DualDogGUI:
         
         # 日志文本框
         self.log_text = scrolledtext.ScrolledText(log_frame, height=15, width=80)
-        self.log_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.log_text.grid(row=1, column=0, sticky=tk.W+tk.E+tk.N+tk.S)
     
     def _setup_logging(self):
         """设置日志系统"""
@@ -377,7 +439,8 @@ class DualDogGUI:
                 self.selected_dog_var.set(connected_dogs[0])
         
         # 异步连接
-        self._run_async(self.controller.connect_all())
+        if self.controller:
+            self._run_async(self.controller.connect_all())
         
         # 更新按钮状态
         self.connect_btn.config(state="disabled")
@@ -412,6 +475,31 @@ class DualDogGUI:
         """触发跳舞"""
         if self.movement:
             self._run_async(self.movement.trigger_dance())
+    
+    def _on_trigger_stretch(self):
+        """触发伸展动作"""
+        if self.movement:
+            self._run_async(self.movement.trigger_specific_action("Stretch"))
+    
+    def _on_trigger_wallow(self):
+        """触发打滚动作"""
+        if self.movement:
+            self._run_async(self.movement.trigger_specific_action("Wallow"))
+    
+    def _on_trigger_flip(self):
+        """触发空翻动作"""
+        if self.movement:
+            self._run_async(self.movement.trigger_specific_action("FrontFlip"))
+    
+    def _on_trigger_pounce(self):
+        """触发扑跃动作"""
+        if self.movement:
+            self._run_async(self.movement.trigger_specific_action("FrontPounce"))
+    
+    def _on_trigger_heart(self):
+        """触发比心动作"""
+        if self.movement:
+            self._run_async(self.movement.trigger_specific_action("FingerHeart"))
     
     def _on_manual_mode(self):
         """启用手动控制模式"""
@@ -508,6 +596,87 @@ class DualDogGUI:
             else:
                 self._run_async(self.movement.say_hello())
     
+    def _on_stretch(self):
+        """伸展"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.stretch_single(dog_name))
+            else:
+                self._run_async(self.movement.stretch())
+    
+    def _on_wallow(self):
+        """打滚"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.wallow_single(dog_name))
+            else:
+                self._run_async(self.movement.wallow())
+    
+    def _on_scrape(self):
+        """刨地"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.scrape_single(dog_name))
+            else:
+                self._run_async(self.movement.scrape())
+    
+    def _on_wiggle_hips(self):
+        """扭臀"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.wiggle_hips_single(dog_name))
+            else:
+                self._run_async(self.movement.wiggle_hips())
+    
+    def _on_finger_heart(self):
+        """比心"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.finger_heart_single(dog_name))
+            else:
+                self._run_async(self.movement.finger_heart())
+    
+    def _on_handstand(self):
+        """倒立"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.handstand_single(dog_name))
+            else:
+                self._run_async(self.movement.handstand())
+    
+    def _on_front_flip(self):
+        """前空翻"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.front_flip_single(dog_name))
+            else:
+                self._run_async(self.movement.front_flip())
+    
+    def _on_back_flip(self):
+        """后空翻"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.back_flip_single(dog_name))
+            else:
+                self._run_async(self.movement.back_flip())
+    
+    def _on_front_pounce(self):
+        """前扑跃"""
+        if self.movement:
+            if self.control_mode_var.get() == "single":
+                dog_name = self.selected_dog_var.get()
+                self._run_async(self.movement.front_pounce_single(dog_name))
+            else:
+                self._run_async(self.movement.front_pounce())
+    
     def _on_control_mode_change(self):
         """控制模式变化回调"""
         mode = self.control_mode_var.get()
@@ -579,10 +748,13 @@ class DualDogGUI:
         """设置控制按钮状态"""
         buttons = [
             self.square_walk_btn, self.dance_party_btn, self.stop_auto_btn,
-            self.trigger_dance_btn, self.manual_mode_btn, self.forward_btn,
-            self.backward_btn, self.left_btn, self.right_btn, self.turn_left_btn,
-            self.turn_right_btn, self.stop_btn, self.sit_btn, self.stand_btn,
-            self.hello_btn
+            self.trigger_dance_btn, self.trigger_stretch_btn, self.trigger_wallow_btn,
+            self.trigger_flip_btn, self.trigger_pounce_btn, self.trigger_heart_btn,
+            self.manual_mode_btn, self.forward_btn, self.backward_btn, self.left_btn, 
+            self.right_btn, self.turn_left_btn, self.turn_right_btn, self.stop_btn, 
+            self.sit_btn, self.stand_btn, self.hello_btn, self.stretch_btn, 
+            self.wallow_btn, self.scrape_btn, self.wiggle_hips_btn, self.finger_heart_btn, 
+            self.handstand_btn, self.front_flip_btn, self.back_flip_btn, self.pounce_btn
         ]
         
         for btn in buttons:
