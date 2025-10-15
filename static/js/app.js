@@ -14,6 +14,9 @@ class DualDogController {
         this.logs = [];           // 日志数据
         this.videoStream = null;  // 摄像头流
         this.currentVideoSource = null; // 当前摄像头源
+        this.isRecording = false; // 录制状态
+        this.recordingStartTime = null; // 录制开始时间
+        this.recordingTimer = null; // 录制计时器
         
         this.init();
     }
@@ -79,6 +82,10 @@ class DualDogController {
         document.getElementById('startVideoBtn').addEventListener('click', () => this.startVideo());
         document.getElementById('stopVideoBtn').addEventListener('click', () => this.stopVideo());
         document.getElementById('cameraSelector').addEventListener('change', (e) => this.selectCamera(e.target.value));
+        
+        // 录制控制
+        document.getElementById('startRecordBtn').addEventListener('click', () => this.startRecording());
+        document.getElementById('stopRecordBtn').addEventListener('click', () => this.stopRecording());
         
         // 连接控制
         document.getElementById('connectAllBtn').addEventListener('click', () => this.connectAllDogs());
@@ -813,6 +820,9 @@ class DualDogController {
                 videoStatus.textContent = `正在播放 ${selectedDog} 的实时画面`;
                 videoStatus.className = 'text-success';
                 
+                // 显示录制按钮
+                document.getElementById('startRecordBtn').style.display = 'inline-block';
+                
                 this.currentVideoSource = selectedDog;
                 this.showMessage('视频流已开启', 'success');
                 
@@ -869,12 +879,153 @@ class DualDogController {
             videoStatus.textContent = '摄像头已关闭';
             videoStatus.className = 'text-muted';
             
+            // 隐藏录制按钮
+            document.getElementById('startRecordBtn').style.display = 'none';
+            document.getElementById('stopRecordBtn').style.display = 'none';
+            document.getElementById('recordingIndicator').style.display = 'none';
+            document.getElementById('recordingStatus').textContent = '';
+            
             this.currentVideoSource = null;
             this.showMessage('视频流已关闭', 'info');
+            
+            // 如果正在录制，先停止录制
+            if (this.isRecording) {
+                await this.stopRecording();
+            }
             
         } catch (error) {
             this.showMessage('关闭视频通道失败: ' + error.message, 'error');
         }
+    }
+    
+    // 开始录制
+    async startRecording() {
+        if (!this.currentVideoSource) {
+            this.showMessage('请先开启摄像头', 'warning');
+            return;
+        }
+        
+        if (this.isRecording) {
+            this.showMessage('已经在录制中', 'warning');
+            return;
+        }
+        
+        const startRecordBtn = document.getElementById('startRecordBtn');
+        const stopRecordBtn = document.getElementById('stopRecordBtn');
+        const recordingIndicator = document.getElementById('recordingIndicator');
+        const recordingStatus = document.getElementById('recordingStatus');
+        
+        try {
+            startRecordBtn.disabled = true;
+            startRecordBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>启动中...';
+            
+            // 调用后端 API 开始录制
+            const result = await this.apiCall('/api/video/record/start', 'POST', {
+                dog_name: this.currentVideoSource
+            });
+            
+            if (result.success) {
+                this.isRecording = true;
+                this.recordingStartTime = Date.now();
+                
+                // 更新UI
+                startRecordBtn.style.display = 'none';
+                stopRecordBtn.style.display = 'inline-block';
+                recordingIndicator.style.display = 'block';
+                recordingStatus.textContent = `正在录制: ${result.filename}`;
+                recordingStatus.className = 'text-danger recording';
+                
+                // 启动计时器
+                this.startRecordingTimer();
+                
+                this.showMessage('开始录制视频', 'success');
+            } else {
+                this.showMessage(result.error || '开始录制失败', 'error');
+            }
+            
+        } catch (error) {
+            this.showMessage('开始录制失败: ' + error.message, 'error');
+        } finally {
+            startRecordBtn.disabled = false;
+            startRecordBtn.innerHTML = '<i class="fas fa-circle me-1"></i>开始录制';
+        }
+    }
+    
+    // 停止录制
+    async stopRecording() {
+        if (!this.isRecording) {
+            return;
+        }
+        
+        const startRecordBtn = document.getElementById('startRecordBtn');
+        const stopRecordBtn = document.getElementById('stopRecordBtn');
+        const recordingIndicator = document.getElementById('recordingIndicator');
+        const recordingStatus = document.getElementById('recordingStatus');
+        
+        try {
+            stopRecordBtn.disabled = true;
+            stopRecordBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>停止中...';
+            
+            // 调用后端 API 停止录制
+            const result = await this.apiCall('/api/video/record/stop', 'POST', {
+                dog_name: this.currentVideoSource
+            });
+            
+            if (result.success) {
+                this.isRecording = false;
+                this.recordingStartTime = null;
+                
+                // 停止计时器
+                this.stopRecordingTimer();
+                
+                // 更新UI
+                startRecordBtn.style.display = 'inline-block';
+                stopRecordBtn.style.display = 'none';
+                recordingIndicator.style.display = 'none';
+                recordingStatus.textContent = `录制完成: ${result.filename} (${Math.floor(result.duration)}秒, ${result.frame_count}帧)`;
+                recordingStatus.className = 'text-success';
+                
+                this.showMessage(`视频已保存: ${result.filename}`, 'success');
+                
+                // 5秒后清空录制状态提示
+                setTimeout(() => {
+                    recordingStatus.textContent = '';
+                }, 5000);
+            } else {
+                this.showMessage(result.error || '停止录制失败', 'error');
+            }
+            
+        } catch (error) {
+            this.showMessage('停止录制失败: ' + error.message, 'error');
+        } finally {
+            stopRecordBtn.disabled = false;
+            stopRecordBtn.innerHTML = '<i class="fas fa-stop-circle me-1"></i>停止录制';
+        }
+    }
+    
+    // 启动录制计时器
+    startRecordingTimer() {
+        const recordingTime = document.getElementById('recordingTime');
+        
+        this.recordingTimer = setInterval(() => {
+            if (this.recordingStartTime) {
+                const elapsed = Math.floor((Date.now() - this.recordingStartTime) / 1000);
+                const minutes = Math.floor(elapsed / 60).toString().padStart(2, '0');
+                const seconds = (elapsed % 60).toString().padStart(2, '0');
+                recordingTime.textContent = `${minutes}:${seconds}`;
+            }
+        }, 1000);
+    }
+    
+    // 停止录制计时器
+    stopRecordingTimer() {
+        if (this.recordingTimer) {
+            clearInterval(this.recordingTimer);
+            this.recordingTimer = null;
+        }
+        
+        const recordingTime = document.getElementById('recordingTime');
+        recordingTime.textContent = '00:00';
     }
     
     selectCamera(dogName) {

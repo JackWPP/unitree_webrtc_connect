@@ -61,6 +61,15 @@ class DualDogWebServer:
         self.video_frame_queues = {}  # dog_name -> Queue
         self.video_active_streams = {}  # dog_name -> bool
         
+        # 视频录制管理
+        self.video_recording = {}  # dog_name -> {'writer': VideoWriter, 'start_time': float, 'filename': str}
+        self.recordings_dir = 'recordings'  # 录制文件存储目录
+        
+        # 确保录制目录存在
+        import os
+        if not os.path.exists(self.recordings_dir):
+            os.makedirs(self.recordings_dir)
+        
         # 日志
         self.logger = logging.getLogger("DualDogWebServer")
         self._setup_logging()
@@ -648,6 +657,28 @@ class DualDogWebServer:
                                         pass
                                 
                                 self.video_frame_queues[dog_name].put(img)
+                                
+                                # 如果正在录制，写入视频文件
+                                if dog_name in self.video_recording:
+                                    rec_info = self.video_recording[dog_name]
+                                    writer = rec_info['writer']
+                                    
+                                    # 如果是第一帧，重新创建writer以匹配实际分辨率
+                                    if rec_info['frame_size'] is None:
+                                        height, width = img.shape[:2]
+                                        rec_info['frame_size'] = (width, height)
+                                        
+                                        # 重新创建writer
+                                        writer.release()
+                                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                                        fps = 30.0
+                                        new_writer = cv2.VideoWriter(rec_info['filepath'], fourcc, fps, (width, height))
+                                        rec_info['writer'] = new_writer
+                                        writer = new_writer
+                                    
+                                    # 写入帧
+                                    writer.write(img)
+                                    rec_info['frame_count'] += 1
                         except Exception as e:
                             self._add_log_message("ERROR", f"接收视频帧错误: {str(e)}", "视频管理")
                     
@@ -745,6 +776,10 @@ class DualDogWebServer:
                     except Exception as video_error:
                         self._add_log_message("WARNING", f"关闭视频通道时出现错误: {str(video_error)}", "视频管理")
                 
+                # 停止录制（如果正在录制）
+                if dog_name in self.video_recording:
+                    self._stop_recording_internal(dog_name)
+                
                 # 清空视频帧队列
                 if dog_name in self.video_frame_queues:
                     while not self.video_frame_queues[dog_name].empty():
@@ -762,6 +797,158 @@ class DualDogWebServer:
                 error_msg = f"停止视频流失败: {str(e)}"
                 self._add_log_message("ERROR", error_msg, "视频管理")
                 return jsonify({'success': False, 'error': error_msg})
+        
+        @self.app.route('/api/video/record/start', methods=['POST'])
+        def start_recording():
+            """开始录制视频"""
+            try:
+                data = request.get_json()
+                dog_name = data.get('dog_name')
+                
+                if not dog_name:
+                    return jsonify({'success': False, 'error': '缺少机器狗名称参数'})
+                
+                # 检查视频流是否已开启
+                if not self.video_active_streams.get(dog_name, False):
+                    return jsonify({'success': False, 'error': '请先开启摄像头'})
+                
+                # 检查是否已在录制
+                if dog_name in self.video_recording:
+                    return jsonify({'success': False, 'error': '该机器狗已在录制中'})
+                
+                # 生成录制文件名
+                import os
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"{dog_name}_{timestamp}.mp4"
+                filepath = os.path.join(self.recordings_dir, filename)
+                
+                # 创建VideoWriter
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                fps = 30.0
+                frame_size = (640, 480)  # 默认分辨率，会在第一帧时更新
+                
+                writer = cv2.VideoWriter(filepath, fourcc, fps, frame_size)
+                
+                if not writer.isOpened():
+                    return jsonify({'success': False, 'error': '无法创建视频文件'})
+                
+                # 保存录制信息
+                self.video_recording[dog_name] = {
+                    'writer': writer,
+                    'start_time': time.time(),
+                    'filename': filename,
+                    'filepath': filepath,
+                    'frame_count': 0,
+                    'frame_size': None  # 将在第一帧时设置
+                }
+                
+                self._add_log_message("INFO", f"开始录制 {dog_name} 的视频: {filename}", "视频录制")
+                
+                return jsonify({
+                    'success': True,
+                    'dog_name': dog_name,
+                    'filename': filename,
+                    'start_time': time.time(),
+                    'message': '录制已开始'
+                })
+                
+            except Exception as e:
+                error_msg = f"开始录制失败: {str(e)}"
+                self._add_log_message("ERROR", error_msg, "视频录制")
+                return jsonify({'success': False, 'error': error_msg})
+        
+        @self.app.route('/api/video/record/stop', methods=['POST'])
+        def stop_recording():
+            """停止录制视频"""
+            try:
+                data = request.get_json()
+                dog_name = data.get('dog_name')
+                
+                if not dog_name:
+                    return jsonify({'success': False, 'error': '缺少机器狗名称参数'})
+                
+                if dog_name not in self.video_recording:
+                    return jsonify({'success': False, 'error': '该机器狗未在录制中'})
+                
+                # 停止录制
+                result = self._stop_recording_internal(dog_name)
+                
+                return jsonify({
+                    'success': True,
+                    'dog_name': dog_name,
+                    'filename': result['filename'],
+                    'duration': result['duration'],
+                    'frame_count': result['frame_count'],
+                    'message': '录制已停止'
+                })
+                
+            except Exception as e:
+                error_msg = f"停止录制失败: {str(e)}"
+                self._add_log_message("ERROR", error_msg, "视频录制")
+                return jsonify({'success': False, 'error': error_msg})
+        
+        @self.app.route('/api/video/record/status', methods=['GET'])
+        def get_recording_status():
+            """获取录制状态"""
+            try:
+                dog_name = request.args.get('dog_name')
+                
+                if not dog_name:
+                    return jsonify({'success': False, 'error': '缺少机器狗名称参数'})
+                
+                if dog_name not in self.video_recording:
+                    return jsonify({
+                        'success': True,
+                        'recording': False,
+                        'dog_name': dog_name
+                    })
+                
+                rec_info = self.video_recording[dog_name]
+                duration = time.time() - rec_info['start_time']
+                
+                return jsonify({
+                    'success': True,
+                    'recording': True,
+                    'dog_name': dog_name,
+                    'filename': rec_info['filename'],
+                    'duration': duration,
+                    'frame_count': rec_info['frame_count'],
+                    'start_time': rec_info['start_time']
+                })
+                
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)})
+    
+    def _stop_recording_internal(self, dog_name: str) -> Dict[str, Any]:
+        """内部方法：停止录制"""
+        if dog_name not in self.video_recording:
+            return None
+        
+        rec_info = self.video_recording[dog_name]
+        writer = rec_info['writer']
+        
+        # 释放VideoWriter
+        writer.release()
+        
+        # 计算录制时长
+        duration = time.time() - rec_info['start_time']
+        
+        result = {
+            'filename': rec_info['filename'],
+            'filepath': rec_info['filepath'],
+            'duration': duration,
+            'frame_count': rec_info['frame_count']
+        }
+        
+        # 从录制列表中移除
+        del self.video_recording[dog_name]
+        
+        self._add_log_message("INFO", 
+            f"停止录制 {dog_name} 的视频: {rec_info['filename']}, "
+            f"时长: {duration:.1f}秒, 帧数: {rec_info['frame_count']}", 
+            "视频录制")
+        
+        return result
     
     async def _execute_triple_pounce(self, dog_name: Optional[str] = None):
         """执行三次连续扑跃"""

@@ -158,6 +158,12 @@
                             <button class="btn btn-sm btn-outline-danger" id="stopVideoBtn" style="display: none;">
                                 <i class="fas fa-stop me-1"></i>关闭摄像头
                             </button>
+                            <button class="btn btn-sm btn-outline-primary" id="startRecordBtn" style="display: none;">
+                                <i class="fas fa-circle me-1"></i>开始录制
+                            </button>
+                            <button class="btn btn-sm btn-danger" id="stopRecordBtn" style="display: none;">
+                                <i class="fas fa-stop-circle me-1"></i>停止录制
+                            </button>
                         </div>
                     </div>
                     <div class="card-body text-center">
@@ -167,9 +173,19 @@
                                 <div>请选择机器狗并启用摄像头</div>
                             </div>
                             <img id="videoElement" style="display: none; width: 100%; height: 100%; object-fit: contain;" alt="视频流">
+                            <!-- 录制状态指示器 -->
+                            <div id="recordingIndicator" class="position-absolute top-0 start-0 m-3" style="display: none;">
+                                <span class="badge bg-danger">
+                                    <i class="fas fa-circle me-1 blink"></i>
+                                    录制中 <span id="recordingTime">00:00</span>
+                                </span>
+                            </div>
                         </div>
                         <div class="mt-2">
                             <small id="videoStatus" class="text-muted">摄像头未启动</small>
+                            <span class="ms-3">
+                                <small id="recordingStatus" class="text-muted"></small>
+                            </span>
                         </div>
                     </div>
                 </div>

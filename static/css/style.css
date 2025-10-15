@@ -542,6 +542,41 @@ body {
     color: #856404;
 }
 
+/* 录制指示器样式 */
+#recordingIndicator {
+    z-index: 10;
+    pointer-events: none;
+}
+
+#recordingIndicator .badge {
+    font-size: 1rem;
+    padding: 0.5rem 1rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* 录制按钮闪烁动画 */
+.blink {
+    animation: blinking 1.5s infinite;
+}
+
+@keyframes blinking {
+    0%, 49% {
+        opacity: 1;
+    }
+    50%, 100% {
+        opacity: 0.3;
+    }
+}
+
+/* 录制状态样式 */
+#recordingStatus {
+    font-weight: 600;
+}
+
+#recordingStatus.recording {
+    color: #dc3545 !important;
+}
+
 /* 响应式优化 */
 @media (max-width: 992px) {
     .log-container {
@@ -555,6 +590,11 @@ body {
     .log-entry {
         font-size: 0.75rem;
     }
+    
+    #recordingIndicator .badge {
+        font-size: 0.85rem;
+        padding: 0.4rem 0.75rem;
+    }
 }
 
 @media (max-width: 768px) {
@@ -564,5 +604,14 @@ body {
     
     .card-body {
         padding: 0.75rem;
+    }
+    
+    #recordingIndicator {
+        margin: 0.5rem !important;
+    }
+    
+    #recordingIndicator .badge {
+        font-size: 0.75rem;
+        padding: 0.3rem 0.5rem;
     }
 }
