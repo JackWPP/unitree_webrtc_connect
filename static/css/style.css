@@ -1,0 +1,568 @@
+/* 双机器狗控制中心样式文件 */
+
+/* 全局样式 */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f8f9fa;
+}
+
+/* 连接状态指示器 */
+.status-connected {
+    color: #28a745 !important;
+}
+
+.status-disconnected {
+    color: #dc3545 !important;
+}
+
+.status-connecting {
+    color: #ffc107 !important;
+}
+
+.status-error {
+    color: #dc3545 !important;
+}
+
+/* 机器狗状态卡片 */
+.dog-status-item {
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    background-color: white;
+    transition: all 0.3s ease;
+}
+
+.dog-status-item:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    transform: translateY(-1px);
+}
+
+.dog-status-item .dog-name {
+    font-weight: bold;
+    font-size: 1.1rem;
+}
+
+.dog-status-item .dog-ip {
+    color: #6c757d;
+    font-size: 0.9rem;
+}
+
+.dog-status-item .dog-status {
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.dog-status-connected {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.dog-status-disconnected {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.dog-status-connecting {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.dog-status-error {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+/* 控制按钮样式 */
+.control-btn {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    font-size: 1.2rem;
+    margin: 0.25rem;
+    transition: all 0.3s ease;
+}
+
+.control-btn:hover {
+    transform: scale(1.1);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.control-btn:active {
+    transform: scale(0.95);
+}
+
+/* 动作按钮样式 */
+.action-btn {
+    margin-bottom: 0.5rem;
+    transition: all 0.3s ease;
+}
+
+.action-btn:hover {
+    transform: translateX(5px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+/* 卡片动画 */
+.card {
+    transition: all 0.3s ease;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.card:hover {
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    transform: translateY(-2px);
+}
+
+/* 运动状态指示器 */
+.movement-status {
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 1rem;
+}
+
+.movement-status.running {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.movement-status.stopped {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* 按钮加载状态 */
+.btn-loading {
+    position: relative;
+    color: transparent !important;
+}
+
+.btn-loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin-top: -10px;
+    margin-left: -10px;
+    border: 2px solid transparent;
+    border-top: 2px solid #ffffff;
+    border-radius: 50%;
+    animation: button-loading-spinner 1s ease infinite;
+}
+
+@keyframes button-loading-spinner {
+    from {
+        transform: rotate(0turn);
+    }
+    to {
+        transform: rotate(1turn);
+    }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    .control-btn {
+        width: 50px;
+        height: 50px;
+        font-size: 1rem;
+    }
+    
+    .card-body {
+        padding: 1rem;
+    }
+    
+    .btn {
+        font-size: 0.9rem;
+        padding: 0.5rem 1rem;
+    }
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+/* 工具提示样式 */
+.tooltip {
+    font-size: 0.8rem;
+}
+
+/* 警告和成功消息 */
+.alert {
+    border-radius: 0.5rem;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+/* 导航栏样式 */
+.navbar-brand {
+    font-weight: bold;
+    font-size: 1.3rem;
+}
+
+/* 表单样式 */
+.form-control:focus,
+.form-select:focus {
+    border-color: #007bff;
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+/* 动画效果 */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+}
+
+/* 状态徽章 */
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.status-badge i {
+    margin-right: 0.25rem;
+}
+
+/* 键盘快捷键提示 */
+.keyboard-hint {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 10px 15px;
+    border-radius: 5px;
+    font-size: 0.8rem;
+    z-index: 1000;
+    display: none;
+}
+
+/* 紧急停止按钮特殊样式 */
+.btn-emergency {
+    background-color: #dc3545;
+    border-color: #dc3545;
+    color: white;
+    animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-red {
+    0% {
+        box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(220, 53, 69, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(220, 53, 69, 0);
+    }
+}
+
+/* 连接状态动画 */
+.connection-pulse {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+    100% {
+        opacity: 1;
+    }
+}
+
+/* 日志显示样式 */
+.log-container {
+    background-color: #1e1e1e;
+    color: #ffffff;
+    border: 1px solid #444;
+}
+
+.log-entry {
+    padding: 0.25rem 0.75rem;
+    border-bottom: 1px solid #333;
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+.log-entry.log-info {
+    color: #17a2b8;
+}
+
+.log-entry.log-warning {
+    color: #ffc107;
+}
+
+.log-entry.log-error {
+    color: #dc3545;
+}
+
+.log-entry.log-debug {
+    color: #6c757d;
+}
+
+.log-timestamp {
+    color: #6c757d;
+    font-size: 0.7rem;
+}
+
+.log-source {
+    color: #28a745;
+    font-weight: bold;
+    font-size: 0.7rem;
+}
+
+.log-message {
+    margin-left: 0.5rem;
+}
+
+/* 设备扫描结果样式 */
+.device-scan-item {
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    background-color: white;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.device-scan-item:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    border-color: #007bff;
+}
+
+.device-scan-item.selected {
+    background-color: #e7f3ff;
+    border-color: #007bff;
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+.device-scan-item .device-name {
+    font-weight: bold;
+    color: #495057;
+}
+
+.device-scan-item .device-info {
+    font-size: 0.85rem;
+    color: #6c757d;
+}
+
+.device-scan-item .device-type {
+    display: inline-block;
+    background-color: #007bff;
+    color: white;
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-size: 0.7rem;
+    font-weight: bold;
+}
+
+/* 扫描按钮动画 */
+.btn-scanning {
+    position: relative;
+    color: transparent !important;
+}
+
+.btn-scanning::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin-top: -10px;
+    margin-left: -10px;
+    border: 2px solid transparent;
+    border-top: 2px solid #ffffff;
+    border-radius: 50%;
+    animation: scan-spinner 1s linear infinite;
+}
+
+@keyframes scan-spinner {
+    from {
+        transform: rotate(0turn);
+    }
+    to {
+        transform: rotate(1turn);
+    }
+}
+
+/* 实时日志滚动 */
+.log-container {
+    scroll-behavior: smooth;
+}
+
+/* 新日志条目淡入动画 */
+.log-entry.new-entry {
+    animation: logFadeIn 0.5s ease-in-out;
+}
+
+@keyframes logFadeIn {
+    from {
+        opacity: 0;
+        transform: translateX(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* 状态指示器增强 */
+.status-indicator {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.status-indicator.online {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.status-indicator.offline {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.status-indicator.connecting {
+    background-color: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeaa7;
+}
+
+/* 摄像头显示样式 */
+.video-container {
+    border: 2px solid #dee2e6;
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    min-height: 300px;
+}
+
+.video-container.active {
+    border-color: #28a745;
+    box-shadow: 0 0 10px rgba(40, 167, 69, 0.3);
+}
+
+.video-container.error {
+    border-color: #dc3545;
+    background-color: #f8d7da;
+}
+
+#videoElement {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background-color: #000;
+}
+
+#videoPlaceholder {
+    color: #6c757d;
+    text-align: center;
+}
+
+.video-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.video-status {
+    font-size: 0.85rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-weight: 500;
+}
+
+.video-status.active {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.video-status.inactive {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.video-status.error {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+/* 响应式优化 */
+@media (max-width: 992px) {
+    .log-container {
+        height: 150px !important;
+    }
+    
+    .device-scan-item {
+        padding: 0.5rem;
+    }
+    
+    .log-entry {
+        font-size: 0.75rem;
+    }
+}
+
+@media (max-width: 768px) {
+    .log-container {
+        height: 120px !important;
+    }
+    
+    .card-body {
+        padding: 0.75rem;
+    }
+}

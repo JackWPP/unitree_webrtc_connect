@@ -336,12 +336,18 @@ class DualDogController:
         """获取所有机器狗状态"""
         status = {}
         for name, dog in self.dogs.items():
+            # 检查机器狗是否真正连接（不仅仅是connection对象存在）
+            is_connected = (
+                dog.connection is not None and 
+                dog.status not in [DogStatus.DISCONNECTED, DogStatus.ERROR]
+            )
+            
             status[name] = {
                 "status": dog.status.value,
                 "ip": dog.ip,
                 "last_heartbeat": dog.last_heartbeat,
                 "error_message": dog.error_message,
-                "connected": dog.connection is not None
+                "connected": is_connected
             }
         return status
     
