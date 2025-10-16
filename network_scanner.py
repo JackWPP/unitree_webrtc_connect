@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 # 导入现有的发现功能
-from go2_webrtc_driver.multicast_scanner import discover_ip_sn
+from unitree_webrtc_connect.multicast_scanner import discover_ip_sn
 
 
 @dataclass

@@ -12,8 +12,8 @@ from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass
 from enum import Enum
 
-from go2_webrtc_driver.webrtc_driver import Go2WebRTCConnection, WebRTCConnectionMethod
-from go2_webrtc_driver.constants import RTC_TOPIC, SPORT_CMD
+from unitree_webrtc_connect.webrtc_driver import UnitreeWebRTCConnection, WebRTCConnectionMethod
+from unitree_webrtc_connect.constants import RTC_TOPIC, SPORT_CMD
 
 
 class DogStatus(Enum):
@@ -35,7 +35,7 @@ class DogInfo:
     serial_number: Optional[str] = None
     connection_method: WebRTCConnectionMethod = WebRTCConnectionMethod.LocalSTA
     status: DogStatus = DogStatus.DISCONNECTED
-    connection: Optional[Go2WebRTCConnection] = None
+    connection: Optional[UnitreeWebRTCConnection] = None
     last_heartbeat: float = 0
     error_message: str = ""
 
@@ -111,12 +111,12 @@ class DualDogController:
         try:
             # 创建连接
             if dog.connection_method == WebRTCConnectionMethod.LocalSTA:
-                conn = Go2WebRTCConnection(dog.connection_method, ip=dog.ip)
+                conn = UnitreeWebRTCConnection(dog.connection_method, ip=dog.ip)
             elif dog.connection_method == WebRTCConnectionMethod.LocalAP:
-                conn = Go2WebRTCConnection(dog.connection_method)
+                conn = UnitreeWebRTCConnection(dog.connection_method)
             else:  # Remote
-                conn = Go2WebRTCConnection(
-                    dog.connection_method, 
+                conn = UnitreeWebRTCConnection(
+                    dog.connection_method,
                     serialNumber=dog.serial_number
                 )
             
@@ -199,7 +199,7 @@ class DualDogController:
         self.logger.info("所有机器狗已断开连接")
         return True
     
-    def _setup_dog_callbacks(self, name: str, conn: Go2WebRTCConnection):
+    def _setup_dog_callbacks(self, name: str, conn: UnitreeWebRTCConnection):
         """设置机器狗状态回调"""
         def lowstate_callback(message):
             """低级状态回调"""

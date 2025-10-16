@@ -18,7 +18,7 @@ from flask_socketio import SocketIO, emit
 from dual_dog_controller import DualDogController, DogStatus, WebRTCConnectionMethod
 from dual_dog_movement import DualDogMovement, MovementPattern
 from network_scanner import NetworkScanner
-from go2_webrtc_driver.multicast_scanner import discover_ip_sn
+from unitree_webrtc_connect.multicast_scanner import discover_ip_sn
 import cv2
 import numpy as np
 from queue import Queue
