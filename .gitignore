@@ -27,3 +27,11 @@ output_video.mp4
 
 build/
 dist/
+
+*.log
+logs/dual_dog_errors_20250921.log
+logs/dual_dog_errors_20250922.log
+logs/dual_dog_main_20250921.log
+logs/dual_dog_main_20250922.log
+logs/dual_dog_movement_20250921.log
+logs/dual_dog_movement_20250922.log
