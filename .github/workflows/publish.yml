@@ -1,0 +1,114 @@
+name: Build & Publish to (Test)PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Where to publish"
+        required: true
+        default: "pypi"
+        type: choice
+        options:
+          - testpypi
+          - pypi
+      version_override:
+        description: "Optional version to publish (must match pyproject.toml). Leave empty to use current."
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: (Optional) verify version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "Tag version: $TAG_VERSION"
+          # Grep project version from pyproject.toml
+          FILE_VERSION=$(python - << 'PY'
+import tomllib, sys
+with open("pyproject.toml","rb") as f:
+    data = tomllib.load(f)
+print(data["project"]["version"])
+PY
+)
+          echo "File version: $FILE_VERSION"
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "Version mismatch: tag v$TAG_VERSION != pyproject $FILE_VERSION"
+            exit 1
+          fi
+
+      - name: (Optional) verify version matches manual input
+        if: ${{ inputs.version_override != '' }}
+        run: |
+          FILE_VERSION=$(python - << 'PY'
+import tomllib, sys
+with open("pyproject.toml","rb") as f:
+    data = tomllib.load(f)
+print(data["project"]["version"])
+PY
+)
+          if [ "${{ inputs.version_override }}" != "$FILE_VERSION" ]; then
+            echo "Version mismatch: input ${{ inputs.version_override }} != pyproject $FILE_VERSION"
+            exit 1
+          fi
+
+      - name: Build sdist & wheel
+        run: python -m build
+
+      - name: Twine check
+        run: twine check dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Require secrets to exist; skip publish if manual run chose neither
+    if: |
+      (github.event_name == 'workflow_dispatch' && (inputs.repository == 'testpypi' || inputs.repository == 'pypi')) ||
+      startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      # Choose the index based on trigger
+      - name: Set repository URL
+        id: repo_url
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.repository }}" == "testpypi" ]]; then
+            echo "url=https://test.pypi.org/legacy/" >> $GITHUB_OUTPUT
+          else
+            echo "url=https://upload.pypi.org/legacy/" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish with PyPI API token
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages_dir: dist
+          repository-url: ${{ steps.repo_url.outputs.url }}
+          password: ${{ github.event_name == 'workflow_dispatch' && inputs.repository == 'testpypi' && secrets.TEST_PYPI_API_TOKEN || secrets.PYPI_API_TOKEN }}

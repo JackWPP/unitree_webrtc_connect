@@ -1,3 +1,6 @@
+# Unitree Go2 and G1 WebRTC Driver
+
+This repository contains a Python implementation of the WebRTC driver to connect to the Unitree Go2 and G1 Robots. WebRTC is used by the Unitree Go/Unitree Explore APP and provides high-level control through it. Therefore, no jailbreak or firmware manipulation is required. It works out of the box for Go2 AIR/PRO/EDU models and G1 AIR/EDU.
 # 🤖 Unitree Go2 WebRTC 控制系统
 
 一个功能完整的Unitree Go2机器狗WebRTC控制系统，提供Python驱动和Web控制界面。无需越狱或固件修改，开箱即用！
@@ -37,17 +40,20 @@ python3 web_server.py
 
 这是原始的Python WebRTC驱动库，提供底层API接口。
 
-## Supported Versions
+## Currently Supported Firmware Versions
 
-The currently supported firmware packages are:
-- 1.1.1 - 1.1.7 (latest available)
-- 1.0.19 - 1.0.25
+**Go2:**
+- **1.1.x series**: 1.1.1 – 1.1.8 *(latest available)*
+- **1.0.x series**: 1.0.19 – 1.0.25
 
-## Audio and Video Support
+**G1:**
+- **1.4.0** *(latest available)*
+
+## Audio and Video Support (Go2 only)
 
 There are video (recvonly) and audio (sendrecv) channels in WebRTC that you can connect to. Check out the examples in the `/example` folder.
 
-## Lidar support
+## Lidar support (Go2 only)
 
 There is a lidar decoder built in, so you can handle decoded PoinClouds directly. Check out the examples in the `/example` folder.
 
@@ -55,32 +61,32 @@ There is a lidar decoder built in, so you can handle decoded PoinClouds directly
 
 The driver supports three types of connection methods:
 
-1. **AP Mode**: Go2 is in AP mode, and the WebRTC client is connected directly to it:
+1. **AP Mode**: Go2/G1 is in AP mode, and the WebRTC client is connected directly to it:
 
     ```python
-    Go2WebRTCConnection(WebRTCConnectionMethod.LocalAP)
+    UnitreeWebRTCConnection(WebRTCConnectionMethod.LocalAP)
     ```
 
-2. **STA-L Mode**: Go2 and the WebRTC client are on the same local network. An IP or Serial number is required:
+2. **STA-L Mode**: Go2/G1 and the WebRTC client are on the same local network. An IP or Serial number is required:
 
     ```python
-    Go2WebRTCConnection(WebRTCConnectionMethod.LocalSTA, ip="192.168.8.181")
+    UnitreeWebRTCConnection(WebRTCConnectionMethod.LocalSTA, ip="192.168.8.181")
     ```
 
 
     If the IP is unknown, you can specify only the serial number, and the driver will try to find the IP using the special Multicast discovery feature available on Go2:
 
     ```python
-    Go2WebRTCConnection(WebRTCConnectionMethod.LocalSTA, serialNumber="B42D2000XXXXXXXX")
+    UnitreeWebRTCConnection(WebRTCConnectionMethod.LocalSTA, serialNumber="B42D2000XXXXXXXX")
     ```
 
-3. **STA-T mode**: Remote connection through remote Unitrees TURN server. Could control your Go2 even being on the diffrent network. Requires username and pass from Unitree account
+3. **STA-T mode**: Remote connection through remote Unitrees TURN server. Could control your Go2/G1 even being on the diffrent network. Requires username and pass from Unitree account
 
     ```python
-    Go2WebRTCConnection(WebRTCConnectionMethod.Remote, serialNumber="B42D2000XXXXXXXX", username="email@gmail.com", password="pass")
+    UnitreeWebRTCConnection(WebRTCConnectionMethod.Remote, serialNumber="B42D2000XXXXXXXX", username="email@gmail.com", password="pass")
     ```
 
-## Multicast scanner
+## Multicast scanner (Go2 only)
 The driver has a built-in Multicast scanner to find the Unitree Go2 on the local network and connect using only the serial number.
 
 
@@ -113,6 +119,9 @@ python3 web_server.py
 ```bash
 cd ~
 sudo apt update
+sudo apt install python3-pip
+sudo apt install portaudio19-dev
+git clone https://github.com/legion1581/go2_webrtc_connect.git
 sudo apt install python3-pip portaudio19-dev
 git clone --recurse-submodules https://github.com/legion1581/go2_webrtc_connect.git
 cd go2_webrtc_connect
@@ -158,6 +167,7 @@ python3 web_server.py
 # 4. 开始录制或控制运动
 ```
 
+Special thanks to the [tfoldi WebRTC project](https://github.com/tfoldi/go2-webrtc) and [abizovnuralem](https://github.com/abizovnuralem) for adding LiDAR support, [MrRobotow](https://github.com/MrRobotoW) for providing a plot LiDAR example. Special thanks to [Nico](https://github.com/oulianov) for the aiortc monkey patch.
 ### Python编程接口
 示例程序位于 `/examples` 目录。
 

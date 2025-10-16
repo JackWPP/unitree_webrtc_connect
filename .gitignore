@@ -26,6 +26,7 @@ output.wav
 output_video.mp4
 
 build/
+dist/
 
 *.log
 logs/dual_dog_errors_20250921.log
