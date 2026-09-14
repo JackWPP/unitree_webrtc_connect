@@ -3,7 +3,6 @@ import json
 import logging
 import struct
 from .msgs.pub_sub import WebRTCDataChannelPubSub
-from .lidar.lidar_decoder_unified import UnifiedLidarDecoder
 from .msgs.heartbeat import WebRTCDataChannelHeartBeat
 from .msgs.validation import WebRTCDataChannelValidaton
 from .msgs.rtc_inner_req import WebRTCDataChannelRTCInnerReq
@@ -25,7 +24,11 @@ class WebRTCDataChannel:
         self.validaton = WebRTCDataChannelValidaton(self.channel, self.pub_sub)
         self.rtc_inner_req = WebRTCDataChannelRTCInnerReq(self.conn, self.channel, self.pub_sub)
 
-        self.set_decoder(decoder_type = 'libvoxel')
+        # The LiDAR decoder is created on first use (see `set_decoder` /
+        # `_ensure_decoder`) rather than here. Importing it eagerly pulled
+        # `wasmtime` (libvoxel) or `lz4` + `numpy` (native) into every
+        # install, including the humanoids, which have no LiDAR at all.
+        self.decoder = None
 
         #Event handler for Validation succeed
         def on_validate():
@@ -141,7 +144,7 @@ class WebRTCDataChannel:
 
         # Only decode with lidar decoder for lidar topics
         if "utlidar" in topic:
-            decoded_data = self.decoder.decode(binary_data, decoded_json['data'])
+            decoded_data = self._ensure_decoder().decode(binary_data, decoded_json['data'])
             decoded_json['data']['data'] = decoded_data
         else:
             # Non-lidar binary: attach raw bytes into 'data' field
@@ -157,7 +160,7 @@ class WebRTCDataChannel:
 
         decoded_json = json.loads(json_data.decode('utf-8'))
 
-        decoded_data = self.decoder.decode(binary_data, decoded_json['data'])
+        decoded_data = self._ensure_decoder().decode(binary_data, decoded_json['data'])
 
         decoded_json['data']['data'] = decoded_data
         return decoded_json
@@ -203,13 +206,41 @@ class WebRTCDataChannel:
         """
         Set the decoder to be used for decoding incoming data.
 
+        The decoder module is imported here, not at module import time, so
+        that `import unitree_webrtc_connect` does not require `wasmtime` /
+        `lz4` / `numpy`. Those are only needed by the Go2 LiDAR path — see
+        the optional `[go2]` extra in pyproject.toml.
+
         :param decoder_type: The type of decoder to use ("libvoxel" or "native").
         """
         if decoder_type not in ["libvoxel", "native"]:
             raise ValueError("Invalid decoder type. Choose 'libvoxel' or 'native'.")
 
+        # Imported lazily: UnifiedLidarDecoder pulls in libvoxel (wasmtime +
+        # a .wasm blob) and native (lz4 + numpy) regardless of which one is
+        # selected, because the two backends live in the same module tree.
+        from .lidar.lidar_decoder_unified import UnifiedLidarDecoder
+
         # Create an instance of UnifiedLidarDecoder with the specified type
         self.decoder = UnifiedLidarDecoder(decoder_type=decoder_type)
         print_status("Lidar Decoder", f"🧊 {self.decoder.get_decoder_name()}")
+
+    def _ensure_decoder(self):
+        """Return the LiDAR decoder, creating the default one on first use.
+
+        Only reached for `utlidar` topics, so Go2-only. Raises a clear
+        message when the optional LiDAR dependencies aren't installed
+        instead of an opaque ImportError from deep inside the decoder."""
+        if self.decoder is None:
+            try:
+                self.set_decoder(decoder_type="libvoxel")
+            except ImportError as e:
+                raise ImportError(
+                    "LiDAR decoding requires the optional dependencies "
+                    "(wasmtime for the libvoxel decoder, or lz4 + numpy for "
+                    "the native one). Install them with "
+                    "`pip install unitree-webrtc-connect[go2]`."
+                ) from e
+        return self.decoder
     
     

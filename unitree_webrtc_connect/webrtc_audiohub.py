@@ -5,7 +5,6 @@ import time
 import uuid
 import os
 import hashlib
-from pydub import AudioSegment
 from unitree_webrtc_connect.constants import AUDIO_API
 from unitree_webrtc_connect.webrtc_driver import UnitreeWebRTCConnection
 import asyncio
@@ -122,6 +121,7 @@ class WebRTCAudioHub:
         # Convert MP3 to WAV if necessary
         if audiofile_path.endswith(".mp3"):
             self.logger.info("Converting MP3 to WAV")
+            from pydub import AudioSegment  # optional extra: [audiohub]
             audio = AudioSegment.from_mp3(audiofile_path)
             # Set specific audio parameters for compatibility
             audio = audio.set_frame_rate(44100)  # Standard sample rate
@@ -211,6 +211,7 @@ class WebRTCAudioHub:
         # Convert MP3 to WAV if necessary
         if audiofile_path.endswith(".mp3"):
             self.logger.info("Converting MP3 to WAV")
+            from pydub import AudioSegment  # optional extra: [audiohub]
             audio = AudioSegment.from_mp3(audiofile_path)
             # Set specific audio parameters for compatibility
             audio = audio.set_frame_rate(44100)  # Standard sample rate

@@ -8,24 +8,72 @@ authors = [
     { name = "legion1581", email = "legion1581@gmail.com" }
 ]
 
+# Core only. The heavy / platform-specific pieces that the humanoids never
+# touch (LiDAR decoding, audio I/O, AudioHub transcoding) live in the extras
+# below, and the corresponding imports moved to first-use inside the package.
 dependencies = [
     "aiortc>=1.9.0",
     "pycryptodome",
     "requests",
     "curl_cffi",
-    "wasmtime",
-    "flask-socketio",
-    "lz4",
-    "numpy",
     "packaging",
+]
+
+[project.optional-dependencies]
+# Go2 LiDAR point-cloud decoding. libvoxel (default) needs wasmtime; the
+# alternative native decoder needs lz4 + numpy.
+go2 = [
+    "numpy",
+    "lz4",
+    "wasmtime",
+]
+# Go2 audio playback/recording (the examples open the sound card themselves).
+audio = [
+    "numpy",
+    "sounddevice",
+]
+# Go2 AudioHub file management — mp3 → wav conversion.
+audiohub = [
+    "pydub",
+]
+# Agent-facing MCP server (unitree-robot-mcp) + Skill support.
+agent = [
+    "mcp>=2.0",
+]
+# Everything the bundled examples import (OpenCV windows, Flask LiDAR
+# plotter, sound card, MP3 conversion).
+examples = [
+    "numpy",
+    "opencv-python",
     "sounddevice",
     "pyaudio",
     "pydub",
-    "opencv-python"
+    "flask",
+    "flask-socketio",
+]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+# Convenience union of every optional group above.
+all = [
+    "numpy",
+    "lz4",
+    "wasmtime",
+    "sounddevice",
+    "pydub",
+    "opencv-python",
+    "pyaudio",
+    "flask",
+    "flask-socketio",
+    "mcp>=2.0",
+    "pytest",
+    "pytest-asyncio",
 ]
 
 [project.scripts]
 unitree-fetch-aes-key = "unitree_webrtc_connect._cli:main"
+unitree-robot-mcp = "unitree_robot_agent.cli:main"
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]
@@ -33,7 +81,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["unitree_webrtc_connect*"]
+include = [
+    "unitree_webrtc_connect*",
+    "unitree_robot_agent*",
+]
 exclude = [
     "tests",
     "tests.*",
@@ -50,3 +101,8 @@ exclude = [
 [tool.setuptools]
 # include data files as listed in MANIFEST.in
 include-package-data = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]

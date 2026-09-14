@@ -1,0 +1,46 @@
+"""Robot-family profiles."""
+
+from .base import (
+    CAP_ARM_GESTURES,
+    CAP_ERRORS,
+    CAP_FSM_ACTIONS,
+    CAP_JOYSTICK,
+    CAP_LIDAR,
+    CAP_LOWSTATE,
+    CAP_MOTION_SWITCHER,
+    CAP_OBSTACLE_AVOID,
+    CAP_SNAPSHOT,
+    CAP_SPORT_COMMANDS,
+    CAP_STATUS,
+    CAP_VELOCITY,
+    CAP_VUI,
+    ActionInfo,
+    RobotProfile,
+    StateInfo,
+    StopPlan,
+    TransitionCheck,
+)
+from .registry import available_robots, get_profile
+
+__all__ = [
+    "ActionInfo",
+    "CAP_ARM_GESTURES",
+    "CAP_ERRORS",
+    "CAP_FSM_ACTIONS",
+    "CAP_JOYSTICK",
+    "CAP_LIDAR",
+    "CAP_LOWSTATE",
+    "CAP_MOTION_SWITCHER",
+    "CAP_OBSTACLE_AVOID",
+    "CAP_SNAPSHOT",
+    "CAP_SPORT_COMMANDS",
+    "CAP_STATUS",
+    "CAP_VELOCITY",
+    "CAP_VUI",
+    "RobotProfile",
+    "StateInfo",
+    "StopPlan",
+    "TransitionCheck",
+    "available_robots",
+    "get_profile",
+]

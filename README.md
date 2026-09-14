@@ -283,6 +283,43 @@ On V3-capable firmware (G1 ≥ 1.5.1, Go2 ≥ 1.1.15), also set
 | | `data_channel/lowstate/` | Live battery / motors / IMUs / board temperature |
 | **Video** | `video/camera_stream/` | Display video stream |
 
+## MCP Server + Skill (let an AI agent drive the robot)
+
+`unitree_robot_agent` wraps this library into an MCP server plus a safety
+skill, so an LLM can safely sense and control a Go2 or R1. It is **separate
+from, not a replacement for**, the graphical tooling — the server releases
+the link whenever it is idle so you can still take over with the app.
+
+```sh
+pip install -e ".[agent]"
+
+unitree-robot-mcp selftest          # 16 offline checks, no robot needed
+unitree-robot-mcp doctor            # config / deps / connectivity
+unitree-robot-mcp serve             # stdio MCP server (default)
+unitree-robot-mcp serve --transport streamable-http --port 8765
+```
+
+What you get:
+
+| | |
+|---|---|
+| **Tools** | 23 (R1) / 29 (Go2) semantic tools — status, telemetry, movement, FSM states, gestures, Go2 LED/volume/avoidance/LiDAR, vision |
+| **Motion** | trapezoid/triangle velocity profiles (a short move actually reaches its speed and stops on time) and `robot_turn` — a genuine closed loop on the IMU yaw |
+| **Vision** | `robot_snapshot` with four sources (WebRTC track, firmware still-photo api, RTSP, local file/camera), a probe that explains why each fails, and an archive |
+| **Auth** | region auto-detection (a CN account answers "email not register" on the global endpoint), cached login with token refresh, `robot_fetch_key` |
+| **Guard rails** | `confirm=true` for anything that moves, a hard duration ceiling, a local state white list, rate limiting, soft-stop on every failure path, full audit log with redacted secrets |
+| **Lifecycle** | lazy connect + 45 s idle release, so the robot's single WebRTC client slot stays available to the official app |
+| **Offline** | a mock backend that reproduces the awkward real behaviours (811→830 redirect, frozen state reporting, 1001/1003, silence for unhandled api_ids, camera-less models) and serves real JPEGs |
+| **Skill** | `skills/unitree-robot-control/` — safety rules, FSM semantics, motion, vision, connection/key flow, troubleshooting, a real-robot verification checklist |
+
+Docs: [`docs/MCP_SETUP.md`](docs/MCP_SETUP.md) ·
+[`docs/mcp-config-samples.md`](docs/mcp-config-samples.md) ·
+[`skills/unitree-robot-control/SKILL.md`](skills/unitree-robot-control/SKILL.md)
+
+> Safety first: this drives real hardware. Read
+> [`references/safety.md`](skills/unitree-robot-control/references/safety.md),
+> and start with `UNITREE_AGENT_SAFE_MODE=true` (read-only) on a new robot.
+
 ## Imports
 
 All public classes, helpers and exception types are exported from the package root:

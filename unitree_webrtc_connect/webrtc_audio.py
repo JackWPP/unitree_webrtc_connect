@@ -1,9 +1,14 @@
 
 from aiortc import AudioStreamTrack, RTCRtpSender
 import logging
-import sounddevice as sd
-import numpy as np
-import wave
+
+# `sounddevice`, `numpy` and `wave` used to be imported here but none of them
+# are referenced anywhere in this module. They only served to drag PortAudio
+# (a native dependency that needs OS packages) and numpy into every install,
+# including the humanoids — which have no audio channel at all. The actual
+# playback helpers live in the Go2 examples and import what they need
+# themselves. Keep this module import-light so R1/G1 can run without the
+# `[audio]` extra.
 
 
 class WebRTCAudioChannel:

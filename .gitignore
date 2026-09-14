@@ -30,4 +30,11 @@ dist/
 
 # Local-only experiments / connection sanity scripts
 test/
-tests/
+
+# `tests/` used to be ignored as scratch space. It is now a real suite
+# (pytest, mock backend, no robot required) and `pyproject.toml` points
+# `testpaths` at it, so it is tracked. Keep `test/` above for ad-hoc scripts.
+
+# Local agent / IDE state (plan files, skill symlinks) — same rationale as
+# the .idea/ and .vscode/ entries above.
+.codebuddy/
