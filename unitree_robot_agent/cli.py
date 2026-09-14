@@ -62,14 +62,29 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _common_options() -> argparse.ArgumentParser:
-    """Options accepted both before and after the subcommand."""
+    """Options accepted both before and after the subcommand.
+
+    ``default=SUPPRESS`` is load-bearing: a subparser parses into a fresh
+    namespace and copies *every* attribute into the parent's, so an ordinary
+    default would clobber a flag given before the subcommand — `--safe-mode
+    serve` used to start with read-only mode silently OFF.
+    """
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--robot", help="R1 or Go2 (default: env UNITREE_AGENT_ROBOT or R1)")
-    common.add_argument("--backend", help="auto | webrtc | mock (default: auto)")
-    common.add_argument("--ip", help="robot IP for STA-L")
-    common.add_argument("--sn", help="robot serial number")
-    common.add_argument("--region", help="cloud region: auto | global | cn (default: auto)")
-    common.add_argument("--safe-mode", action="store_true", help="read-only: refuse every moving tool")
+    common.add_argument(
+        "--robot", default=argparse.SUPPRESS,
+        help="R1 or Go2 (default: env UNITREE_AGENT_ROBOT or R1)",
+    )
+    common.add_argument("--backend", default=argparse.SUPPRESS, help="auto | webrtc | mock")
+    common.add_argument("--ip", default=argparse.SUPPRESS, help="robot IP for STA-L")
+    common.add_argument("--sn", default=argparse.SUPPRESS, help="robot serial number")
+    common.add_argument(
+        "--region", default=argparse.SUPPRESS,
+        help="cloud region: auto | global | cn (default: auto)",
+    )
+    common.add_argument(
+        "--safe-mode", action="store_true", default=argparse.SUPPRESS,
+        help="read-only: refuse every moving tool",
+    )
     return common
 
 
