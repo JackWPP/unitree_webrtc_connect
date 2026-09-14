@@ -19,12 +19,12 @@ def available_robots() -> List[str]:
     return sorted(_builtin())
 
 
-def get_profile(name: str) -> RobotProfile:
+def get_profile(name: str, *, chassis: str = "unknown") -> RobotProfile:
     """Return the profile for ``name`` ("R1" / "Go2")."""
     key = (name or "").strip()
     for known, cls in _builtin().items():
         if key.lower() == known.lower():
-            return cls()
+            return cls(chassis=chassis)
     if key.lower() == "g1":
         raise FeatureUnavailable(
             "The G1 profile is not implemented yet. The architecture supports "

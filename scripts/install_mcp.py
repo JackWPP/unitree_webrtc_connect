@@ -30,6 +30,7 @@ import json
 import os
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -93,11 +94,24 @@ def detect_hosts(config_dir: Optional[Path] = None) -> List[str]:
 # ─── shell helpers ────────────────────────────────────────────────────
 
 
-def run(cmd: List[str], *, cwd: Optional[Path] = None) -> Tuple[int, str]:
+def run(
+    cmd: List[str],
+    *,
+    cwd: Optional[Path] = None,
+    timeout: Optional[float] = None,
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[int, str]:
     try:
         proc = subprocess.run(
-            cmd, cwd=str(cwd) if cwd else None, capture_output=True, text=True
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
         )
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {timeout:g}s"
     except OSError as exc:
         return 127, f"{exc.__class__.__name__}: {exc}"
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
@@ -123,19 +137,22 @@ def fail(message: str) -> None:
 
 
 def install_package(python: str, *, editable: bool, dry_run: bool) -> bool:
-    target = f"{REPO_ROOT}[agent]" if editable else str(REPO_ROOT)
-    cmd = [python, "-m", "pip", "install", "--disable-pip-version-check", "-q", "-e", target]
+    target = f"{REPO_ROOT}[agent]"
+    cmd = [python, "-m", "pip", "install", "--disable-pip-version-check", "-q"]
+    if editable:
+        cmd.append("-e")
+    cmd.append(target)
     if dry_run:
         print("  would run:", " ".join(cmd))
         return True
 
     step(f"installing {REPO_ROOT.name}[agent] into {python}")
-    code, output = run(cmd)
-    if code != 0:
+    code, output = run(cmd, timeout=600)
+    if code != 0 and editable:
         # Editable installs need a writable source tree; fall back to a normal
         # install so read-only checkouts still work.
         warn("editable install failed, retrying without -e")
-        code, output = run([c for c in cmd if c != "-e"])
+        code, output = run([c for c in cmd if c != "-e"], timeout=600)
     if code != 0:
         fail("pip install failed:")
         print("\n".join(output.splitlines()[-12:]), file=sys.stderr)
@@ -152,6 +169,7 @@ def verify(python: str, *, robot: str, dry_run: bool) -> bool:
     code, output = run(
         [python, "-m", "unitree_robot_agent.cli", "selftest", "--robot", robot],
         cwd=REPO_ROOT,
+        timeout=300,
     )
     tail = [line for line in output.splitlines() if line.strip()][-1:] or [""]
     if code != 0:
@@ -196,6 +214,8 @@ def build_entry(
 
 
 def register(host: str, path: Path, entry: dict, *, dry_run: bool) -> bool:
+    if path.is_symlink():
+        path = path.resolve()
     step(f"registering with {host} → {path}")
 
     existing: dict = {}
@@ -230,6 +250,8 @@ def register(host: str, path: Path, entry: dict, *, dry_run: bool) -> bool:
             ok(f"backed up existing config → {backup.name}")
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(existing, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if path.exists():
+            os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
         tmp.replace(path)
     except OSError as exc:
         fail(f"could not write {path}: {exc}")
@@ -305,9 +327,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 def make_venv(path: Path, *, python: str, dry_run: bool) -> Optional[str]:
     if dry_run:
         print(f"  would create virtualenv at {path}")
-        return str(path / ("Scripts/python.exe" if platform.system() == "Windows" else "bin/python"))
+        return os.path.abspath(
+            str(path / ("Scripts/python.exe" if platform.system() == "Windows" else "bin/python"))
+        )
     step(f"creating a virtualenv at {path}")
-    code, output = run([python, "-m", "venv", str(path)])
+    code, output = run([python, "-m", "venv", str(path)], timeout=300)
     if code != 0:
         fail("could not create the virtualenv:")
         print("\n".join(output.splitlines()[-8:]), file=sys.stderr)
@@ -317,7 +341,7 @@ def make_venv(path: Path, *, python: str, dry_run: bool) -> Optional[str]:
         fail(f"virtualenv created but {exe} is missing")
         return None
     ok(f"virtualenv ready: {exe}")
-    return str(exe)
+    return os.path.abspath(str(exe))
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -331,9 +355,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.dry_run:
         print("  mode    : DRY RUN — nothing will be written")
 
-    python = args.python
+    # Absolute, but *not* resolved: a virtualenv's bin/python is a symlink to
+    # the base interpreter, and dereferencing it would drop the venv's
+    # site-packages (and with them, this package).
+    python = os.path.abspath(os.path.expanduser(args.python))
     if args.venv:
-        created = make_venv(Path(args.venv).expanduser(), python=python, dry_run=args.dry_run)
+        venv = Path(os.path.abspath(os.path.expanduser(args.venv)))
+        created = make_venv(venv, python=python, dry_run=args.dry_run)
         if created is None:
             return 1
         python = created
@@ -392,8 +420,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # cannot write to (Claude Code stores its list elsewhere, for example).
         print_snippet(entry)
 
-    print("\nDone." if written else "\nNothing was registered.")
     if written:
+        print("\nDone.")
         print("\nNext:")
         print("  1. restart / reload your MCP host so it picks up the new server")
         print("  2. ask the agent to call `robot_doctor`, then `robot_status`")
@@ -402,6 +430,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("\nNote: R1 always needs the per-device AES key. Either pass --key,")
             print("      or configure UNITREE_AGENT_EMAIL/PASSWORD so the server can")
             print("      fetch and cache it on first use.")
+    else:
+        print("\nNothing was registered.")
+        print_snippet(entry)
+        return 1
     return 0
 
 

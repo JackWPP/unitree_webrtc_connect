@@ -46,7 +46,7 @@ def create_runtime(config: Optional[AgentConfig] = None, **overrides) -> Runtime
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    profile = get_profile(cfg.robot)
+    profile = get_profile(cfg.robot, chassis=cfg.chassis)
     audit = AuditLog(
         path=cfg.audit_log if cfg.audit_enabled else None,
         enabled=cfg.audit_enabled,
@@ -57,6 +57,7 @@ def create_runtime(config: Optional[AgentConfig] = None, **overrides) -> Runtime
     session = RobotSession(cfg, backend, profile, audit)
     vision = VisionService(cfg, backend, audit, session=session)
     motion = MotionController(session, cfg)
+    session.set_motion_abort(motion.abort_window)
 
     logger.debug("runtime ready: %s", cfg.redacted())
     return Runtime(

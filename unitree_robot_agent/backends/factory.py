@@ -23,7 +23,7 @@ def build_backend(config, audit=None, auth=None) -> RobotBackend:
 
     if mode == "mock":
         logger.info("using mock backend for %s", config.robot)
-        return MockBackend(config.robot)
+        return MockBackend(config.robot, strict_air=(config.chassis == "air"))
 
     from .webrtc_backend import WebRTCBackend
 

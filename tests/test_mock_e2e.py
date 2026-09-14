@@ -124,6 +124,28 @@ async def test_dangerous_actions_can_be_disabled():
     await bundle.context.runtime.aclose()
 
 
+async def test_air_chassis_action_is_refused_end_to_end():
+    """With UNITREE_AGENT_CHASSIS=air the dances the Air firmware does not
+    serve disappear from the catalog, and the id itself is refused by the
+    robot when asked for by name."""
+    bundle = bundle_for("R1", chassis="air")
+
+    listed = await _invoke(bundle, "robot_list_actions", {})
+    assert listed["chassis"] == "air"
+    names = {row["name"] for row in listed["actions"]}
+    assert "dance_1" not in names and "dance_2" in names
+
+    played = await _invoke(bundle, "robot_play_action", {"name": "dance_1", "confirm": True})
+    assert played["ok"] is False
+    assert played["error"] == "unknown_action"
+
+    switched = await _invoke(bundle, "robot_switch_state", {"state": "Dance1", "confirm": True})
+    assert switched["ok"] is False
+    assert switched["error"] == "robot_refused"
+    assert switched["detail"]["robot_code"] == 1001
+    await bundle.context.runtime.aclose()
+
+
 async def test_gestures_are_low_risk_but_audited():
     bundle = bundle_for("R1")
     result = await _invoke(bundle, "robot_arm_gesture", {"gesture": "handshake"})

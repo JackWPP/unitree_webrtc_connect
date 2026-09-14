@@ -5,7 +5,7 @@
 | 工具 | 闭环？ | 何时用 |
 |---|---|---|
 | `robot_move(vx, vy, omega, duration_s)` | 部分（时长由服务端强制） | 默认选择。R1 走 `SET_VELOCITY`，Go2 走 `Move`+`StopMove`，Air 上会自动换成摇杆 |
-| `robot_joystick(lx, ly, rx, duration_s)` | 否 | 需要原始摇杆控制，或要配合 Go2 避障服务（它拦截摇杆消息）时 |
+| `robot_joystick(lx, ly, rx, duration_s)` | 否 | 需要原始摇杆控制，或要配合 Go2 避障服务（它拦截摇杆消息）时。轴向符号：`lx` 正数 = 右移，`rx` 正数 = 顺时针（右转），`ly` 正数 = 前进——即下面的 `[ly, -lx, -rx]` 映射 |
 | `robot_turn(degrees)` | **是**（IMU yaw 反馈） | 需要"转 90 度"这种**角度**目标，而不是"转一小会儿" |
 
 **优先用 `robot_turn` 而不是"给 rx 猜一个时长"**：后者依赖速度标定，而标定会随地面、

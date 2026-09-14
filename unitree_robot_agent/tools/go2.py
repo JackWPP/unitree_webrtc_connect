@@ -224,6 +224,7 @@ def register(server, ctx: ToolContext) -> None:
                         enabled=payload.get("enable") if isinstance(payload, dict) else None
                     )
 
+                ctx.session.guard.require_motion_enabled("go2_obstacle_avoid")
                 response = await ctx.session.call(
                     topic, OBSTACLES_AVOID_API["SWITCH_SET"], {"enable": bool(enable)}
                 )

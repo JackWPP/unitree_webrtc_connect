@@ -98,8 +98,11 @@ class RobotBackend(Protocol):
     ) -> ApiResponse:
         """Send an ``api_id`` request and wait for the matching reply."""
 
-    def publish(self, topic: str, data: Any = None, msg_type: Optional[str] = None) -> None:
-        """Fire-and-forget publish (no reply expected)."""
+    def publish(self, topic: str, data: Any = None, msg_type: Optional[str] = None) -> bool:
+        """Fire-and-forget publish (no reply expected).
+
+        Return True when the frame was handed to the transport.
+        """
 
     async def latest(
         self,
@@ -161,7 +164,7 @@ class NullBackend:
     async def api_request(self, topic, api_id, parameter=None, *, timeout=None):  # noqa: D102
         self._raise()
 
-    def publish(self, topic, data=None, msg_type=None) -> None:  # noqa: D102
+    def publish(self, topic, data=None, msg_type=None) -> bool:  # noqa: D102
         self._raise()
 
     async def latest(self, topic, *, subscribe=True, timeout=None, max_age=None):  # noqa: D102

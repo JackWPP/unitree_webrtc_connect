@@ -84,6 +84,7 @@ region=global 登录失败: login/email failed: code=1000 msg='email not registe
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `UNITREE_AGENT_ROBOT` | `R1` | `R1` / `Go2`（`G1` 尚未实现，会明确报错） |
+| `UNITREE_AGENT_CHASSIS` | `unknown` | `air` / `pro` / `edu`；`air` 时隐藏 Air 不提供的动作（601/603/608） |
 | `UNITREE_AGENT_CONNECTION` | `sta-l` | `ap` / `sta-l` / `sta-t` |
 | `UNITREE_ROBOT_IP` | — | STA-L 地址 |
 | `UNITREE_ROBOT_SN` | — | 序列号（STA-L 发现、STA-T、取 key 都要） |
@@ -100,7 +101,7 @@ region=global 登录失败: login/email failed: code=1000 msg='email not registe
 | `UNITREE_AGENT_MAX_TURN_SECONDS` | `20` | 单次转向看门狗 |
 | `UNITREE_AGENT_MIN_COMMAND_INTERVAL_S` | `0.1` | 指令最小间隔（限流） |
 | `UNITREE_AGENT_SAFE_MODE` | `false` | `true` = 只读，拒绝一切移动工具 |
-| `UNITREE_AGENT_ALLOW_DANGEROUS` | `true` | `false` = 禁用舞蹈/起身/零力矩等危险动作 |
+| `UNITREE_AGENT_ALLOW_DANGEROUS` | `true` | `false` = 禁用舞蹈/起身/躺下/零力矩等危险动作 |
 | `UNITREE_AGENT_STOP_ON_DISCONNECT` | `soft` | `soft` / `damp` / `none` |
 | `UNITREE_AGENT_BACKEND` | `auto` | `auto` / `webrtc` / `mock`（离线自检用） |
 | `UNITREE_AGENT_STATE_DIR` | `~/.unitree-agent` | key/会话缓存、审计日志、抓帧归档 |
@@ -113,4 +114,7 @@ region=global 登录失败: login/email failed: code=1000 msg='email not registe
 
 不确定的话，先用 `UNITREE_AGENT_SAFE_MODE=true` 启动：所有移动类工具都会被拒绝
 （返回 `guard_rejected`），只读工具和 `robot_stop` 仍然可用。
+只读模式同时拒绝 `robot_emergency_stop`（Damping 会让站着的人形机器人瘫倒，
+留下 `robot_stop` 作为唯一的停止手段）和 `go2_obstacle_avoid` 的**写入**分支
+（读分支仍可用）。
 确认读到的状态都符合预期后，再去掉这个开关。

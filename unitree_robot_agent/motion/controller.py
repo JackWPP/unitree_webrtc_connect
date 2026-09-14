@@ -53,6 +53,45 @@ class MotionController:
     def __init__(self, session, config) -> None:
         self.session = session
         self.config = config
+        #: Set by :meth:`abort_window`; the motion loops poll it.
+        self._abort = asyncio.Event()
+        #: Cleared while a window runs, so a stop can await its exit.
+        self._idle = asyncio.Event()
+        self._idle.set()
+
+    # ── windows ──────────────────────────────────────────────────────
+
+    @property
+    def window_active(self) -> bool:
+        return not self._idle.is_set()
+
+    @contextlib.asynccontextmanager
+    async def _window(self, what: str):
+        """Mark a motion window: holds the link and answers abort_window()."""
+        self._abort.clear()
+        self._idle.clear()
+        try:
+            async with self.session.hold(what):
+                yield
+        finally:
+            self._idle.set()
+
+    async def abort_window(self, *, timeout: float = 2.0) -> bool:
+        """Ask a running window to stop and wait for it to leave.
+
+        Returns True when nothing was running or the window exited in
+        time (its finally has zeroed the sticks by then). The 2 s budget
+        covers turn(), which can sit in an IMU read for up to 1 s plus a
+        tick before it sees the flag.
+        """
+        if self._idle.is_set():
+            return True
+        self._abort.set()
+        try:
+            await asyncio.wait_for(self._idle.wait(), timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     # ── low-level publishing ─────────────────────────────────────────
 
@@ -82,10 +121,14 @@ class MotionController:
         schedule = reference.steps(TICK)
 
         frames = 0
+        aborted = False
         started = time.monotonic()
         try:
-            async with self.session.hold("motion.drive"):
+            async with self._window("motion.drive"):
                 for _, scale in schedule:
+                    if self._abort.is_set():
+                        aborted = True
+                        break
                     await self._publish(lx=lx * scale, ly=ly * scale, rx=rx * scale)
                     frames += 1
                     # Pace against the wall clock so a slow link stretches the
@@ -99,6 +142,7 @@ class MotionController:
         elapsed = time.monotonic() - started
         return {
             "frames": frames,
+            "aborted": aborted,
             "duration_s": round(duration, 3),
             "elapsed_s": round(elapsed, 3),
             "command": {"lx": lx, "ly": ly, "rx": rx},
@@ -141,6 +185,12 @@ class MotionController:
         ``ok`` as "exactly right", treat ``residual_deg`` as the truth.
         """
         target_deg = float(degrees)
+        if not math.isfinite(target_deg):
+            raise AgentError(
+                "degrees must be a finite number.",
+                code="invalid_angle",
+                hint="Pass a real angle in degrees, e.g. 90 or -45.",
+            )
         if abs(target_deg) < 1e-6:
             return {"ok": True, "skipped": True, "note": "0 degrees is a no-op."}
 
@@ -174,11 +224,15 @@ class MotionController:
         deadline = time.monotonic() + max_seconds
         kp = 0.9
         frames = 0
+        aborted = False
         last_error = math.radians(target_deg)
 
         try:
-            async with self.session.hold("motion.turn"):
+            async with self._window("motion.turn"):
                 while time.monotonic() < deadline:
+                    if self._abort.is_set():
+                        aborted = True
+                        break
                     current = await self.read_yaw(timeout=1.0)
                     if current is None:
                         break
@@ -209,6 +263,7 @@ class MotionController:
         return {
             "ok": abs(residual) <= max(tolerance * 2.0, tolerance + 1.0),
             "frames": frames,
+            "aborted": aborted,
             "requested_deg": round(target_deg, 2),
             "turned_deg": round(turned, 2) if turned is not None else None,
             "residual_deg": round(residual, 2),

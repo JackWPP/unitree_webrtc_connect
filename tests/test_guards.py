@@ -34,7 +34,7 @@ def test_safe_mode_blocks_every_moving_tool():
     with pytest.raises(GuardRejected):
         guard.require_motion_enabled("robot_move")
     with pytest.raises(GuardRejected):
-        guard.require_control_enabled("robot_play_action")
+        guard.require_motion_enabled("robot_play_action")
 
 
 def test_dangerous_actions_can_be_disabled_independently():
@@ -60,6 +60,19 @@ def test_invalid_durations_are_refused():
             guard.clamp_duration(bad)
     with pytest.raises(GuardRejected):
         guard.clamp_duration("fast")
+
+
+def test_non_finite_input_is_refused_not_clamped():
+    """NaN compares false against every bound, so it used to sail through
+    both clamps and reach the wire as a literal NaN."""
+    guard = make_guard(max_move_duration_s=10.0)
+    with pytest.raises(GuardRejected):
+        guard.clamp_duration(float("nan"))
+    with pytest.raises(GuardRejected):
+        guard.clamp_speed(float("nan"), axis="vx", limit=1.0)
+    # inf is still clamped to the ceiling, not refused.
+    assert guard.clamp_duration(float("inf"))[0] == 10.0
+    assert guard.clamp_speed(float("inf"), axis="vx", limit=1.0)[0] == 1.0
 
 
 def test_speed_is_clamped_per_axis():

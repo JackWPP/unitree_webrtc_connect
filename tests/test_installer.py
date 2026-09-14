@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import stat
 import sys
 from pathlib import Path
 
@@ -234,3 +235,65 @@ def test_main_custom_server_name(installer, tmp_path):
     )
     payload = json.loads((tmp_path / "mcp.json").read_text())
     assert list(payload["mcpServers"]) == ["my-robot"]
+
+
+# ─── regressions: relative paths, extra, exit code, permissions ───────
+
+
+def test_venv_records_an_absolute_interpreter(installer, tmp_path, monkeypatch, capsys):
+    """`--venv .venv` used to be recorded verbatim, so the host was told to
+    run ".venv/bin/python" relative to a directory it never cd's into."""
+    monkeypatch.chdir(tmp_path)
+    code = installer.main(
+        ["--venv", ".venv", "--host", "none", "--no-install", "--no-verify", "--dry-run"]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    expected = str(tmp_path / ".venv" / "bin" / "python")
+    assert expected in out
+    assert '"command": ".venv' not in out
+    # The symlink must survive: resolving bin/python lands on the base
+    # interpreter, which has none of this package's dependencies.
+    assert '"command": ' + json.dumps(expected) in out
+
+
+def test_install_package_keeps_the_agent_extra_and_honours_no_editable(installer, capsys):
+    assert installer.install_package(sys.executable, editable=False, dry_run=True) is True
+    plain = capsys.readouterr().out
+    assert "[agent]" in plain, "a non-editable install still needs the extra"
+    assert " -e " not in plain
+
+    assert installer.install_package(sys.executable, editable=True, dry_run=True) is True
+    editable = capsys.readouterr().out
+    assert "[agent]" in editable and " -e " in editable
+
+
+def test_main_returns_non_zero_when_every_host_fails(installer, tmp_path, capsys):
+    (tmp_path / "mcp.json").write_text("{ not json")
+    code = installer.main(
+        ["--host", "cursor", "--config-dir", str(tmp_path), "--no-install", "--no-verify"]
+    )
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "Nothing was registered" in out
+    assert "mcpServers" in out, "the manual snippet is the fallback"
+
+
+def test_register_preserves_the_file_mode(installer, tmp_path):
+    target = tmp_path / "mcp.json"
+    target.write_text(json.dumps({"mcpServers": {}}))
+    target.chmod(0o600)
+
+    assert installer.register("cursor", target, make_entry(installer), dry_run=False) is True
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_register_writes_through_a_symlinked_config(installer, tmp_path):
+    real = tmp_path / "real.json"
+    real.write_text(json.dumps({"mcpServers": {}}))
+    link = tmp_path / "mcp.json"
+    link.symlink_to(real)
+
+    assert installer.register("cursor", link, make_entry(installer), dry_run=False) is True
+    assert link.is_symlink() is True, "replacing the link would orphan the real file"
+    assert "unitree-robot" in json.loads(real.read_text())["mcpServers"]

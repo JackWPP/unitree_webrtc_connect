@@ -29,7 +29,6 @@ from typing import Any, Dict, Optional, Set
 
 from ..errors import (
     AesKeyMissing,
-    RobotBusy,
     UnsupportedConnection,
     classify_exception,
 )
@@ -121,13 +120,12 @@ class WebRTCBackend:
 
         try:
             await conn.connect()
-        except Exception as exc:
+        except BaseException as exc:
             with contextlib.suppress(Exception):
                 await conn.disconnect()
-            classified = classify_exception(exc)
-            if isinstance(classified, RobotBusy):
-                raise classified from exc
-            raise classified from exc
+            if isinstance(exc, Exception):
+                raise classify_exception(exc) from exc
+            raise
 
         self.conn = conn
         self._cache.clear()
@@ -242,10 +240,14 @@ class WebRTCBackend:
 
     # ── publish / subscribe ──────────────────────────────────────────
 
-    def publish(self, topic: str, data: Any = None, msg_type: Optional[str] = None) -> None:
+    def publish(self, topic: str, data: Any = None, msg_type: Optional[str] = None) -> bool:
         if self.conn is None:
-            return
+            return False
+        datachannel = getattr(self.conn, "datachannel", None)
+        if not getattr(datachannel, "data_channel_opened", False):
+            return False
         self.conn.datachannel.pub_sub.publish_without_callback(topic, data, msg_type)
+        return True
 
     async def latest(
         self,
@@ -288,6 +290,11 @@ class WebRTCBackend:
         except Exception as exc:
             logger.debug("subscribe(%s) failed: %s", topic, exc)
             return
+        if getattr(pub_sub, "subscriptions", {}).get(topic) is not _store:
+            # The driver prints-and-returns when the channel is not open;
+            # retry on the next read instead of going blind for the session.
+            logger.debug("subscribe(%s) did not register; will retry", topic)
+            return
         self._subscribed.add(topic)
 
     def _get_cached(self, topic: str, *, max_age: Optional[float]) -> Optional[dict]:
@@ -297,6 +304,11 @@ class WebRTCBackend:
         if max_age is not None and time.time() - entry["at"] > max_age:
             return None
         payload = entry["msg"].get("data")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                return entry["msg"]
         return payload if isinstance(payload, dict) else entry["msg"]
 
     # ── media ────────────────────────────────────────────────────────

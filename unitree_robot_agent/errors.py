@@ -195,7 +195,7 @@ FSM_REFUSAL_HINTS = {
     ),
     1003: (
         "That state does not exist on this firmware. Use "
-        "`r1_list_actions` / `go2_list_actions` to see what is actually "
+        "`robot_list_actions` to see what is actually "
         "available on this chassis."
     ),
     127: (

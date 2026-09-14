@@ -99,6 +99,11 @@ _ACTIONS = [
     ("zero_torque", 0, True, False, "Cut motor power. Only from Damping. The robot drops."),
 ]
 
+#: States the Air chassis firmware does not serve — dances_air holds only
+#: 602/604/607. Applied only when chassis == "air"; unverified on hardware
+#: (see references/verification-checklist.md), hence opt-in.
+_AIR_UNSUPPORTED = frozenset({601, 603, 608})
+
 _ACTION_ALIASES = {
     "run": ("locomotion", "amp_motion_22dof", "walk_start"),
     "walk": ("walk_24",),
@@ -201,7 +206,10 @@ class R1Profile(RobotProfile):
 
     def actions(self) -> Mapping[str, ActionInfo]:
         out = {}
+        skip_air = self.chassis == "air"
         for name, fsm_id, dangerous, needs_lock, description in _ACTIONS:
+            if skip_air and fsm_id in _AIR_UNSUPPORTED:
+                continue
             out[name] = ActionInfo(
                 name=name,
                 kind="fsm",

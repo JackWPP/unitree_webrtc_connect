@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 from typing import Any, Dict
 
 from mcp.types import ToolAnnotations
@@ -48,11 +49,19 @@ def register(server, ctx: ToolContext) -> None:
     async def robot_stop() -> Dict[str, Any]:
         async def _impl():
             stopped = await ctx.session.safe_stop(reason="tool:robot_stop")
-            return ctx.ok(
-                stopped=stopped,
-                mode="soft_stop",
-                note="Motion zeroed; posture unchanged.",
-            )
+            if not stopped:
+                return {
+                    "ok": False,
+                    "error": "stop_not_delivered",
+                    "stopped": False,
+                    "mode": "soft_stop",
+                    "message": "The stop was NOT delivered to the robot.",
+                    "hint": (
+                        "Check the link with robot_status. If the robot may still be "
+                        "moving, use the physical remote or the power switch."
+                    ),
+                }
+            return ctx.ok(stopped=True, mode="soft_stop", note="Motion zeroed; posture unchanged.")
 
         return await run_tool(ctx, "robot_stop", {}, _impl)
 
@@ -69,6 +78,7 @@ def register(server, ctx: ToolContext) -> None:
         args = {"confirm": confirm}
 
         async def _impl():
+            ctx.session.guard.require_motion_enabled("robot_emergency_stop")
             ctx.session.guard.require_confirm(
                 confirm, "robot_emergency_stop (damping — the robot may fall)"
             )
@@ -140,6 +150,7 @@ def register(server, ctx: ToolContext) -> None:
         async def _impl():
             ctx.session.guard.require_motion_enabled("robot_lie_down")
             ctx.session.guard.require_confirm(confirm, "robot_lie_down")
+            ctx.session.guard.require_dangerous_allowed("lie_down", dangerous=True)
             await ctx.session.ensure_connected()
 
             if ctx.profile.name == "R1":
@@ -217,10 +228,13 @@ def register(server, ctx: ToolContext) -> None:
     @server.tool(
         name="robot_joystick",
         description=(
-            "Drive with a normalised virtual joystick for a bounded time: lx "
-            "(left+), ly (forward+), rx (turn left+), each in [-1, 1]. Published "
-            "continuously at 20 Hz with a ramp so the robot eases in and out, and "
-            "zeroed before returning. On the Go2 this path is intercepted by the "
+            "Drive with a normalised virtual joystick for a bounded time. Axes "
+            "are the raw stick values the robot maps as [ly, -lx, -rx] -> "
+            "[vx, vy, omega], each in [-1, 1]: ly = forward, lx = right, "
+            "rx = clockwise (turn right); pass a negative rx to turn left, or "
+            "use robot_turn for an exact angle. Published continuously at 20 Hz "
+            "with a ramp so the robot eases in and out, and zeroed before "
+            "returning. On the Go2 this path is intercepted by the "
             "obstacle-avoidance service — prefer it when avoidance is enabled."
         ),
         annotations=MOTION,
@@ -256,6 +270,7 @@ def register(server, ctx: ToolContext) -> None:
                 duration_s=round(duration, 2),
                 command={"lx": speed_lx, "ly": speed_ly, "rx": speed_rx},
                 stopped=True,
+                aborted=stats.get("aborted", False),
                 profile=stats.get("profile"),
                 frames=stats.get("frames"),
                 notes=notes,
@@ -293,6 +308,11 @@ def register(server, ctx: ToolContext) -> None:
                     f"degrees must be a number, got {degrees!r}.",
                     detail={"requested": degrees},
                 )
+            if math.isnan(target):
+                raise GuardRejected(
+                    f"degrees must be a finite number, got {degrees!r}.",
+                    detail={"requested": degrees},
+                )
 
             # A zero turn moves nothing, so it needs no confirmation.
             if abs(target) < 1e-6:
@@ -309,6 +329,11 @@ def register(server, ctx: ToolContext) -> None:
 
             await ctx.session.ensure_connected()
             peak = abs(float(speed or 0.0)) or None
+            if peak is not None and math.isnan(peak):
+                raise GuardRejected(
+                    f"speed must be a finite number, got {speed!r}.",
+                    detail={"requested": speed},
+                )
             if peak is not None:
                 peak = min(peak, SPEED_LIMIT)
 
@@ -461,12 +486,17 @@ async def _r1_move(ctx: ToolContext, vx: float, vy: float, omega: float, duratio
                 response, api_id=LOCO_API["SET_VELOCITY"], topic=RTC_TOPIC["SPORT_MOD"], action="robot_move"
             )
         if response.timed_out:
-            # No reply is normal for some firmware builds — settle the window
-            # ourselves and make sure the robot is stopped afterwards.
+            # No reply is normal for some firmware builds. The window below is
+            # settled locally either way, and we stop the robot afterwards.
+            notes = list(notes) + [
+                "SET_VELOCITY (7105) got no reply; the window was tracked "
+                "locally and the robot was stopped when it elapsed."
+            ]
+        try:
             await asyncio.sleep(duration)
-            await ctx.session.safe_stop(reason="r1_move:no_reply")
-        else:
-            await asyncio.sleep(duration)
+        finally:
+            with contextlib.suppress(Exception):
+                await ctx.session.safe_stop(reason="r1_move:window_elapsed")
 
     if state.get("state") == "Loco20Dof":
         notes = list(notes) + [

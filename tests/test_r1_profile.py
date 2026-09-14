@@ -96,6 +96,23 @@ def test_list_actions_can_hide_dangerous_ones():
     assert all(row["dangerous"] is False for row in safe_rows)
 
 
+def test_air_chassis_hides_the_dances_it_cannot_serve():
+    air = get_profile("R1", chassis="air")
+    air_actions = air.actions()
+    for hidden in ("dance_1", "dance_3", "jeet_kune_do"):
+        assert hidden not in air_actions, hidden
+    for kept in ("dance_2", "twist", "kung_fu"):
+        assert kept in air_actions, kept
+
+    # Default (undeclared chassis) is unchanged: the Air set is opt-in.
+    undeclared = get_profile("R1").actions()
+    for name in ("dance_1", "dance_3", "jeet_kune_do"):
+        assert name in undeclared
+
+    # States stay complete: the firmware still reports these ids.
+    assert 601 in air.states() and air.describe()["chassis"] == "air"
+
+
 def test_stop_plans_are_posture_aware():
     p = profile()
     soft = p.soft_stop()

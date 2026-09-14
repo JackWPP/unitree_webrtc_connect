@@ -6,6 +6,7 @@ loop is exercised without a robot.
 
 from __future__ import annotations
 
+import asyncio
 import math
 
 import pytest
@@ -288,4 +289,93 @@ async def test_joystick_tool_exposes_the_profile_it_used():
     assert result["ok"] is True
     assert result["profile"]["shape"] in ("triangle", "trapezoid")
     assert result["profile"]["duration_s"] == pytest.approx(0.5)
+    await bundle.context.runtime.aclose()
+
+
+async def test_move_tool_refuses_nan_velocity():
+    bundle = bundle_for()
+    result = await _invoke(bundle, "robot_move", {"vx": float("nan"), "confirm": True})
+    assert result["error"] == "guard_rejected"
+    assert bundle.context.backend.calls == [], "NaN must never reach the transport"
+    await bundle.context.runtime.aclose()
+
+
+async def test_turn_tool_refuses_a_non_finite_angle():
+    bundle = bundle_for()
+    result = await _invoke(bundle, "robot_turn", {"degrees": float("nan"), "confirm": True})
+    assert result["error"] == "guard_rejected"
+    assert bundle.context.backend.calls == []
+    await bundle.context.runtime.aclose()
+
+
+async def test_stop_preempts_a_running_joystick_window():
+    """robot_stop must cut a running window short and publish nothing but
+    zeros afterwards. Before the abort event the drive loop kept pushing
+    ly=0.5 for the remaining ~2.3 s while robot_stop still claimed success.
+    """
+    bundle = bundle_for()
+    runtime = bundle.context.runtime
+    frames = record_joystick(runtime)
+
+    # Frame count at the instant the stop asks the window to end.
+    abort_marks: list = []
+    original_abort = runtime.motion.abort_window
+
+    async def spy(*, timeout: float = 2.0):
+        abort_marks.append(len(frames))
+        return await original_abort(timeout=timeout)
+
+    runtime.session.set_motion_abort(spy)
+
+    drive = asyncio.create_task(
+        _invoke(bundle, "robot_joystick", {"ly": 0.5, "duration_s": 3.0, "confirm": True})
+    )
+    await asyncio.sleep(0.7)
+    stop = await _invoke(bundle, "robot_stop", {})
+    stats = await drive
+
+    assert stop["stopped"] is True
+    assert abort_marks, "robot_stop must preempt the running window"
+    assert stats["aborted"] is True
+    assert stats["frames"] < 30, stats  # aborted early, not the full 3 s (~60 frames)
+    after = frames[abort_marks[0] :]
+    assert after, "the stop itself must publish zeroed frames"
+    assert all(f["lx"] == 0.0 and f["ly"] == 0.0 and f["rx"] == 0.0 for f in after), after
+    await runtime.aclose()
+
+
+async def test_r1_move_stops_the_robot_after_the_window():
+    from unitree_webrtc_connect.constants import LOCO_API, RTC_TOPIC
+
+    bundle = bundle_for()
+    runtime = bundle.context.runtime
+    await _invoke(bundle, "robot_stand", {"confirm": True})  # Lock
+    result = await _invoke(bundle, "robot_move", {"vx": 0.5, "duration_s": 1.0, "confirm": True})
+    assert result["ok"] is True
+
+    calls = runtime.backend.calls
+    move_index = next(
+        i
+        for i, call in enumerate(calls)
+        if call["api_id"] == LOCO_API["SET_VELOCITY"]
+        and (call["parameter"] or {}).get("velocity") == [0.5, 0.0, 0.0]
+    )
+    trailing = [c["parameter"] for c in calls[move_index + 1 :] if c["api_id"] == LOCO_API["SET_VELOCITY"]]
+    assert {"velocity": [0.0, 0.0, 0.0], "duration": 1.0} in trailing, trailing
+    await runtime.aclose()
+
+
+async def test_lie_down_needs_allow_dangerous():
+    bundle = bundle_for(allow_dangerous=False)
+    result = await _invoke(bundle, "robot_lie_down", {"confirm": True})
+    assert result["error"] == "guard_rejected"
+    await bundle.context.runtime.aclose()
+
+
+async def test_emergency_stop_is_blocked_in_safe_mode():
+    """Damping a standing humanoid makes it fall, so the read-only mode must
+    refuse it — leaving robot_stop as the only stop available there."""
+    bundle = bundle_for(safe_mode=True)
+    result = await _invoke(bundle, "robot_emergency_stop", {"confirm": True})
+    assert result["error"] == "guard_rejected"
     await bundle.context.runtime.aclose()

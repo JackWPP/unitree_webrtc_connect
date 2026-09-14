@@ -6,8 +6,10 @@ import asyncio
 
 import pytest
 
+from unitree_robot_agent.cli import _invoke
 from unitree_robot_agent.errors import CommandTimeout, RobotBusy, RobotRefused
 from unitree_robot_agent.runtime import create_runtime
+from unitree_robot_agent.server import build_server
 
 from .conftest import make_config
 
@@ -146,3 +148,54 @@ async def test_command_timeout_error_is_typed():
             RTC_TOPIC["SPORT_MOD"], LOCO_API["GET_FSM_ID"], timeout=0.05
         )
     await runtime.aclose()
+
+
+# ─── stop delivery and disconnect honesty ─────────────────────────────
+
+
+def bundle_for(**overrides):
+    return build_server(create_runtime(make_config(**overrides)))
+
+
+async def test_stop_reports_failure_when_the_link_is_down():
+    """A stop that could not be sent must not read as success: the model
+    would otherwise walk away believing the robot had been stopped."""
+    bundle = bundle_for()
+    runtime = bundle.context.runtime
+    await runtime.session.ensure_connected()
+    await runtime.session.disconnect()
+
+    result = await _invoke(bundle, "robot_stop", {})
+    assert result["ok"] is False
+    assert result["error"] == "stop_not_delivered"
+    assert result["stopped"] is False
+    await runtime.aclose()
+
+
+async def test_disconnect_honours_stop_on_disconnect():
+    from unitree_webrtc_connect.constants import LOCO_API, R1_FSM, RTC_TOPIC
+
+    soft = bundle_for(stop_on_disconnect="soft")
+    await soft.context.runtime.session.ensure_connected()
+    await soft.context.runtime.session.disconnect()
+    soft_ids = [(c["topic"], c["api_id"], c["parameter"]) for c in soft.context.backend.calls]
+    assert (
+        RTC_TOPIC["SPORT_MOD"],
+        LOCO_API["SET_VELOCITY"],
+        {"velocity": [0.0, 0.0, 0.0], "duration": 1.0},
+    ) in soft_ids
+    assert soft.context.backend.fsm_id == R1_FSM["Damping"], "soft stop must not damp"
+    await soft.context.runtime.aclose()
+
+    damp = bundle_for(stop_on_disconnect="damp")
+    await damp.context.runtime.session.ensure_connected()
+    await damp.context.runtime.session.disconnect()
+    damp_ids = [(c["api_id"], c["parameter"]) for c in damp.context.backend.calls]
+    assert (LOCO_API["SET_FSM_ID"], {"data": R1_FSM["Damping"]}) in damp_ids
+    await damp.context.runtime.aclose()
+
+    none = bundle_for(stop_on_disconnect="none")
+    await none.context.runtime.session.ensure_connected()
+    await none.context.runtime.session.disconnect()
+    assert none.context.backend.calls == [], "mode=none must not command the robot"
+    await none.context.runtime.aclose()

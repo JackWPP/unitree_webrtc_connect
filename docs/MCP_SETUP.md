@@ -80,7 +80,7 @@ unitree-robot-mcp selftest          # 默认 R1
 unitree-robot-mcp selftest --robot Go2
 ```
 
-两个机型各 16 项检查全绿，说明工具面、护栏、会话生命周期都正常。
+两个机型各 20 项检查全绿，说明工具面、护栏、会话生命周期都正常。
 这是**离线可跑**的证明——真机不在手边也能验证整套逻辑。
 
 ## 二、配置
@@ -132,7 +132,8 @@ UNITREE_AGENT_SAFE_MODE=true unitree-robot-mcp serve
 | `UNITREE_AGENT_MAX_MOVE_S` | `10` | 单次移动硬上限 |
 | `UNITREE_AGENT_MIN_COMMAND_INTERVAL_S` | `0.1` | 指令限流间隔 |
 | `UNITREE_AGENT_SAFE_MODE` | `false` | 只读模式 |
-| `UNITREE_AGENT_ALLOW_DANGEROUS` | `true` | 是否允许舞蹈/起身/零力矩 |
+| `UNITREE_AGENT_ALLOW_DANGEROUS` | `true` | 是否允许舞蹈/起身/躺下/零力矩 |
+| `UNITREE_AGENT_CHASSIS` | `unknown` | `air` / `pro` / `edu`；`air` 时隐藏 Air 不提供的动作 |
 | `UNITREE_AGENT_AUDIT_LOG` | `~/.unitree-agent/audit.log` | 设 `off` 关闭 |
 | `UNITREE_AGENT_LOG_LEVEL` | `WARNING` | 排查时设 `DEBUG` |
 
@@ -228,7 +229,9 @@ unitree-robot-mcp serve
 6. 空闲 45 s 自动释放链路，避免占死机器人的单客户端通道。
 7. 全部调用写审计日志，AES key / 密码 / token 按字段名脱敏。
 
-想彻底禁掉控制：`UNITREE_AGENT_SAFE_MODE=true`；
+想彻底禁掉控制：`UNITREE_AGENT_SAFE_MODE=true`——只读工具和 `robot_stop` 仍可用，
+但 `robot_emergency_stop`（Damping 会让站着的人形机器人瘫倒）和 `go2_obstacle_avoid`
+的写入分支也会被拒绝；
 只想禁危险动作：`UNITREE_AGENT_ALLOW_DANGEROUS=false`。
 
 ## 六、排障
@@ -247,7 +250,7 @@ unitree-robot-mcp serve
 
 ```bash
 pip install -e ".[agent,dev]"
-python -m pytest -q          # 55 项，全部离线（Mock 后端）
+python -m pytest -q          # 155 项，全部离线（Mock 后端）
 unitree-robot-mcp selftest   # 端到端工具链自检
 ```
 

@@ -99,6 +99,7 @@ class MockBackend:
         latency: float = 0.01,
         speed_limit: float = 1.0,
         camera: bool = True,
+        strict_air: bool = False,
     ) -> None:
         self.robot_name = robot_name
         self.air = air
@@ -108,6 +109,8 @@ class MockBackend:
         #: tested has no camera at all (no WebRTC track, no RTSP mount, no
         #: still-photo reply). Set False to exercise that path.
         self.has_camera = camera
+        #: Air firmware serves fewer dances than the shared table lists.
+        self.strict_air = strict_air
 
         self._connected = False
         self._busy = False
@@ -264,9 +267,9 @@ class MockBackend:
         encoded = base64.b64encode(frame).decode("ascii")
         return self._ok(json.dumps({"image": f"data:image/jpeg;base64,{encoded}"}))
 
-    def publish(self, topic: str, data: Any = None, msg_type: Optional[str] = None) -> None:
+    def publish(self, topic: str, data: Any = None, msg_type: Optional[str] = None) -> bool:
         if not self._connected:
-            return
+            return False
         if topic == T_WIRELESS and isinstance(data, dict):
             # Mimic the on-robot mapping [ly, -lx, -rx] -> [vx, vy, omega],
             # scaled by the robot's own limit.
@@ -281,6 +284,7 @@ class MockBackend:
         elif topic == T_ULIDAR_SWITCH:
             self.lidar_on = str(data).strip().strip('"').lower() == "on"
         # Fire-and-forget: anything else is accepted silently.
+        return True
 
     async def latest(
         self,
@@ -400,6 +404,9 @@ class MockBackend:
         current = self.fsm_id
         if target == current:
             return self._ok("")
+
+        if self.strict_air and target in (601, 603, 608):
+            return ApiResponse(code=1001, message="mock: not in dances_air")
 
         if target == R1_DAMPING:
             self._enter_fsm(target)

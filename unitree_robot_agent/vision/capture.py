@@ -34,7 +34,6 @@ logger = logging.getLogger("unitree_robot_agent.vision")
 AUTO_ORDER = ("webrtc", "photo_api", "rtsp", "device_camera", "file")
 
 MAX_STORE_ENTRIES = 500
-MAX_STORE_BYTES = 200 * 1024 * 1024  # 200 MB
 
 
 class VisionService:
@@ -88,7 +87,9 @@ class VisionService:
 
     def _select(self, requested: str) -> List[FrameSource]:
         sources = self.build_sources()
-        want = (requested or "auto").strip().lower()
+        want = (requested or "").strip().lower()
+        if not want or want == "auto":
+            want = (getattr(self.config, "video_source", "") or "auto").strip().lower()
         if want and want != "auto":
             source = sources.get(want)
             if source is None:
@@ -153,15 +154,20 @@ class VisionService:
             note=" | ".join(attempts),
         )
 
+    def _probe_window(self, total: float) -> float:
+        """Budget for one remote source: the caller's window, not N x it."""
+        return max(1.0, min(float(total), 6.0))
+
     async def probe(self, *, timeout: float = 6.0, include_missing: bool = True) -> List[SourceStatus]:
         """Try every source so the operator can see which one works."""
         sources = self.build_sources()
         names = [n for n in AUTO_ORDER if n in sources]
         if any(sources[name].remote for name in names):
             await self._ensure_link()
+        window = self._probe_window(timeout)
         statuses: List[SourceStatus] = []
         for name in names:
-            statuses.append(await sources[name].probe())
+            statuses.append(await sources[name].probe(timeout=window))
         if include_missing:
             for name in AUTO_ORDER:
                 if name in sources:

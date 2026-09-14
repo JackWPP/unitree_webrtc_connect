@@ -23,6 +23,7 @@ VALID_ROBOTS = ("R1", "Go2", "G1")
 VALID_CONNECTION_METHODS = ("ap", "sta-l", "sta-t")
 VALID_BACKENDS = ("auto", "webrtc", "mock")
 VALID_STOP_MODES = ("soft", "damp", "none")
+VALID_CHASSIS = ("air", "pro", "edu", "unknown")
 VALID_REGIONS = ("global", "cn")
 #: `auto` walks the region candidates and remembers the one that accepts the
 #: account — an account registered in China answers "email not register" on
@@ -132,6 +133,7 @@ class AgentConfig:
 
     # ── robot identity ───────────────────────────────────────────────
     robot: str = "R1"
+    chassis: str = "unknown"        # air | pro | edu | unknown
     connection: str = "sta-l"
     ip: Optional[str] = None
     serial_number: Optional[str] = None
@@ -156,7 +158,7 @@ class AgentConfig:
 
     # ── safety ───────────────────────────────────────────────────────
     safe_mode: bool = False          # read-only: only read tools + soft stop
-    allow_dangerous: bool = True     # register movement / action tools at all
+    allow_dangerous: bool = True     # gate the dangerous action/state catalog
     stop_on_disconnect: str = "soft"  # soft | damp | none
 
     # ── backend / plumbing ───────────────────────────────────────────
@@ -208,6 +210,9 @@ class AgentConfig:
             self.backend = "auto"
         if self.stop_on_disconnect not in VALID_STOP_MODES:
             self.stop_on_disconnect = "soft"
+        self.chassis = (self.chassis or "unknown").lower().strip()
+        if self.chassis not in VALID_CHASSIS:
+            self.chassis = "unknown"
         self.state_dir = Path(self.state_dir).expanduser()
         if self.audit_log is None:
             self.audit_log = self.state_dir / "audit.log"
@@ -375,6 +380,7 @@ class AgentConfig:
         return {
             "robot": self.robot,
             "device_type": self.device_type,
+            "chassis": self.chassis,
             "connection": self.connection,
             "ip": self.ip,
             "serial_number": self.serial_number,
@@ -439,6 +445,7 @@ def config_from_env(**overrides) -> AgentConfig:
 
     values = dict(
         robot=_env("UNITREE_AGENT_ROBOT", "UNITREE_ROBOT_TYPE") or "R1",
+        chassis=(_env("UNITREE_AGENT_CHASSIS") or "unknown").lower(),
         connection=_env("UNITREE_AGENT_CONNECTION") or "sta-l",
         ip=_env("UNITREE_ROBOT_IP", "UNITREE_AGENT_IP", "ROBOT_IP"),
         serial_number=_env("UNITREE_ROBOT_SN", "UNITREE_AGENT_SN", "UNITREE_SN"),

@@ -23,6 +23,7 @@ Rules implemented:
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from typing import Any, Optional
 
@@ -41,22 +42,6 @@ class Guard:
         self._last_command_at = 0.0
 
     # ── 0. control disabled entirely ─────────────────────────────────
-
-    def require_control_enabled(self, action: str) -> None:
-        """Read-only mode: only reads and the soft stop are allowed."""
-        if self.config.safe_mode:
-            raise GuardRejected(
-                f"'{action}' is blocked: the server is running in read-only "
-                f"safe mode (UNITREE_AGENT_SAFE_MODE=true). Reads and the "
-                f"soft stop still work.",
-                detail={"action": action, "safe_mode": True},
-            )
-        if not self.config.allow_dangerous:
-            raise GuardRejected(
-                f"'{action}' is blocked: dangerous control is disabled "
-                f"(UNITREE_AGENT_ALLOW_DANGEROUS=false).",
-                detail={"action": action, "allow_dangerous": False},
-            )
 
     def require_motion_enabled(self, action: str) -> None:
         """Movement/posture: blocked in safe mode only (not by allow_dangerous)."""
@@ -101,6 +86,11 @@ class Guard:
                 f"duration_s must be a number, got {requested!r}.",
                 detail={"requested": requested},
             )
+        if math.isnan(duration):
+            raise GuardRejected(
+                f"duration_s must be a finite number, got {requested!r}.",
+                detail={"requested": requested},
+            )
         if duration <= 0:
             raise GuardRejected(
                 "duration_s must be > 0. Use robot_stop to stop instead.",
@@ -122,6 +112,11 @@ class Guard:
         except (TypeError, ValueError):
             raise GuardRejected(
                 f"{axis} must be a number, got {value!r}.", detail={"axis": axis}
+            )
+        if math.isnan(speed):
+            raise GuardRejected(
+                f"{axis} must be a finite number, got {value!r}.",
+                detail={"axis": axis, "requested": value},
             )
         if abs(speed) > limit:
             return (

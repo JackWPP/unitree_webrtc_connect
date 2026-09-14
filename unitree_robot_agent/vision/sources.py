@@ -50,6 +50,8 @@ class FrameSource:
 
     def __init__(self, *, max_width: Optional[int] = DEFAULT_MAX_WIDTH) -> None:
         self.max_width = max_width
+        #: Seconds the caller allowed for the frame in flight (see grab()).
+        self._budget = 6.0
 
     async def run(self) -> Tuple[Optional[bytes], int, int, str]:
         """Return ``(jpeg, width, height, note)``; ``jpeg`` is None on failure."""
@@ -58,6 +60,9 @@ class FrameSource:
     async def grab(self, *, timeout: float = 6.0) -> FrameResult:
         started = time.monotonic()
         result = FrameResult(source=self.name)
+        # The hardware layers time themselves too; give them the caller's
+        # budget rather than their own hard-coded default.
+        self._budget = float(timeout)
         try:
             image, width, height, note = await asyncio.wait_for(self.run(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -82,8 +87,8 @@ class FrameSource:
         result.note = note
         return result
 
-    async def probe(self) -> SourceStatus:
-        result = await self.grab(timeout=6.0)
+    async def probe(self, *, timeout: float = 6.0) -> SourceStatus:
+        result = await self.grab(timeout=timeout)
         return SourceStatus(
             name=self.name,
             available=result.ok,
@@ -113,7 +118,7 @@ class WebRTCSource(FrameSource):
         # Deliberately no "is this the mock?" special case: every backend
         # implements snapshot_frame(), and None means no frame — which is
         # exactly what a camera-less robot reports too.
-        raw = await self.backend.snapshot_frame(timeout=6.0)
+        raw = await self.backend.snapshot_frame(timeout=self._budget)
         if not raw:
             return (
                 None,
@@ -152,7 +157,9 @@ class PhotoApiSource(FrameSource):
         attempts: List[str] = []
         for api_id in self.api_ids:
             try:
-                response = await self.backend.api_request(topic, api_id, None, timeout=3.0)
+                response = await self.backend.api_request(
+                    topic, api_id, None, timeout=min(3.0, self._budget)
+                )
             except Exception as exc:
                 attempts.append(f"{api_id}:{exc.__class__.__name__}")
                 continue
@@ -218,11 +225,12 @@ class RtspSource(FrameSource):
             import av
         except ImportError:  # pragma: no cover
             return None, 0, 0, "PyAV not installed"
+        budget = min(4.0, self._budget)
         try:
             container = av.open(
                 url,
-                options={"rtsp_transport": "tcp", "stimeout": "4000000"},
-                timeout=4.0,
+                options={"rtsp_transport": "tcp", "stimeout": str(int(budget * 1_000_000))},
+                timeout=budget,
             )
         except Exception as exc:
             return None, 0, 0, f"{exc.__class__.__name__}: {str(exc)[:120]}"

@@ -18,6 +18,7 @@ from unitree_robot_agent.cli import _invoke
 from unitree_robot_agent.runtime import create_runtime
 from unitree_robot_agent.server import build_server
 from unitree_robot_agent.vision import VisionService
+from unitree_robot_agent.vision import capture as capture_module
 from unitree_robot_agent.vision.base import decode_inline_image, sniff_image_format
 from unitree_robot_agent.vision.encode import (
     encode_buffer,
@@ -215,6 +216,46 @@ async def test_auto_prefers_webrtc_then_photo_api(tmp_path):
     result = await runtime.vision.capture("auto", timeout=4.0)
     assert result.ok is True
     assert result.source == "webrtc"
+    await runtime.aclose()
+
+
+async def test_configured_video_source_is_used_by_default(tmp_path):
+    """UNITREE_AGENT_VIDEO_SOURCE used to be read by nobody: an operator who
+    pinned "file" still got the WebRTC track."""
+    shot = tmp_path / "shot.jpg"
+    shot.write_bytes(encode_frame(make_test_frame(120, 80))[0])
+
+    runtime = runtime_for(video_source="file", snapshot_file=str(shot), state_dir=tmp_path)
+    result = await runtime.vision.capture(timeout=3.0, save=False)
+    assert result.ok is True
+    assert result.source == "file"
+
+    # An explicit argument still overrides the configured default.
+    explicit = await runtime.vision.capture("webrtc", timeout=3.0, save=False)
+    assert explicit.source == "webrtc"
+    await runtime.aclose()
+
+
+async def test_probe_honours_its_timeout(tmp_path, monkeypatch):
+    """The probe window used to be a hard-coded 6 s per source, so
+    `timeout_s` on robot_vision_probe did nothing."""
+    runtime = runtime_for(robot="R1", state_dir=tmp_path)
+    monkeypatch.setattr(capture_module, "AUTO_ORDER", ("slow",))
+    runtime.vision.build_sources = lambda: {"slow": SlowSource()}
+
+    started = time.monotonic()
+    statuses = await runtime.vision.probe(timeout=0.2)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0, elapsed  # not the source's own 5 s, not the old 6 s
+    assert [s.name for s in statuses] == ["slow"]
+    assert statuses[0].available is False
+    assert "within" in statuses[0].detail  # it timed out on the budget given
+    # The budget is the caller's, floored at 1 s (so a tiny window cannot
+    # fail every source instantly) and capped at the 6 s default.
+    assert runtime.vision._probe_window(0.2) == 1.0
+    assert runtime.vision._probe_window(3.0) == 3.0
+    assert runtime.vision._probe_window(99.0) == 6.0
     await runtime.aclose()
 
 

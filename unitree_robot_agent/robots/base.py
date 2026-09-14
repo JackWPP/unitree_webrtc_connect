@@ -139,6 +139,11 @@ class RobotProfile(ABC):
 
     name: str = "unknown"
     device_type: str = "unknown"
+    #: Chassis variant ("unknown" unless the operator declared one).
+    chassis: str = "unknown"
+
+    def __init__(self, *, chassis: str = "unknown") -> None:
+        self.chassis = (chassis or "unknown").lower()
 
     #: Topics that should be subscribed once per connection to keep a local
     #: view of the robot. First one is the primary state topic.
@@ -346,6 +351,7 @@ class RobotProfile(ABC):
         return {
             "robot": self.name,
             "device_type": self.device_type,
+            "chassis": self.chassis,
             "capabilities": sorted(self.capabilities()),
             "state_topics": list(self.report_topics),
         }

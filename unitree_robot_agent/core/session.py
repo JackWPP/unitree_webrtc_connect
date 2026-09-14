@@ -80,6 +80,7 @@ class RobotSession:
         self._last_activity = time.monotonic()
         self._subscribed: Set[str] = set()
         self._lock_notes: list = []
+        self._motion_abort = None
 
     # ── lifecycle ────────────────────────────────────────────────────
 
@@ -144,7 +145,13 @@ class RobotSession:
             self.touch()
             return
         if stop_first:
-            await self.safe_stop(reason=f"disconnect:{reason}", raise_on_error=False)
+            mode = self.config.stop_on_disconnect
+            if mode == "damp":
+                await self.emergency_stop(reason=f"disconnect:{reason}", raise_on_error=False)
+            elif mode == "none":
+                await self._preempt_motion()  # local publisher off, robot untouched
+            else:
+                await self.safe_stop(reason=f"disconnect:{reason}", raise_on_error=False)
         try:
             await self.backend.disconnect()
         except Exception as exc:  # never let teardown raise
@@ -166,6 +173,19 @@ class RobotSession:
         finally:
             self._holders = max(0, self._holders - 1)
             self.touch()
+
+    def set_motion_abort(self, callback) -> None:
+        """Register the motion controller's window-abort hook."""
+        self._motion_abort = callback
+
+    async def _preempt_motion(self) -> bool:
+        """Stop any running motion window before applying a stop plan."""
+        callback = self._motion_abort
+        if callback is None:
+            return True
+        with contextlib.suppress(Exception):
+            return bool(await callback())
+        return False
 
     async def aclose(self) -> None:
         if self._watchdog is not None:
@@ -281,9 +301,10 @@ class RobotSession:
             hint=hint or "Check the robot's current state with robot_status and retry.",
         )
 
-    def publish(self, topic: str, data: Any = None, msg_type: Optional[str] = None) -> None:
-        self.backend.publish(topic, data, msg_type)
+    def publish(self, topic: str, data: Any = None, msg_type: Optional[str] = None) -> bool:
+        delivered = self.backend.publish(topic, data, msg_type)
         self.touch()
+        return bool(delivered)
 
     # ── state cache ──────────────────────────────────────────────────
 
@@ -342,27 +363,30 @@ class RobotSession:
         rx: float = 0.0,
         ry: float = 0.0,
         keys: int = 0,
-    ) -> None:
+    ) -> bool:
         """Publish one wireless-controller frame (no reply expected)."""
-        self.backend.publish(
+        delivered = self.backend.publish(
             WIRELESS_CONTROLLER_TOPIC,
             {"lx": lx, "ly": ly, "rx": rx, "ry": ry, "keys": keys},
         )
         self.touch()
+        return bool(delivered)
 
-    async def zero_joystick(self, repeats: int = 3) -> None:
+    async def zero_joystick(self, repeats: int = 3) -> bool:
         for _ in range(max(1, repeats)):
-            try:
-                await self.joystick()
-            except Exception:
-                return
+            if not await self.joystick():
+                return False
             await asyncio.sleep(0.03)
+        return True
 
-    async def _apply_stop_plan(self, plan: StopPlan) -> None:
-        if plan.zero_joystick:
-            await self.zero_joystick()
+    async def _apply_stop_plan(self, plan: StopPlan) -> bool:
+        delivered = False
+        if plan.zero_joystick and await self.zero_joystick():
+            delivered = True
         if plan.topic_key and plan.api_id is not None:
-            await self.call(plan.topic_key, plan.api_id, plan.parameter, timeout=2.0)
+            response = await self.call(plan.topic_key, plan.api_id, plan.parameter, timeout=2.0)
+            delivered = delivered or response.ok
+        return delivered
 
     async def safe_stop(self, *, reason: str = "", raise_on_error: bool = False) -> bool:
         """Stop *moving* while keeping the current posture.
@@ -370,20 +394,22 @@ class RobotSession:
         This is the default recovery: zeroing the sticks and issuing the
         posture-preserving stop. It does **not** damp — damping a standing
         humanoid makes it fall, which is a worse outcome than standing still.
+        Returns False when the stop could not be delivered to the robot.
         """
         if not self.is_connected:
-            return True
+            return False
+        await self._preempt_motion()
         plan = self.profile.soft_stop()
         try:
-            await self._apply_stop_plan(plan)
+            delivered = await self._apply_stop_plan(plan)
             self.audit.record(
                 "soft_stop",
                 phase="safety",
-                ok=True,
-                detail={"reason": reason, "plan": plan.label},
+                ok=delivered,
+                detail={"reason": reason, "plan": plan.label, "delivered": delivered},
                 robot=self.profile.name,
             )
-            return True
+            return delivered
         except Exception as exc:
             logger.warning("soft stop failed: %s", exc)
             self.audit.record(
@@ -401,17 +427,18 @@ class RobotSession:
     async def emergency_stop(self, *, reason: str = "", raise_on_error: bool = False) -> bool:
         """Damp the robot. May make it drop — explicit use only."""
         await self.ensure_connected()
+        await self._preempt_motion()
         plan = self.profile.emergency_stop()
         try:
-            await self._apply_stop_plan(plan)
+            delivered = await self._apply_stop_plan(plan)
             self.audit.record(
                 "emergency_stop",
                 phase="safety",
-                ok=True,
-                detail={"reason": reason, "plan": plan.label},
+                ok=delivered,
+                detail={"reason": reason, "plan": plan.label, "delivered": delivered},
                 robot=self.profile.name,
             )
-            return True
+            return delivered
         except Exception as exc:
             self.audit.record(
                 "emergency_stop",

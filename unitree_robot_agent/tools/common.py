@@ -36,6 +36,7 @@ def register(server, ctx: ToolContext) -> None:
             return ctx.ok(
                 connection=status,
                 posture=state,
+                chassis=ctx.profile.chassis,
                 capabilities=sorted(ctx.profile.capabilities()),
                 action_count=len(ctx.profile.actions()),
             )
@@ -79,6 +80,7 @@ def register(server, ctx: ToolContext) -> None:
             payload = ctx.ok(
                 actions=actions,
                 states=states,
+                chassis=ctx.profile.chassis,
                 hint=(
                     "Dangerous actions additionally require "
                     "UNITREE_AGENT_ALLOW_DANGEROUS=true; every moving action "
