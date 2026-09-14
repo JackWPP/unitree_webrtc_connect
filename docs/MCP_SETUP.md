@@ -11,7 +11,47 @@
 
 ## 一、安装
 
-### 1. 依赖
+### 0. 一句话安装（推荐）
+
+**给 Agent 的一句话**（贴进对话框，把 IP 换成你的）：
+
+> 帮我装宇树机器人 MCP 服务：clone `https://github.com/JackWPP/unitree_webrtc_connect.git`
+> （分支 `feat/unitree-robot-mcp`），执行 `python3 scripts/install_mcp.py --robot R1 --ip <机器人IP>`，
+> 然后把 `robot_doctor` 的结果告诉我。
+
+**给终端的一条命令**（不需要机器人也能跑完）：
+
+```bash
+git clone -b feat/unitree-robot-mcp https://github.com/JackWPP/unitree_webrtc_connect.git \
+  && cd unitree_webrtc_connect \
+  && python3 scripts/install_mcp.py --robot R1 --ip 192.168.10.225
+```
+
+安装器做四件事，任一步失败即停：
+
+1. 把本仓库以 `[agent]` extra 装进当前解释器（失败会自动回退成非 editable 安装）
+2. 跑**离线**自检（20 项端到端检查，用 mock 后端，不需要机器人）
+3. 把 `mcpServers` 条目**合并**进检测到的 MCP 宿主配置——先备份原文件，再原子写入
+4. 打印到底改了什么、以及怎么验证
+
+```bash
+python3 scripts/install_mcp.py --dry-run               # 只看不写
+python3 scripts/install_mcp.py --host codebuddy        # 指定宿主（默认 auto）
+python3 scripts/install_mcp.py --host none             # 只打印 JSON 片段
+python3 scripts/install_mcp.py --robot Go2 --ip 192.168.8.181
+python3 scripts/install_mcp.py --venv .venv            # 装进独立虚拟环境
+python3 scripts/install_mcp.py --safe-mode             # 注册为只读模式
+```
+
+写入位置：macOS/Linux 上是 `~/.codebuddy/mcp.json`（已实测确认），
+另外也认识 Cursor、Claude Desktop、以及工作区级 `.codebuddy/mcp.json`。
+其它客户端用 `--host none` 打印片段自行粘贴。
+
+装完后**重启 MCP 宿主**，让 Agent 先调 `robot_doctor`，再调 `robot_status`。
+
+> 合并到 `master` 之后，clone 命令可以去掉 `-b feat/unitree-robot-mcp`。
+
+### 1. 依赖（手动安装）
 
 MCP server 需要 `mcp>=2.0`（也兼容 1.x 的 FastMCP 布局）：
 

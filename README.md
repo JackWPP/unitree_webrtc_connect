@@ -8,6 +8,9 @@ Python WebRTC driver for Unitree Go2, G1 and R1 robots. Provides high-level cont
 [![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/legion1581/unitree_webrtc_connect)](https://github.com/legion1581/unitree_webrtc_connect/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> **Want an AI agent to drive the robot?** This repo also ships an MCP server and
+> a safety skill — [**one-line install**](#one-line-install) below.
+
 ## Supported Models
 
 | Model | Variants |
@@ -290,11 +293,56 @@ skill, so an LLM can safely sense and control a Go2 or R1. It is **separate
 from, not a replacement for**, the graphical tooling — the server releases
 the link whenever it is idle so you can still take over with the app.
 
+### One-line install
+
+**For an agent** — paste this into the chat, filling in the robot's IP:
+
+> Install the Unitree robot MCP server for me: clone
+> `https://github.com/JackWPP/unitree_webrtc_connect.git` (branch `feat/unitree-robot-mcp`),
+> run `python3 scripts/install_mcp.py --robot R1 --ip <ROBOT_IP>`, then tell me what
+> `robot_doctor` reports.
+
+**For a terminal** — one command, and it needs no robot:
+
+```sh
+git clone -b feat/unitree-robot-mcp https://github.com/JackWPP/unitree_webrtc_connect.git \
+  && cd unitree_webrtc_connect \
+  && python3 scripts/install_mcp.py --robot R1 --ip 192.168.10.225
+```
+
+The installer does four things and stops at the first failure: installs this
+checkout with its `[agent]` extra, runs the **offline** self test (20 end-to-end
+checks against the mock backend), merges an `mcpServers` entry into each detected
+MCP host config — backing the original file up first and writing atomically —
+and prints exactly what changed.
+
+```sh
+python3 scripts/install_mcp.py --dry-run                     # show, change nothing
+python3 scripts/install_mcp.py --host codebuddy              # pick a target
+python3 scripts/install_mcp.py --host none                   # just print the JSON
+python3 scripts/install_mcp.py --robot Go2 --ip 192.168.8.181
+python3 scripts/install_mcp.py --venv .venv                  # keep it out of your global Python
+python3 scripts/install_mcp.py --safe-mode                   # register read-only
+```
+
+Then restart the MCP host and ask the agent for `robot_doctor`, then
+`robot_status`. It writes to `~/.codebuddy/mcp.json` on macOS/Linux
+(verified), and knows about Cursor, Claude Desktop and a workspace-level
+`.codebuddy/mcp.json` too; for anything else `--host none` prints a snippet to
+paste.
+
+> Once this branch is merged, drop `-b feat/unitree-robot-mcp` from the clone.
+> R1 always needs the per-device AES key: pass `--key <32-hex>` if you have it,
+> or set `UNITREE_AGENT_EMAIL` / `UNITREE_AGENT_PASSWORD` so the server fetches
+> and caches it on first connect. `robot_auth_status` shows where it stands.
+
+### Manual install
+
 ```sh
 pip install -e ".[agent]"
 
-unitree-robot-mcp selftest          # 16 offline checks, no robot needed
-unitree-robot-mcp doctor            # config / deps / connectivity
+unitree-robot-mcp selftest          # 20 offline checks, no robot needed
+unitree-robot-mcp doctor            # config / deps / connectivity / auth
 unitree-robot-mcp serve             # stdio MCP server (default)
 unitree-robot-mcp serve --transport streamable-http --port 8765
 ```
