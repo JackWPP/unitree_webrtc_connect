@@ -129,6 +129,10 @@ class MockBackend:
         # be developed and tested with no robot. Yaw grows counter-clockwise
         # (positive omega), matching the real IMU convention.
         self.yaw = 0.0
+        #: Dead-reckoned position, integrated lazily from `velocity` the same way
+        #: the heading is. Reported as `position` on the state topic.
+        self.x = 0.0
+        self.y = 0.0
         self._last_integration = time.time()
 
         # Go2 state
@@ -224,15 +228,7 @@ class MockBackend:
     def _seed_states(self) -> None:
         now = time.time()
         self._cache[T_R1_STATE] = self._r1_state_payload()
-        self._cache[T_GO2_STATE] = {
-            "mode": 0,
-            "gait_type": "trot",
-            "body_height": 0.3,
-            "foot_raise_height": 0.05,
-            "progress": 1.0,
-            "velocity": list(self.velocity),
-            "position": [0.0, 0.0, 0.0],
-        }
+        self._cache[T_GO2_STATE] = self._go2_state_payload()
         self._cache[T_MULTIPLE_STATE] = self._multi_state_payload()
         self._cache[T_LOWSTATE] = self._lowstate_payload()
         self._cache[T_BMS] = self._bms_payload()
@@ -332,17 +328,33 @@ class MockBackend:
             self._subscribed.add(topic)
         if self.robot_name == "R1" and topic == T_R1_STATE:
             self._cache[topic] = self._r1_state_payload()
-        if topic == T_LOWSTATE:
-            # Regenerate on read so the integrated yaw is always current —
-            # that is what makes the closed-loop turn testable offline.
-            self._cache[topic] = self._lowstate_payload()
         if topic == T_ULIDAR_MAP:
             if not self.lidar_on:
                 return None
             return self._lidar_payload()
         if self.latency and timeout:
             await asyncio.sleep(min(self.latency, timeout))
+        self._refresh_time_varying(topic)
         return self._cache.get(topic)
+
+    #: Topics that have to be rebuilt on read, and **the builder for each**.
+    #:
+    #: The cache is rebuilt when a *command* changes something, and time passing
+    #: is not a command — so a cached state payload froze the moment it was
+    #: built, and the lazy integration above was integrating into a dictionary
+    #: nobody ever saw again. It showed up as `robot_walk` running to its full
+    #: timeout every step: a walk that closes its loop on position cannot
+    #: converge against a position that never changes.
+    #:
+    #: **Keyed by topic rather than matched by name**, because the name lies.
+    #: `rt/lf/sportmodestate` is the **R1's FSM state**, not a quadruped's motion
+    #: state, and `"sportmodestate" in topic` fed it the Go2 payload — which made
+    #: `reported_state()` report `unknown` and broke two R1 self-test checks.
+    _REBUILD_ON_READ = {
+        T_LOWSTATE: "_lowstate_payload",
+        T_GO2_STATE: "_go2_state_payload",
+        T_R1_STATE: "_r1_state_payload",
+    }
 
     async def snapshot_frame(self, *, timeout: float = 5.0) -> Optional[bytes]:
         await asyncio.sleep(self.latency)
@@ -580,7 +592,31 @@ class MockBackend:
 
     # ── synthetic telemetry ──────────────────────────────────────────
 
-    def _integrate_yaw(self) -> None:
+    def _go2_state_payload(self) -> dict:
+        """The quadruped's motion state: where it is, how fast, which gait.
+
+        `position` is the one that matters most here — `robot_walk` closes its
+        loop on it, so a mock that reports a frozen position makes every
+        measured walk run to its full timeout. It did, for one round.
+        """
+        self._integrate_motion()
+        return {
+            "mode": 0,
+            "gait_type": "trot",
+            "body_height": 0.3,
+            "foot_raise_height": 0.05,
+            "progress": 1.0,
+            "velocity": list(self.velocity),
+            "position": [round(self.x, 5), round(self.y, 5), round(self.yaw, 5)],
+        }
+
+    def _refresh_time_varying(self, topic: str) -> None:
+        """Rebuild one cached payload if time changes it."""
+        builder = self._REBUILD_ON_READ.get(topic)
+        if builder:
+            self._cache[topic] = getattr(self, builder)()
+
+    def _integrate_motion(self) -> None:
         """Advance yaw from the commanded omega.
 
         Lazy integration (done on read rather than on a timer) keeps the mock
@@ -592,11 +628,23 @@ class MockBackend:
         if dt <= 0:
             return
         if now <= self.moving_until:
-            self.yaw += float(self.velocity[2]) * min(dt, 0.5)
+            step = min(dt, 0.5)
+            self.yaw += float(self.velocity[2]) * step
+            # **Position, not just yaw.** The mock has to model odometry or
+            # `robot_walk` — which closes its loop on position — cannot be
+            # exercised without a robot. A static reading made every measured
+            # walk run to its full timeout, which is both wrong and eight
+            # seconds per step.
+            #
+            # Body frame to world: x is forward, y is left, so the velocity is
+            # rotated by the heading that was just updated.
+            forward, left = float(self.velocity[0]), float(self.velocity[1])
+            self.x += (forward * math.cos(self.yaw) - left * math.sin(self.yaw)) * step
+            self.y += (forward * math.sin(self.yaw) + left * math.cos(self.yaw)) * step
         self.yaw = (self.yaw + math.pi) % (2 * math.pi) - math.pi
 
     def _lowstate_payload(self) -> dict:
-        self._integrate_yaw()
+        self._integrate_motion()
         if self.robot_name == "Go2":
             return {
                 "imu_state": {"rpy": [0.01, -0.02, round(self.yaw, 5)], "temperature": 41},

@@ -382,6 +382,12 @@ class MotionController:
         travelled = 0.0
         frames = 0
         aborted = False
+        # Giving up on a robot that is not moving beats waiting out the timeout.
+        # Eight seconds per step is most of a routine, and the operator is
+        # watching a progress bar that is not progressing.
+        stall_after = float(getattr(self.config, "walk_stall_seconds", 1.5))
+        still_since = time.monotonic()
+        last_travelled = 0.0
         try:
             async with self._window("motion.forward"):
                 while time.monotonic() < deadline:
@@ -408,6 +414,15 @@ class MotionController:
                     travelled = math.hypot(current[0] - start[0], current[1] - start[1])
                     if travelled >= abs(target_m) * fraction:
                         break
+                    if travelled > last_travelled + 0.005:
+                        last_travelled = travelled
+                        still_since = time.monotonic()
+                    elif time.monotonic() - still_since > stall_after:
+                        # It was told to walk and it is not walking. Held by
+                        # something, on a slope it cannot climb, or reporting an
+                        # odometry that does not move. None of those get better
+                        # by waiting.
+                        break
                     # **`ly`, not `YAW_AXIS_SIGN * ...`.** The joystick maps
                     # `[ly, -lx, -rx] -> [vx, vy, omega]`, so `ly` goes straight
                     # to forward velocity and the sign convention that flips an
@@ -426,11 +441,13 @@ class MotionController:
             await self._zero()
 
         reached = travelled >= abs(target_m) * fraction
+        stalled = (not reached) and (time.monotonic() - still_since) > stall_after
         return {
             "ok": reached and not self._abort.is_set(),
             "reason": (
                 "reached" if reached
-                else ("timeout" if not aborted else "stopped")
+                else ("stalled" if stalled
+                      else ("timeout" if not aborted else "stopped"))
             ),
             "requested_m": round(target_m, 3),
             # Always the requested sign, because the odometry only gives a

@@ -335,6 +335,13 @@ async def test_every_built_in_routine_completes_without_a_failed_step(service, r
             args["duration_s"] = 0.2
         if "degrees" in args:
             args["degrees"] = max(-10.0, min(10.0, float(args["degrees"]) / 10.0))
+        if "meters" in args:
+            # `robot_walk` is slower than a timed move on purpose — it stops when
+            # it has *measured* the distance, and the mock now dead-reckons one.
+            # Left at a shipped 0.4 m, four legs of a square outrun this test's
+            # patience for reasons that have nothing to do with whether the
+            # steps work.
+            args["meters"] = max(-0.1, min(0.1, float(args["meters"]) / 4.0))
         document["args"] = args
         return document
 
@@ -348,7 +355,7 @@ async def test_every_built_in_routine_completes_without_a_failed_step(service, r
     await service.connect("dog2")
 
     await service.start_routine("probe")
-    for _ in range(200):
+    for _ in range(400):
         await asyncio.sleep(0.05)
         if not service.routine_state()["running"]:
             break

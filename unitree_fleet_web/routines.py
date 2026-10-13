@@ -235,15 +235,25 @@ ROUTINES: Tuple[Routine, ...] = (
     Routine(
         id="square",
         label="走正方形",
-        title="站好 → (前进 0.6s → 右转 90°) ×4，回到原点。两条狗各走各的正方形。",
+        title="站好 → (前进 0.4m → 右转 90°) ×4，回到原点。两条狗各走各的正方形。",
         steps=(
             _stand(),
             *(
                 step
                 for _ in range(4)
                 for step in (
-                    Step("前进", "robot_move",
-                         {"vx": 0.25, "duration_s": 0.6, "confirm": True}, 1.6),
+                    # **A measured leg, not a timed one.** `robot_move` takes a
+                    # duration, so how far a dog goes in 0.6 s depends on the
+                    # floor, the battery and the gait — and a square walked four
+                    # times compounds it. `robot_walk` stops when it has measured
+                    # the distance.
+                    #
+                    # It falls back to a timed move, and says so, on a robot
+                    # that publishes no odometry — which the Go2 used for
+                    # testing does not. So this is not worse there and better
+                    # everywhere else.
+                    Step("前进", "robot_walk",
+                         {"meters": 0.4, "confirm": True}, 1.6),
                     Step("右转 90°", "robot_turn", {"degrees": -90, "confirm": True}, 6.0),
                 )
             ),
@@ -252,15 +262,19 @@ ROUTINES: Tuple[Routine, ...] = (
     Routine(
         id="formation",
         label="列队前进",
-        title="站好 → (一起前进 1s → 一起停下) ×3。用于确认同驱时序。",
+        title="站好 → (一起前进 0.3m → 一起停下) ×3。用于确认同驱时序。",
         steps=(
             _stand(),
             *(
                 step
                 for _ in range(3)
                 for step in (
-                    Step("一起前进", "robot_move",
-                         {"vx": 0.25, "duration_s": 1.0, "confirm": True}, 2.0),
+                    # The same distance for both dogs, rather than the same
+                    # duration: two timed moves of one second do not travel the
+                    # same distance on two floors, and keeping them in line is
+                    # the entire point of this routine.
+                    Step("一起前进", "robot_walk",
+                         {"meters": 0.3, "confirm": True}, 2.0),
                     Step("停下", "robot_stop", {}, 1.0),
                 )
             ),

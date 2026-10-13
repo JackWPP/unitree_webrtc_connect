@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 
 import pytest
 
@@ -268,3 +269,37 @@ def test_a_turn_does_not_touch_the_forward_axis():
     for lx, ly, _rx in session.published:
         assert lx == 0.0 and ly == 0.0, "a turn moved the robot"
     assert any(rx for _lx, _ly, rx in session.published), "a turn never turned"
+
+
+def test_a_walk_that_is_going_nowhere_gives_up_early():
+    """**Eight seconds per step is most of a routine**, and the operator is
+    watching a progress bar that is not progressing. A robot held in place, on
+    a slope it cannot climb, or reporting an odometry that does not move are all
+    the same case: waiting does not help."""
+    control = controller(FakeSession(position=(0.0, 0.0)))
+    position_sequence(control, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+    started = time.monotonic()
+    result = asyncio.run(control.forward_m(0.3, speed=0.5, timeout=30.0))
+    elapsed = time.monotonic() - started
+
+    assert result["reason"] == "stalled", result
+    assert result["actual_m"] == pytest.approx(0.0, abs=0.01)
+    assert elapsed < 5.0, f"it waited {elapsed:.1f}s on a robot that was not moving"
+
+
+def test_a_slow_walk_is_not_mistaken_for_a_stalled_one():
+    """The stall check compares against the best progress so far, not against
+    the last tick — a robot that creeps is slow, not stuck."""
+    control = controller(FakeSession(position=(0.0, 0.0)))
+    # One centimetre every read: slower than the stall window would allow if it
+    # were comparing consecutive samples.
+    steps = [round(0.01 * n, 3) for n in range(1, 40)]
+    position_sequence(control, steps)
+
+    result = asyncio.run(control.forward_m(0.3, speed=0.05, timeout=30.0))
+
+    assert result["reason"] in ("reached", "timeout"), result
+    assert result["reason"] != "stalled", (
+        "a creeping robot was called stuck"
+    )
