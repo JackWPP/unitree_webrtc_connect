@@ -507,6 +507,20 @@ class ConsoleService:
         ``stop_first`` is the session's default and is what is wanted here: a
         dog must not be left travelling because a browser was closed.
         """
+        # A running routine is activity, whatever the watcher count says.
+        #
+        # Without this, closing the laptop lid — or a websocket blinking — while
+        # a routine is mid-sequence released every robot under it, stopped them
+        # (`stop_first`), and left the runner issuing commands at disconnected
+        # robots for the rest of the sequence. Half-released is worse than
+        # either extreme: the pair is neither doing the routine nor safely idle.
+        #
+        # The lease still re-asserts nothing here; it simply waits. If the
+        # operator never comes back, the routine finishes, `stop_routine` runs
+        # on the next release, and the links go back the ordinary way.
+        if self._routine is not None and self._routine.get("running"):
+            return
+
         released = []
         for robot_id in self.fleet.ids:
             runtime = self.fleet.get(robot_id)
