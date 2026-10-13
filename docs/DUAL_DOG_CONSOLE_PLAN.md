@@ -52,7 +52,9 @@
 | P3.10 | **真浏览器渲染测试**（headless Chrome） | ✅ | `ccc4ee2`；**首次运行就抓到真 bug**：WebSocket 一断，所有实时字段永远停在占位符；已加 HTTP 轮询兜底 |
 | P3.11 | **最近操作面板** + 有界 audit 读取 | ✅ | `8eb3dfa`；`tail()` 原本 `readlines()` 全读再切片（5MB 轮转日志 = 解析数万行），改为从末尾按块反向读，实测 0.1ms |
 | P0.3 | **`--preflight` 固件/`data2` 探测**（原列为"等硬件"，工具已就位） | ✅ | `f76476a`；**只读**：发 `con_notify` 但从不发 SDP，**不占用机器人唯一的 WebRTC 客户端槽**，可在官方 App 连接时运行 |
-| P0.4b | 真机并发连接 + 阻塞验证 | ⏸ **等硬件** | 探针 `scripts/probe_dual_connection.py` 与 `--preflight` 均已就位，狗上线即可跑；三个组播组扫描均无应答 |
+| P0.4b | **连接干扰测量仪**（原为最大未知 R4，工具已就位） | ✅ 工具 | `c10baf3`；`scripts/measure_connect_interference.py` 测的是**事件循环自身唤醒延迟**——遥测新鲜度只是代理量（机器人可能只是安静），而唤醒延迟**就是**损伤本身。12 个测试含"故意阻塞必被检出"与"礼貌让出必不误报" |
+| P0.4c | 真机跑一次该测量 | ⏸ **等硬件** | 三个组播组扫描均无应答 |
+| P3.12 | `--no-video-autoconnect`（纯观察模式） | ✅ | `c10baf3`；默认行为不变——"打开就能看见两只狗"正是目标所需；该开关让"只观察不占槽"成为一行命令 |
 
 **P0.4a 的实测结论（最重要的一条）**：`unitree_webrtc_connect/__init__.py:1-17` 把 ICE 凭据钉在**类属性**上，进程内所有 peer connection 共享同一组 ufrag/pwd（实测 3 条连接只有 1 个 ufrag）——**但这不构成阻塞**：3 条连接拿到 3 个独立 transport，36 个 host candidate **端口两两不同**，关掉第 0 条另两条存活。
 
@@ -95,7 +97,9 @@ MCP 侧先调 `robot_roster` 拿 id；每个工具都接受 `robot_id`，省略�
    ```sh
    unitree-fleet-console --preflight        # 每台狗：可达? data2=? key 对不对? 只读，不抢槽
    unitree-fleet-console --backend webrtc   # 真机
-   # 以及并发/阻塞验证：python scripts/probe_dual_connection.py --ips <dog1>,<dog2>
+   # 以及并发测量：
+   python scripts/probe_dual_connection.py --ips <dog1>,<dog2>
+   python scripts/measure_connect_interference.py --ips <dog1>,<dog2>
    ```
 2. **控制台增强**（不需要机器人）：目前只剩细节——例如把 `robot_lowstate`/`robot_get_posture` 的实时遥测（速度/IMU/网络）也铺到面板上。
 3. **驱动侧**：`upload_file` 已修，但 `request_static_file`（下载）走的是同一条 fire-and-forget 路径，值得按同样的方式核一遍。
