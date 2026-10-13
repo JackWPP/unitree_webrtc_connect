@@ -367,6 +367,25 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 
+    async def get_routines(request) -> Response:
+        from .routines import catalogue
+
+        return JSONResponse({"routines": catalogue()})
+
+    async def post_routine_start(request) -> Response:
+        body = await _read_body(request)
+        routine_id = str((body or {}).get("id") or "")
+        try:
+            return JSONResponse(await service.start_routine(routine_id))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
+    async def post_routine_stop(request) -> Response:
+        try:
+            return JSONResponse(await service.stop_routine())
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
     async def get_fleet_actions(request) -> Response:
         try:
             return JSONResponse(await service.fleet_actions())
@@ -485,6 +504,9 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/robot/{robot_id}/audit", get_robot_audit),
         Route("/api/console/controls", get_console_controls),
         Route("/api/fleet/actions", get_fleet_actions),
+        Route("/api/fleet/routines", get_routines),
+        Route("/api/fleet/routine", post_routine_start, methods=["POST"]),
+        Route("/api/fleet/routine/stop", post_routine_stop, methods=["POST"]),
         Route("/api/fleet/action", post_fleet_action, methods=["POST"]),
         Route("/api/robot/{robot_id}/teleop", post_robot_teleop, methods=["POST"]),
         Route("/api/robot/{robot_id}/move", post_robot_move, methods=["POST"]),

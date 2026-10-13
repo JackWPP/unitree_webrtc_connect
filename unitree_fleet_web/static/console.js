@@ -472,6 +472,7 @@ function renderStatus(payload) {
   state.videoHealth = payload.video || {};
   state.lastStatus = payload;
   renderFleetTargets();
+  renderRoutine(payload.routine);
   state.flags = payload.flags || state.flags || {};
   state.telemetryHealth = payload.telemetry_health || {};
   document.getElementById('fleet-summary').textContent =
@@ -1271,6 +1272,77 @@ function wireSocket() {
 /* "Make them both do X" is one intent, so it is one click. The calls go out
  * concurrently server-side; doing it by clicking two per-dog buttons a second
  * apart is not the same thing as doing it together. */
+/* ── routines ──────────────────────────────────────────────────────── */
+
+/* A sequence keeps sending commands after the operator has taken their hands
+ * off the keyboard, so its progress and its stop button are always on screen
+ * while it runs — not behind a panel, and not only on the card of whichever
+ * dog happens to be focused. */
+async function loadRoutines() {
+  const host = document.getElementById('fleet-routines');
+  let spec;
+  try {
+    spec = await api('/api/fleet/routines');
+  } catch (_) { return; }
+  host.textContent = '';
+  for (const routine of spec.routines || []) {
+    const button = document.createElement('button');
+    button.className = 'btn';
+    // The step count and the expected duration go on the button: a routine is
+    // a commitment of time as well as motion, and the operator should know
+    // both before pressing it rather than after.
+    button.textContent = `${routine.label} · ${routine.steps.length}步/${Math.round(routine.seconds)}s`;
+    button.title = routine.title + (routine.needs_dangerous
+      ? '（含需要危险动作许可的步骤）' : '');
+    button.addEventListener('click', () => startRoutine(routine, button));
+    host.appendChild(button);
+  }
+  renderRoutine(state.lastStatus && state.lastStatus.routine);
+}
+
+async function startRoutine(routine, button) {
+  button.disabled = true;
+  try {
+    await api('/api/fleet/routine', {
+      method: 'POST',
+      body: JSON.stringify({ id: routine.id }),
+    });
+  } catch (err) {
+    toast(`${routine.label} 无法开始：${err.message}`, 'bad');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function stopRoutine() {
+  const button = document.getElementById('routine-stop');
+  button.disabled = true;
+  try {
+    await api('/api/fleet/routine/stop', { method: 'POST' });
+  } catch (err) {
+    toast('停止编排失败：' + err.message, 'bad');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderRoutine(routine) {
+  const wrap = document.getElementById('routine-run');
+  const label = document.getElementById('routine-label');
+  const bar = document.querySelector('[data-role="routine-progress"]');
+  if (!wrap) return;
+
+  if (!routine || !routine.running) {
+    wrap.classList.add('hidden');
+    return;
+  }
+  wrap.classList.remove('hidden');
+  const done = Math.max(0, routine.step);
+  const total = routine.total || 1;
+  bar.style.width = `${Math.round((done / total) * 100)}%`;
+  label.textContent = `${routine.label} · ${done + 1}/${total} ${routine.step_label}`;
+}
+
 async function loadFleetActions() {
   const host = document.getElementById('fleet-posture');
   const named = document.getElementById('fleet-named');
@@ -1311,6 +1383,8 @@ function fleetButton(action) {
 
 async function runFleetAction(action, button) {
   const out = document.getElementById('fleet-result');
+  const routineStop = document.getElementById('routine-stop');
+  if (routineStop) routineStop.addEventListener('click', stopRoutine);
   const repeat = document.getElementById('fleet-repeat');
   button.disabled = true;
   out.className = 'fleet-result';
@@ -1383,6 +1457,7 @@ async function boot() {
   wireInput();
   wireFleetBar();
   loadFleetActions();
+  loadRoutines();
   try {
     const snapshot = await api('/api/fleet');
     state.fleet = snapshot.fleet;

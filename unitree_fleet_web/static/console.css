@@ -594,3 +594,37 @@ select, input[type="range"] { accent-color: var(--accent); }
   transition: transform 0.08s linear;
   box-shadow: 0 0 6px -1px var(--accent);
 }
+
+/* ── routines ─────────────────────────────────────────────────────── */
+
+.fleet-row.routines { border-top: 1px solid var(--line-soft); padding-top: 7px; }
+.fleet-row.routines .btn { border-color: #3a4a63; }
+.fleet-row.routines .btn:hover:not(:disabled) { background: #1d2c44; }
+
+.routine-run {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 9px;
+  background: var(--panel-2);
+  border: 1px solid #35507a;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.routine-bar {
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  overflow: hidden;
+  flex: none;
+}
+.routine-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.25s linear;
+}
+.routine-label { font-variant-numeric: tabular-nums; }

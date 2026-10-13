@@ -223,6 +223,10 @@ class ConsoleService:
         #: indistinguishable from a robot that reports nothing, and those want
         #: different reactions from the operator.
         self._telemetry_error: Dict[str, str] = {}
+        #: The running routine, if any. Plain state so the status push can
+        #: report progress without reaching into the runner.
+        self._routine: Optional[Dict[str, Any]] = None
+        self._routine_task: Optional[asyncio.Task] = None
         #: Per-robot video health, so a stream that never produces frames can
         #: say so instead of showing an empty box.
         self._video: Dict[str, Dict[str, Any]] = {}
@@ -318,7 +322,18 @@ class ConsoleService:
             )
 
     async def aclose(self) -> None:
-        # Cancel in-flight auto-connects first: their whole point is to keep
+        # A routine keeps issuing commands, so it goes before anything else —
+        # including before the sessions it is driving are closed.
+        if self._routine_task is not None and not self._routine_task.done():
+            if self._routine is not None:
+                self._routine["running"] = False
+                self._routine["aborted"] = "控制台关闭"
+            self._routine_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._routine_task
+        self._routine_task = None
+
+        # Cancel in-flight auto-connects next: their whole point is to keep
         # running while the loop does other things, so nothing else stops them.
         for task in list(self._connect_tasks.values()):
             task.cancel()
@@ -457,6 +472,160 @@ class ConsoleService:
             for robot_id in released:
                 self._telemetry.pop(robot_id, None)
                 self._telemetry_error.pop(robot_id, None)
+
+    # ── routines ─────────────────────────────────────────────────────
+
+    async def start_routine(self, routine_id: str) -> Dict[str, Any]:
+        """Run a sequence of steps against the whole fleet.
+
+        The one control in this console that keeps sending commands after the
+        operator has taken their hands off the keyboard, so it is also the one
+        that most needs to be stoppable. Three things abort it: the stop button,
+        a latched e-stop, and the console closing.
+        """
+        from .routines import routine_by_id
+
+        try:
+            routine = routine_by_id(routine_id)
+        except KeyError:
+            raise AgentError(
+                f"没有名为 {routine_id!r} 的编排。",
+                code="unknown_routine",
+                hint="GET /api/fleet/routines 列出可用的编排。",
+            )
+
+        if self._routine_task is not None and not self._routine_task.done():
+            raise AgentError(
+                "已经有一条编排在跑。",
+                code="routine_running",
+                hint="先停止当前编排。",
+            )
+        if self.state.estop.engaged:
+            raise MotionBlocked(
+                "急停已锁存，无法开始编排。",
+                detail={"estop": self.state.estop.as_dict()},
+            )
+
+        targets = [rid for rid in self.fleet.ids if self.fleet.get(rid).session.is_connected]
+        if not targets:
+            raise AgentError(
+                "没有已连接的机器狗。",
+                code="no_connected_robots",
+                hint="先连接至少一只，再开始编排。",
+            )
+
+        self._routine = {
+            "id": routine.id,
+            "label": routine.label,
+            "loop": routine.loop,
+            "total": len(routine.steps),
+            "step": -1,
+            "step_label": "准备中",
+            "running": True,
+            "aborted": "",
+            "needs_dangerous": routine.needs_dangerous,
+            "dangerous_allowed": self._dangerous_allowed(),
+            "seconds": round(routine.seconds, 1),
+            "started_at": time.time(),
+            "logs": [],
+        }
+        self._routine_task = asyncio.create_task(
+            self._run_routine(routine), name=f"console-routine-{routine.id}"
+        )
+        return self.routine_state()
+
+    async def stop_routine(self, *, reason: str = "operator") -> Dict[str, Any]:
+        """Abort the running routine and stop everything it was driving.
+
+        Order matters: flag it stopped *first*, so the runner cannot issue
+        another step while the stop commands are going out.
+        """
+        state = self._routine
+        if state is not None:
+            state["running"] = False
+            state["aborted"] = reason
+            state["step_label"] = "已停止"
+        task = self._routine_task
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._routine_task = None
+        stopped = await self.fleet.stop_all()
+        return {
+            "stopped": True,
+            "reason": reason,
+            "routine": self.routine_state(),
+            "robots": [o.as_dict() for o in stopped],
+        }
+
+    def routine_state(self) -> Dict[str, Any]:
+        return dict(self._routine) if self._routine else {"running": False}
+
+    def _dangerous_allowed(self) -> bool:
+        for robot_id in self.fleet.ids:
+            if getattr(self.fleet.get(robot_id).config, "allow_dangerous", False):
+                return True
+        return False
+
+    async def _run_routine(self, routine) -> None:
+        state = self._routine
+        if state is None:
+            return
+        try:
+            while state["running"]:
+                for index, step in enumerate(routine.steps):
+                    if not state["running"]:
+                        break
+                    if self.state.estop.engaged:
+                        state["aborted"] = "急停锁存"
+                        state["running"] = False
+                        state["step_label"] = "已中止"
+                        break
+
+                    state["step"] = index
+                    state["step_label"] = step.label
+                    result = await self.fleet_action(step.tool, dict(step.args))
+                    state["logs"].append({
+                        "step": index,
+                        "label": step.label,
+                        "ok_count": result["ok_count"],
+                        "total": len(result["targets"]),
+                        "failed": result["failed"],
+                        "skipped": result["skipped"],
+                        "at": time.time(),
+                    })
+                    state["logs"] = state["logs"][-40:]
+
+                    # Wait in slices, so a stop lands within a fraction of a
+                    # second instead of after the whole step. A routine that
+                    # cannot be interrupted mid-step is not really stoppable.
+                    remaining = float(step.seconds)
+                    while remaining > 0 and state["running"]:
+                        if self.state.estop.engaged:
+                            state["aborted"] = "急停锁存"
+                            state["running"] = False
+                            state["step_label"] = "已中止"
+                            break
+                        await asyncio.sleep(min(0.2, remaining))
+                        remaining -= 0.2
+
+                if not routine.loop:
+                    break
+            state["running"] = False
+            if not state["aborted"]:
+                state["step_label"] = "已完成"
+        except asyncio.CancelledError:
+            state["running"] = False
+            state["step_label"] = "已取消"
+            raise
+        except Exception as exc:  # noqa: BLE001 - a routine must not kill the console
+            logger.warning("routine %s failed: %r", routine.id, exc)
+            state["running"] = False
+            state["aborted"] = f"{type(exc).__name__}: {exc}"
+            state["step_label"] = "出错停止"
+            with contextlib.suppress(Exception):
+                await self.fleet.stop_all()
 
     # ── fleet-wide actions ───────────────────────────────────────────
 
@@ -829,6 +998,7 @@ class ConsoleService:
                 rid: self.telemetry_health(rid) for rid in self.fleet.ids
             },
             "video": {rid: self.video_status(rid) for rid in self.fleet.ids},
+            "routine": self.routine_state(),
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a
@@ -1009,6 +1179,18 @@ class ConsoleService:
         }
 
     async def stop_all(self, *, reason: str = "console_stop_all") -> Dict[str, Any]:
+        # Abort the routine first. Leaving it running would mean the fleet
+        # stops and then the sequence immediately issues its next step — the
+        # operator's stop would look like it did nothing.
+        if self._routine_task is not None and not self._routine_task.done():
+            self._routine_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._routine_task
+            self._routine_task = None
+            if self._routine is not None:
+                self._routine["running"] = False
+                self._routine["aborted"] = reason
+                self._routine["step_label"] = "已停止"
         self.state.stop_driving()
         outcomes = [o.as_dict() for o in await self.fleet.stop_all(reason=reason)]
         stopped = [o["robot_id"] for o in outcomes if o["ok"]]
@@ -1035,6 +1217,19 @@ class ConsoleService:
         else:
             self.state.estop.engage(scope=EStopScope.ALL, robot_id="", reason=reason)
             targets = list(self.fleet.ids)
+
+        # Cancel the routine here rather than letting it discover the latch at
+        # its next step boundary. A step can be waiting out eight seconds of
+        # dance; an emergency stop that takes eight seconds is not one.
+        if self._routine_task is not None and not self._routine_task.done():
+            self._routine_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._routine_task
+            self._routine_task = None
+            if self._routine is not None:
+                self._routine["running"] = False
+                self._routine["aborted"] = "急停"
+                self._routine["step_label"] = "已中止"
 
         self.state.stop_driving()
         results = await asyncio.gather(

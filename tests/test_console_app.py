@@ -894,3 +894,68 @@ def test_the_console_js_has_the_fleet_bar_and_the_drive_aids(open_client):
     for marker in ("loadFleetActions", "runFleetAction", "renderStick",
                    "renderPadKeys", "state.trim"):
         assert marker in source, f"console.js lost {marker}"
+
+
+# ─── routines ─────────────────────────────────────────────────────────
+
+
+def test_the_routine_catalogue_is_listed_with_its_cost(open_client):
+    """A routine is a commitment of time as well as motion, so the operator is
+    told the step count and the duration before pressing it."""
+    routines = open_client.get("/api/fleet/routines").json()["routines"]
+    assert routines
+    for routine in routines:
+        assert routine["label"] and routine["steps"]
+        assert routine["seconds"] > 0
+        for step in routine["steps"]:
+            assert step["tool"] and step["label"] and step["seconds"] > 0
+
+
+def test_every_routine_step_uses_a_console_allowlisted_tool(open_client):
+    """Steps run through the same guarded tools the buttons do, so a routine
+    cannot reach anything the panel could not."""
+    from unitree_fleet_web.service import CONSOLE_TOOLS
+
+    routines = open_client.get("/api/fleet/routines").json()["routines"]
+    for routine in routines:
+        for step in routine["steps"]:
+            assert step["tool"] in CONSOLE_TOOLS, f"{routine['id']}: {step['tool']}"
+
+
+def test_a_routine_cannot_start_without_a_connected_robot(open_client):
+    response = open_client.post("/api/fleet/routine", json={"id": "greet"})
+    assert response.status_code == 400
+    assert response.json()["code"] == "no_connected_robots"
+
+
+def test_an_unknown_routine_is_refused(open_client):
+    open_client.post("/api/robot/dog1/connect")
+    response = open_client.post("/api/fleet/routine", json={"id": "nope"})
+    assert response.json()["code"] == "unknown_routine"
+    assert "routines" in response.json()["hint"]
+
+
+def test_a_latched_estop_blocks_starting_a_routine(open_client):
+    open_client.post("/api/robot/dog1/connect")
+    open_client.post("/api/fleet/estop", json={"reason": "test"})
+    try:
+        response = open_client.post("/api/fleet/routine", json={"id": "greet"})
+        assert response.status_code == 409
+        assert response.json()["code"] == "motion_blocked"
+    finally:
+        open_client.post("/api/fleet/estop/release")
+
+
+def test_stopping_a_routine_is_safe_when_none_is_running(open_client):
+    response = open_client.post("/api/fleet/routine/stop")
+    assert response.status_code == 200
+    assert response.json()["stopped"] is True
+
+
+def test_the_console_js_surfaces_routine_progress_and_a_stop(open_client):
+    source = open_client.get("/static/console.js").text
+    for marker in ("loadRoutines", "startRoutine", "stopRoutine", "renderRoutine"):
+        assert marker in source, f"console.js lost {marker}"
+    html = open_client.get("/").text
+    assert "routine-stop" in html
+    assert "停止编排" in html

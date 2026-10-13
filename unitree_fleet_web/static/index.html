@@ -38,6 +38,17 @@
   </div>
   <div id="fleet-posture" class="fleet-row"></div>
   <div id="fleet-named" class="fleet-row"></div>
+
+  <!-- Sequences: the one control that keeps issuing commands after the
+       operator has taken their hands off the keyboard, so its progress and its
+       stop button are always on screen while it runs. -->
+  <div class="fleet-row routines" id="fleet-routines"></div>
+  <div id="routine-run" class="routine-run hidden">
+    <span class="routine-bar"><i data-role="routine-progress"></i></span>
+    <span id="routine-label" class="routine-label"></span>
+    <span class="spacer"></span>
+    <button id="routine-stop" class="btn btn-estop-sm">停止编排</button>
+  </div>
 </section>
 
 <main id="pens" class="pens"></main>
