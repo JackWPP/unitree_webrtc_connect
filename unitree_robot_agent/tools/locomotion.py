@@ -355,6 +355,58 @@ def register(server, ctx: ToolContext) -> None:
 
         return await run_tool(ctx, "robot_turn", args, _impl)
 
+    @server.tool(
+        name="robot_walk",
+        description=(
+            "Walk a measured distance forward (negative for backward), closing "
+            "the loop on the robot's own odometry — it stops when it has gone "
+            "that far rather than after a guessed time. Use this instead of "
+            "robot_move when the distance matters: a routine that walks a square "
+            "accumulates the error of every timed step, and this one does not. "
+            "Reports 'actual_m' and 'residual_m' rather than claiming success; "
+            "when the robot publishes no odometry it falls back to a timed move "
+            "and says so in 'reason'."
+        ),
+        annotations=MOTION,
+    )
+    async def robot_walk(
+        meters: float,
+        speed: float = 0.0,
+        confirm: bool = False,
+        robot_id: str = "",
+    ) -> Dict[str, Any]:
+        args = {"meters": meters, "speed": speed, "confirm": confirm}
+
+        async def _impl():
+            guard = ctx.session.guard
+            guard.require_motion_enabled("robot_walk")
+
+            try:
+                target = float(meters)
+            except (TypeError, ValueError):
+                raise GuardRejected(f"meters must be a number, got {meters!r}.")
+            if not math.isfinite(target):
+                raise GuardRejected(f"meters must be finite, got {meters!r}.")
+            if abs(target) < 1e-3:
+                return ctx.ok(action="walk", skipped=True,
+                              note="0 m is a no-op; nothing was sent.")
+            if abs(target) > 5.0:
+                raise GuardRejected(
+                    f"{target:g} m is beyond the ±5 m limit. Walk in smaller legs.",
+                    detail={"requested": target},
+                )
+
+            guard.require_confirm(confirm, f"robot_walk({target:g} m)")
+            await ctx.session.ensure_connected()
+
+            peak = abs(float(speed or 0.0)) or None
+            result = await ctx.runtime.motion.forward_m(target, speed=peak)
+            payload = dict(result)
+            payload["action"] = "walk"
+            return ctx.ok(**payload)
+
+        return await run_tool(ctx, "robot_walk", args, _impl)
+
     # ── state machine (R1 / G1 only) ─────────────────────────────────
 
     if ctx.profile.has(CAP_FSM_ACTIONS):

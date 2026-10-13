@@ -67,6 +67,7 @@ MOTION_GATED_TOOLS = frozenset(
         "robot_lie_down",
         "robot_move",
         "robot_turn",
+        "robot_walk",
         "robot_play_action",
         "robot_switch_state",
         "go2_recover",
@@ -178,8 +179,15 @@ CONSOLE_TOOLS = frozenset(
         # own duration and stops on its own, so it is the *safer* of the two
         # ways to move a robot — there is no key to release and nothing that
         # can be left held down.
+        #
+        # `robot_walk` is the same shape with a better instrument: it stops when
+        # it has measured the distance, and every path out of it zeroes the
+        # sticks. What it does *not* have is a duration the operator chose, so
+        # its stop condition is the robot's own odometry — which is why it is
+        # listed next to the timed moves rather than above them.
         "robot_move",
         "robot_turn",
+        "robot_walk",
     }
 )
 
@@ -2144,10 +2152,28 @@ class ConsoleService:
         shuffle before starting dog 2's.
         """
         async def one(move) -> None:
-            args = move.move_args()
-            if args:
+            # **Walk when the correction is mostly straight ahead.**
+            # `robot_walk` closes the loop on odometry, so the distance is
+            # measured rather than guessed from a speed constant this project
+            # does not know — which is exactly the error the formation loop
+            # otherwise spends three steps absorbing. When the correction is
+            # mostly sideways there is no forward distance to close a loop on
+            # and the body-frame move is the honest instrument.
+            mostly_forward = (
+                abs(move.forward_m) > 0.02
+                and abs(move.lateral_m) < abs(move.forward_m)
+            )
+            if mostly_forward:
                 with contextlib.suppress(Exception):
-                    await self.call_tool(move.robot_id, "robot_move", args)
+                    await self.call_tool(
+                        move.robot_id, "robot_walk",
+                        {"meters": round(move.forward_m, 3), "confirm": True},
+                    )
+            else:
+                args = move.move_args()
+                if args:
+                    with contextlib.suppress(Exception):
+                        await self.call_tool(move.robot_id, "robot_move", args)
             if abs(move.turn_deg) >= 1.0:
                 with contextlib.suppress(Exception):
                     await self.call_tool(

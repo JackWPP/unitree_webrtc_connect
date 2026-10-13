@@ -139,6 +139,26 @@ class SimulatedArena:
         ]
         self.tick()
 
+    def apply_walk(self, robot_id: str, meters: float) -> None:
+        """`robot_walk`: a measured distance straight along the nose.
+
+        Exact here, because the simulation *is* the odometry — which is the
+        point of the primitive. On a real robot it is the robot's own dead
+        reckoning and carries its drift; in here there is none, so a test that
+        converges in fewer steps than before is showing what the measured walk
+        buys rather than a flattering simulation.
+        """
+        self.commands.append((robot_id, {"walk_m": meters}))
+        index = [m.robot_id for m in MARKERS].index(robot_id)
+        x, y, heading = self.poses[index]
+        theta = math.radians(heading)
+        self.poses[index] = [
+            x + math.cos(theta) * meters,
+            y + math.sin(theta) * meters,
+            heading,
+        ]
+        self.tick()
+
     def apply_turn(self, robot_id: str, degrees: float) -> None:
         index = [m.robot_id for m in MARKERS].index(robot_id)
         self.poses[index][2] += degrees
@@ -177,6 +197,11 @@ def wire(service, arena):
     that never changes — which is exactly the failure mode the first version of
     these tests had, and it reported `no_progress` rather than anything that
     pointed at the test.
+
+    **Every tool the loop can use has to be routed here.** Switching the
+    formation to prefer `robot_walk` reproduced the whole thing one level up:
+    the loop commanded a measured walk, the simulation had no handler for it,
+    the command went to the mock backend, and the dogs did not move.
     """
     service._camera = arena
     original = service.call_tool
@@ -186,6 +211,9 @@ def wire(service, arena):
         if tool == "robot_move":
             arena.apply_move(robot_id, arguments)
             return {"ok": True}
+        if tool == "robot_walk":
+            arena.apply_walk(robot_id, float(arguments.get("meters") or 0.0))
+            return {"ok": True, "reason": "reached"}
         if tool == "robot_turn":
             arena.apply_turn(robot_id, float(arguments.get("degrees") or 0.0))
             return {"ok": True}
@@ -297,15 +325,18 @@ async def test_it_stops_when_it_stops_making_progress(loop_service):
     standing slightly wrong."""
     arena = SimulatedArena([(1.0, 2.0, 0.0), (4.0, 2.0, 0.0)])
 
-    # Commands do nothing at all: the robot is held, or a wheel is off the
-    # ground, or the speed constant is wrong by more than a step can absorb.
-    def ignore(robot_id, args):
-        arena.commands.append((robot_id, dict(args)))
-        arena.tick()
-
     loop_service.state.estop.release  # noqa: B018 - no latch in this test
     detector = await _settled(loop_service, arena)
+
+    # Commands do nothing at all: the robot is held, or a wheel is off the
+    # ground, or something else is stopping it. **Both** movement tools have to
+    # be neutralised — the loop picks between them, and disabling only the one
+    # it used to prefer would leave this testing the other.
+    def ignore(*_args, **_kwargs):
+        arena.tick()
+
     arena.apply_move = ignore  # type: ignore[assignment]
+    arena.apply_walk = ignore  # type: ignore[assignment]
     try:
         result = await loop_service.align_formation(
             Formation(distance_m=1.0, bearing_deg=0.0, mover="b"),

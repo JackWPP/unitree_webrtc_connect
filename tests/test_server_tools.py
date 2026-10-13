@@ -87,5 +87,9 @@ def test_tool_counts_are_stable():
     tool could previously send at all). Bumped earlier to 28/34 for ``robot_preflight``, which answers "can
     I even reach these robots, and what will the handshake need" without
     connecting."""
-    assert len(bundle_for("R1").tool_names) == 28
-    assert len(bundle_for("Go2").tool_names) == 35
+    # 29/36 with `robot_walk`, which closes the loop on odometry instead of a
+    # duration. `robot_move` stays, and the two answer different questions: a
+    # timed nudge works on a robot that publishes no odometry, and a measured
+    # walk does not accumulate the error of every step before it.
+    assert len(bundle_for("R1").tool_names) == 29
+    assert len(bundle_for("Go2").tool_names) == 36

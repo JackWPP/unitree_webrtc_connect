@@ -168,6 +168,36 @@ class MotionController:
         except (TypeError, ValueError):
             return None
 
+    async def read_position(self, *, timeout: Optional[float] = None):
+        """Odometry (x, y) in metres from the state topic, or None.
+
+        **Frequently None, and that is the honest state of this project.** The
+        `position` field rides on `rt/sportmodestate`, which the Go2 used for
+        testing **never publishes over WebRTC** — measured, repeatedly, on a dog
+        answering every other request. So a caller that needs a closed loop has
+        to check, and a caller that cannot get one has to say so rather than
+        pretend a timed move was measured.
+        """
+        from unitree_webrtc_connect.constants import RTC_TOPIC
+
+        for topic in (RTC_TOPIC.get("LF_SPORT_MOD_STATE"), RTC_TOPIC.get("SPORT_MOD_STATE")):
+            if not topic:
+                continue
+            try:
+                payload = await self.session.read_topic(topic, timeout=timeout, subscribe=True)
+            except Exception:  # noqa: BLE001 - a missing topic is a missing topic
+                continue
+            if not isinstance(payload, dict):
+                continue
+            position = payload.get("position")
+            if not isinstance(position, (list, tuple)) or len(position) < 2:
+                continue
+            try:
+                return (float(position[0]), float(position[1]))
+            except (TypeError, ValueError):
+                continue
+        return None
+
     # ── closed-loop turn ─────────────────────────────────────────────
 
     async def turn(
@@ -270,4 +300,131 @@ class MotionController:
             "tolerance_deg": tolerance,
             "elapsed_s": round(max_seconds - max(0.0, deadline - time.monotonic()), 2),
             "within_tolerance": abs(residual) <= tolerance,
+        }
+
+
+    async def forward_m(
+        self,
+        meters: float,
+        *,
+        speed: Optional[float] = None,
+        arrival: Optional[float] = None,
+        timeout: Optional[float] = None,
+    ) -> dict:
+        """Travel ``meters`` forward, closing the loop on odometry.
+
+        **The primitive this project was missing.** `robot_move` takes a
+        duration, which is a guess: how far a dog goes in 0.6 s depends on the
+        floor, the battery and the gait, and the same command travels a
+        different distance every run. Anything built on top of it — the
+        formation correction, a routine that walks a square — inherits that
+        error and accumulates it.
+
+        Two things the closed loop does not fix, both stated rather than hidden:
+
+        * **Odometry is often unavailable.** `position` rides on
+          `rt/sportmodestate`, which the Go2 used for testing never publishes
+          over WebRTC. When it is missing this falls back to a timed move and
+          says so in `reason` — a guess labelled as a guess, not a measurement.
+        * **Downstream odometry drifts.** It is dead reckoning, so a "metre"
+          here is a metre according to the robot's own estimate of its motion,
+          which is the best either of us has.
+
+        ``arrival`` is the fraction of the requested distance that counts as
+        arrived — 0.85 by default, following `unitree_harness`, because the last
+        few centimetres are where a quadruped's gait makes it creep and stall.
+        """
+        target_m = float(meters)
+        if not math.isfinite(target_m):
+            raise AgentError("meters must be a finite number.", code="invalid_distance")
+        if abs(target_m) < 1e-3:
+            return {"ok": True, "skipped": True, "note": "0 m is a no-op."}
+
+        speed = float(speed if speed is not None else getattr(self.config, "max_walk_speed", 0.28))
+        fraction = float(
+            arrival if arrival is not None
+            else getattr(self.config, "arrival_fraction", 0.85)
+        )
+        max_seconds = float(
+            timeout if timeout is not None
+            else max(8.0, abs(target_m) / max(0.05, speed) + 3.0)
+        )
+
+        start = await self.read_position()
+        if start is None:
+            # No odometry: drive for the time the distance *would* take and be
+            # explicit that it is a guess. Better a labelled guess than a
+            # refusal, because the caller may have nothing else.
+            seconds = abs(target_m) / max(0.05, speed)
+            result = await self.drive(ly=math.copysign(1.0, target_m), duration=seconds)
+            return {
+                "ok": bool(result.get("ok", True)),
+                "reason": "no_odometry",
+                "requested_m": round(target_m, 3),
+                "note": (
+                    "机器人没有发布里程计（rt/sportmodestate 的 position），"
+                    "所以这是按时长猜的，不是量出来的。"
+                ),
+                "timed_s": round(seconds, 2),
+            }
+
+        deadline = time.monotonic() + max_seconds
+        sign = 1.0 if target_m > 0 else -1.0
+        travelled = 0.0
+        frames = 0
+        aborted = False
+        try:
+            async with self._window("motion.forward"):
+                while time.monotonic() < deadline:
+                    if self._abort.is_set():
+                        aborted = True
+                        break
+                    current = await self.read_position(timeout=1.0)
+                    if current is None:
+                        break
+                    # **A magnitude, and that is a real limitation.** The only
+                    # odometry this project can read is a position, so the
+                    # measurable quantity is how far the robot is from where it
+                    # started — which cannot tell "drove forward 0.3 m" from
+                    # "was shoved backwards 0.3 m". An earlier version of this
+                    # had a `signed < -0.05` branch to abandon a walk that went
+                    # the wrong way; `hypot` is never negative, so it never
+                    # fired. **A dead branch that looks like a safety check is
+                    # worse than no check**, so it is gone and the limitation is
+                    # written down instead.
+                    #
+                    # Detecting it properly needs the velocity, which is on the
+                    # same topic as the position and therefore equally absent on
+                    # the hardware this was measured against.
+                    travelled = math.hypot(current[0] - start[0], current[1] - start[1])
+                    if travelled >= abs(target_m) * fraction:
+                        break
+                    await self._publish(lx=0.0, ly=YAW_AXIS_SIGN * sign * speed, rx=0.0)
+                    frames += 1
+                    await asyncio.sleep(TICK)
+                else:
+                    aborted = True
+        finally:
+            # Always, on every path out: a robot left with a live command keeps
+            # walking, which is the failure this file exists to prevent.
+            await self._zero()
+
+        reached = travelled >= abs(target_m) * fraction
+        return {
+            "ok": reached and not self._abort.is_set(),
+            "reason": (
+                "reached" if reached
+                else ("timeout" if not aborted else "stopped")
+            ),
+            "requested_m": round(target_m, 3),
+            # Always the requested sign, because the odometry only gives a
+            # distance. Read it as "the robot reports having moved this far",
+            # not as a displacement.
+            "actual_m": round(travelled * sign, 3),
+            "residual_m": round(abs(target_m) - travelled, 3),
+            "frames": frames,
+            "note": (
+                "闭环在里程计上。'actual_m' 是机器人自己报告走了多远，"
+                "'residual_m' 是还差多少 —— 不要拿 ok 当「正好」。"
+            ),
         }
