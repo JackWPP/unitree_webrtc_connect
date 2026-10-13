@@ -34,6 +34,15 @@ AXIS_LIMIT = 1.0
 #: that has gone quiet cannot hold the sampler.
 TELEMETRY_TIMEOUT_S = 2.0
 
+#: How long without a video frame before the panel stops pretending.
+#:
+#: A robot can be connected, answering commands, and still never deliver a
+#: frame — no camera on that chassis, the video channel not opened, or the
+#: track silently ended. The browser would sit on a blank <img> forever while
+#: the link pill said 在线. Five seconds is long enough not to flicker during a
+#: normal hiccup.
+VIDEO_STALE_S = 5.0
+
 #: How long a status request keeps counting as "someone is watching".
 #:
 #: The WebSocket is the fast path, but the console polls `/api/fleet/status`
@@ -161,6 +170,9 @@ class ConsoleService:
         self._telemetry_task: Optional[asyncio.Task] = None
         #: Monotonic time of the last status request, socket or HTTP.
         self._last_watch_at = 0.0
+        #: Per-robot video health, so a stream that never produces frames can
+        #: say so instead of showing an empty box.
+        self._video: Dict[str, Dict[str, Any]] = {}
         if not self.state.focused and fleet.ids:
             self.state.focused = fleet.roster.default_id or fleet.ids[0]
         for rid in fleet.ids:
@@ -445,6 +457,7 @@ class ConsoleService:
         return {
             "robots": await self.fleet.status_all(live=live),
             "telemetry": dict(self._telemetry),
+            "video": {rid: self.video_status(rid) for rid in self.fleet.ids},
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a
@@ -788,12 +801,72 @@ class ConsoleService:
                 await runtime.session.ensure_connected()
             except Exception as exc:  # noqa: BLE001
                 logger.info("frame(%s): not connected (%r)", robot_id, exc)
+                self._note_frame(robot_id, ok=False, error=f"connect failed: {exc}")
                 return None
             try:
-                return await runtime.backend.snapshot_frame(timeout=2.0)
+                jpeg = await runtime.backend.snapshot_frame(timeout=2.0)
             except Exception as exc:  # noqa: BLE001
                 logger.info("frame(%s) failed: %r", robot_id, exc)
+                self._note_frame(robot_id, ok=False, error=f"{type(exc).__name__}: {exc}")
                 return None
+            self._note_frame(robot_id, ok=bool(jpeg))
+            return jpeg
+
+    # ── video health ─────────────────────────────────────────────────
+
+    def _note_frame(self, robot_id: str, *, ok: bool, error: str = "") -> None:
+        entry = self._video.setdefault(
+            robot_id, {"last_frame_at": 0.0, "failures": 0, "last_error": ""}
+        )
+        if ok:
+            entry["last_frame_at"] = time.time()
+            entry["failures"] = 0
+            entry["last_error"] = ""
+        else:
+            entry["failures"] += 1
+            if error:
+                entry["last_error"] = error
+
+    def video_status(self, robot_id: str) -> Dict[str, Any]:
+        """Whether this robot's stream is actually producing pictures.
+
+        Distinct from "connected". The cases a blank panel cannot distinguish:
+        no camera on the chassis, the video channel never opened, or the track
+        ended — all of which look identical to the operator.
+        """
+        entry = self._video.get(robot_id) or {}
+        last = float(entry.get("last_frame_at") or 0.0)
+        failures = int(entry.get("failures") or 0)
+        enabled = bool(self.state.video_enabled.get(robot_id, True))
+
+        try:
+            connected = self.fleet.get(robot_id).session.is_connected
+        except Exception:  # noqa: BLE001 - unknown robot is simply not connected
+            connected = False
+
+        age = (time.time() - last) if last else None
+        if not enabled:
+            state = "disabled"
+        elif not connected:
+            state = "offline"
+        elif age is not None and age <= VIDEO_STALE_S:
+            state = "ok"
+        elif last or failures:
+            # Either frames used to arrive and stopped, or none ever arrived
+            # and something has already been tried. Both are "no picture", and
+            # neither is "still starting up".
+            state = "stalled"
+        else:
+            state = "starting"
+
+        return {
+            "state": state,
+            "enabled": enabled,
+            "connected": connected,
+            "age_s": round(age, 1) if age is not None else None,
+            "failures": failures,
+            "last_error": entry.get("last_error") or "",
+        }
 
     async def mjpeg(self, robot_id: str) -> AsyncIterator[bytes]:
         """A multipart MJPEG stream for one robot."""

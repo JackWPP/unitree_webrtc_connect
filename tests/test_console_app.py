@@ -595,3 +595,19 @@ def test_the_console_js_reads_the_telemetry_it_is_given(open_client):
     source = open_client.get("/static/console.js").text
     for field in ("state.telemetry", "soc_percent", "gait_type", "posture"):
         assert field in source, f"console.js no longer reads {field}"
+
+
+def test_the_status_payload_carries_video_health(open_client):
+    """The UI reads `video[robot_id].state`; without it a robot that never
+    produces a frame shows a blank box with the link pill saying 在线."""
+    payload = open_client.get("/api/fleet/status").json()
+    assert "video" in payload
+    for robot_id, health in payload["video"].items():
+        assert "state" in health and "age_s" in health
+        assert health["state"] in ("ok", "starting", "stalled", "offline", "disabled")
+
+
+def test_the_console_js_explains_a_missing_picture(open_client):
+    source = open_client.get("/static/console.js").text
+    for marker in ("videoHealth", "stalled", "无画面"):
+        assert marker in source, f"console.js no longer explains {marker}"

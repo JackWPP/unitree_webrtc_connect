@@ -278,6 +278,35 @@ function firstId() {
   return state.fleet && state.fleet.robots.length ? state.fleet.robots[0].robot_id : '';
 }
 
+/* A connected robot with no picture looks exactly like a broken console.
+ * These are the cases the panel cannot otherwise tell apart: no camera on the
+ * chassis, the video channel never opened, or the track ended. */
+const VIDEO_MESSAGES = {
+  offline: '未连接',
+  stalled: '无画面 —— 相机不可用或视频通道未开启',
+  starting: '画面启动中…',
+  disabled: '画面已关闭',
+};
+
+function renderVideoHealth(robotId) {
+  const entry = state.focusMap[robotId];
+  if (!entry) return;
+  const health = (state.videoHealth && state.videoHealth[robotId]) || null;
+  if (!health) return;
+
+  const show = health.state !== 'ok' && health.state !== 'disabled';
+  entry.videoOff.classList.toggle('hidden', !show);
+  if (show) {
+    entry.videoOff.textContent = VIDEO_MESSAGES[health.state] || '';
+  }
+  // Leave the <img> alone while the stream is merely starting: tearing the
+  // connection down would restart the handshake it is waiting on.
+  if (health.state === 'ok' && entry.video.getAttribute('src')) return;
+  if (health.state === 'stalled' && entry.video.getAttribute('src')) {
+    entry.video.removeAttribute('src');
+  }
+}
+
 function updateVideo(robotId, enabled) {
   const entry = state.focusMap[robotId];
   if (!entry) return;
@@ -360,11 +389,15 @@ function renderStatus(payload) {
 
     entry.pen.classList.toggle('focused', robot.robot_id === state.focused);
     entry.pen.classList.toggle('driving', state.driving ? state.driving.has(robot.robot_id) : false);
+    renderVideoHealth(robot.robot_id);
     renderFaults(robot.robot_id, robot);
   }
 
   state.connecting = payload.connecting || [];
   state.telemetry = payload.telemetry || {};
+  // Named `videoHealth` rather than `video`: `focusMap[id].video` is the
+  // <img> element, and two things called video would invite a mix-up.
+  state.videoHealth = payload.video || {};
   document.getElementById('fleet-summary').textContent =
     `${online}/${payload.robots.length} 在线`;
   document.getElementById('watching').textContent =

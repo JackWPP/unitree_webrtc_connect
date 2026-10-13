@@ -798,3 +798,85 @@ async def test_the_watch_window_eventually_expires(service):
 
     service._last_watch_at -= 3600  # noqa: SLF001
     assert service.watching is False
+
+
+# ─── video health ─────────────────────────────────────────────────────
+
+
+async def test_a_stream_that_never_produces_a_frame_says_so(service):
+    """The case a blank panel cannot express: connected, answering commands,
+    and never a picture — no camera on the chassis, the video channel not
+    opened, or the track ended. All three look identical from the outside."""
+    await service.connect("dog1")
+
+    # A real camera-less chassis returns None from `snapshot_frame` forever;
+    # this drives the same bookkeeping without needing one.
+    for _ in range(3):
+        service._note_frame("dog1", ok=False, error="no video track")  # noqa: SLF001
+
+    health = service.video_status("dog1")
+    assert health["connected"] is True
+    assert health["state"] == "stalled", health
+    assert health["failures"] == 3
+    assert health["last_error"] == "no video track"
+    assert health["age_s"] is None, "no frame has ever arrived"
+
+
+async def test_a_frame_that_arrives_clears_the_failure_state(service):
+    await service.connect("dog1")
+    service._note_frame("dog1", ok=False, error="teething")  # noqa: SLF001
+    assert service.video_status("dog1")["state"] == "stalled"
+
+    await service.frame("dog1")
+
+    health = service.video_status("dog1")
+    assert health["state"] == "ok"
+    assert health["failures"] == 0
+    assert health["last_error"] == ""
+
+
+async def test_a_working_camera_reports_ok(service):
+    await service.connect("dog1")
+    jpeg = await service.frame("dog1")
+
+    assert jpeg is not None
+    health = service.video_status("dog1")
+    assert health["state"] == "ok"
+    assert health["age_s"] is not None and health["age_s"] < 1.0
+    assert health["failures"] == 0
+
+
+async def test_video_health_is_offline_when_the_robot_is(service):
+    health = service.video_status("dog1")
+    assert health["state"] == "offline"
+    assert health["connected"] is False
+    assert health["age_s"] is None
+
+
+async def test_video_health_is_disabled_when_the_operator_turned_it_off(service):
+    service.set_video("dog1", False)
+    assert service.video_status("dog1")["state"] == "disabled"
+
+
+async def test_a_stale_frame_is_reported_once_it_ages_out(service):
+    await service.connect("dog1")
+    await service.frame("dog1")
+    assert service.video_status("dog1")["state"] == "ok"
+
+    # Age the last frame past the stale window. Frames *used* to arrive and
+    # stopped, which is "stalled" — not "still starting up".
+    service._video["dog1"]["last_frame_at"] -= 3600  # noqa: SLF001
+    health = service.video_status("dog1")
+
+    assert health["state"] == "stalled"
+    assert health["age_s"] > 3000
+
+
+async def test_video_health_never_raises_for_an_unknown_robot(service):
+    assert service.video_status("ghost")["state"] == "offline"
+
+
+async def test_the_status_payload_reports_video_health_per_robot(service):
+    payload = await service.status()
+    assert set(payload["video"]) == set(service.fleet.ids)
+    assert payload["video"]["dog1"]["state"] == "offline"
