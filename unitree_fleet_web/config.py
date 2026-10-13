@@ -48,12 +48,14 @@ DEFAULT_LEASE_S = 5.0
 #: the connection state alone.
 DEFAULT_TELEMETRY_HZ = 1.0
 
-#: Velocity re-send rate while driving. See DEFAULT_MOTION_HZ in service.py.
 #: How often to look at the arena camera. Higher than the status push because
 #: detection is cheap and a position that lags a moving dog by a fifth of a
 #: second is a position that is wrong by wherever the dog went next.
 DEFAULT_ARENA_HZ = 10.0
 
+#: Velocity re-send rate while driving. **The only copy** — `service.py` used to
+#: carry a duplicate that nothing read, with this comment pointing at it, so
+#: editing that one looked like it should change something and did not.
 DEFAULT_MOTION_HZ = 50.0
 
 #: How long the auto-stand gate waits before giving up and dropping the target.

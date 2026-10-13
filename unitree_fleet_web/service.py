@@ -52,6 +52,11 @@ def _shoelace(points) -> float:
     return abs(total) / 2.0
 
 #: Joystick axes are normalised; the robot applies its own limits on top.
+#:
+#: The authoritative copy of this and the rates beside it is in `config.py`,
+#: which is what the console actually runs on. A duplicate `DEFAULT_MOTION_HZ`
+#: used to live here with a comment in `config.py` pointing at it — so editing
+#: the copy nobody read looked like it should change something, and did not.
 AXIS_LIMIT = 1.0
 
 #: Tools that call ``Guard.require_motion_enabled`` and so refuse in safe mode.
@@ -86,7 +91,7 @@ DANGEROUS_GATED_TOOLS = frozenset({"robot_lie_down"})
 #: remote does. The robot is a best-effort channel with no retransmit, so a
 #: single dropped frame must not be a visible stutter — it is re-sent anyway,
 #: which is why this is a fixed rate and not send-on-change.
-DEFAULT_MOTION_HZ = 50.0
+
 
 #: Ceiling on one robot's telemetry refresh.
 #:

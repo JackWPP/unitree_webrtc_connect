@@ -339,7 +339,11 @@ const KEY_LEGENDS = {
   both: [['W', 'A', 'S', 'D'], '同时驱动所有已选狗'],
   split_a: [['W', 'A', 'S', 'D'], '平移'],
   split_b: [['I', 'J', 'K', 'L'], '平移'],
-  per_source: [[], '按输入设备绑定（下方 bind）'],
+  // **Not a lie.** This used to read "按输入设备绑定（下方 bind）" and there is
+  // no bind control: the mode resolves to no robot, accepts keys, and moves
+  // nothing. Saying so is the difference between a mode that does not work
+  // and a console that looks broken.
+  per_source: [[], '此模式没有绑定界面 —— 按键会被接受，但不会驱动任何狗'],
 };
 
 function updateKeysHint() {
