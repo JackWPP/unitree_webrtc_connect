@@ -133,9 +133,21 @@ select {
 
 /* ── video ────────────────────────────────────────────────────────── */
 
+/* The picture is the reason the console exists, but at 16:9 of a full column
+   it was ~800px tall and pushed obstacle avoidance, lighting and the nudges
+   below the fold — you had to scroll to reach a stop button's neighbours.
+   Capped to a share of the viewport instead: still the largest thing on the
+   card, no longer the only thing on screen. */
 .video-wrap {
+  --video-max-h: min(42vh, 460px);
   position: relative;
   aspect-ratio: 16 / 9;
+  /* Width follows the height cap rather than staying full-width and letting
+     `object-fit: contain` letterbox the sides — the picture is 16:9 and the
+     box should be too, at whatever size it ends up. */
+  width: min(100%, calc(var(--video-max-h) * 16 / 9));
+  max-height: var(--video-max-h);
+  margin: 0 auto;
   background: #0c0e12;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -234,7 +246,22 @@ select {
 }
 .ctl-group > summary:hover { color: var(--fg); }
 .ctl-group[open] > summary { color: var(--fg); }
-.ctl-group > summary .count { color: var(--muted); font-size: 11px; }
+.ctl-group > summary .count {
+  color: var(--muted);
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 6px;
+  margin-left: auto;
+}
+/* A bare row of group names does not read as interactive. */
+.ctl-group > summary::before {
+  content: '▸';
+  font-size: 10px;
+  color: var(--muted);
+  transition: transform 0.12s ease;
+}
+.ctl-group[open] > summary::before { content: '▾'; }
 .ctl-body {
   display: flex;
   flex-wrap: wrap;
