@@ -1,0 +1,362 @@
+"""The closed loop, against an arena that answers back.
+
+The unit tests in `test_console_formation.py` check geometry against pictures
+that can be worked out by hand. This file checks the *loop*: plan, command,
+look again, decide — against a simulated arena that renders frames from the
+dogs' poses and **moves them when `robot_move` is called**.
+
+Without that, the loop's most important property is untestable: that a wrong
+speed constant costs iterations rather than accuracy. A static replay camera
+would let the loop "converge" on a picture that never changed.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import time
+from pathlib import Path
+
+import pytest
+
+np = pytest.importorskip("numpy")
+cv2 = pytest.importorskip("cv2")
+
+from unitree_robot_agent.vision.markers import default_markers, render_tag  # noqa: E402
+from unitree_fleet_web.formation import Formation  # noqa: E402
+
+CALIBRATION = {
+    "image_points": [[80, 80], [720, 80], [720, 720], [80, 720]],
+    "world_points": [[0, 4], [4, 4], [4, 0], [0, 0]],
+    "tag_height_m": 0.0,
+    "camera_height_m": 0.0,
+}
+
+MARKERS = default_markers(["dog1", "dog2"])
+
+
+def render(poses, *, size: int = 800):
+    """The arena as the camera would see it, from the dogs' poses."""
+    frame = np.full((size, size), 255, dtype=np.uint8)
+    inverse = np.linalg.inv(cv2.getPerspectiveTransform(
+        np.float32(CALIBRATION["image_points"]),
+        np.float32(CALIBRATION["world_points"]),
+    ))
+    for marker, (x, y, heading) in zip(MARKERS, poses):
+        tag = render_tag(marker)
+        tag_size, half = 0.30, 0.15
+        theta = math.radians(heading)
+        nose = (math.cos(theta), math.sin(theta))
+        right = (math.sin(theta), -math.cos(theta))
+
+        def corner(forward, side):
+            return (x + nose[0] * forward + right[0] * side,
+                    y + nose[1] * forward + right[1] * side)
+
+        world = [corner(half, -half), corner(half, half),
+                 corner(-half, half), corner(-half, -half)]
+        projected = []
+        for wx, wy in world:
+            v = inverse @ np.array([wx, wy, 1.0])
+            projected.append((v[0] / v[2], v[1] / v[2]))
+        source = np.float32([[0, 0], [tag.shape[1], 0],
+                             [tag.shape[1], tag.shape[0]], [0, tag.shape[0]]])
+        drawn = cv2.warpPerspective(
+            tag, cv2.getPerspectiveTransform(source, np.float32(projected)),
+            (size, size), borderValue=255,
+        )
+        frame = np.minimum(frame, drawn)
+    return frame
+
+
+class SimulatedArena:
+    """A camera over dogs that actually move when they are told to.
+
+    It models the thing the loop has to survive: `robot_move` takes a
+    **normalised** speed, so how far a step travels depends on a constant. This
+    one deliberately picks a constant different from the loop's guess, so the
+    test proves the loop converges *despite* being wrong about it — which is the
+    entire reason the loop exists.
+    """
+
+    def __init__(self, poses, *, max_speed_mps: float = 1.9):
+        self.poses = [list(pose) for pose in poses]
+        self.max_speed_mps = max_speed_mps
+        self.commands = []
+        self._frame = None
+        # A realistic monotonic clock, not 0.0. The detection loop skips a frame
+        # whose timestamp equals the last one it processed, and it starts at
+        # 0.0 — so a double starting there presents a frame the loop treats as
+        # already seen and never processes at all.
+        self._at = time.monotonic()
+
+    # ── the camera ──
+
+    def latest(self):
+        from unitree_robot_agent.vision.arena import Frame
+
+        self._frame = Frame(image=render(self.poses), at=self._at)
+        return self._frame
+
+    @property
+    def running(self):
+        return True
+
+    def status(self):
+        return {"source": "simulated", "state": "ok", "error": "", "age_s": 0.0,
+                "size": [800, 800], "decoded": 1, "dropped": 0}
+
+    def close(self):
+        pass
+
+    async def aclose(self):
+        pass
+
+    def tick(self, dt: float = 0.05):
+        """A new frame. The loop waits for this, so the test drives it."""
+        self._at += dt
+
+    # ── the robot ──
+
+    def apply_move(self, robot_id: str, args: dict) -> None:
+        """Exactly what the robot would do with a normalised command."""
+        self.commands.append((robot_id, dict(args)))
+        index = [m.robot_id for m in MARKERS].index(robot_id)
+        duration = float(args.get("duration_s") or 0.0)
+        # The robot's own maximum, which is *not* what the loop assumed.
+        vx = float(args.get("vx") or 0.0) * self.max_speed_mps * duration
+        vy = float(args.get("vy") or 0.0) * self.max_speed_mps * duration
+        x, y, heading = self.poses[index]
+        theta = math.radians(heading)
+        nose = (math.cos(theta), math.sin(theta))
+        left = (-math.sin(theta), math.cos(theta))
+        self.poses[index] = [
+            x + nose[0] * vx + left[0] * vy,
+            y + nose[1] * vx + left[1] * vy,
+            heading,
+        ]
+        self.tick()
+
+    def apply_turn(self, robot_id: str, degrees: float) -> None:
+        index = [m.robot_id for m in MARKERS].index(robot_id)
+        self.poses[index][2] += degrees
+        self.tick()
+
+
+@pytest.fixture
+def loop_service(tmp_path):
+    import json
+
+    from unitree_robot_agent.fleet import FleetManager, Roster
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps(CALIBRATION), encoding="utf-8")
+    roster = Roster.from_mapping(
+        {"state_dir": str(tmp_path / "state"), "default": "dog1", "robots": [
+            {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+            {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"}]}
+    )
+    config = ConsoleConfig(host="127.0.0.1", deadman_s=0.5,
+                           arena_camera="sim", arena_calibration=str(path))
+    service = ConsoleService(FleetManager(roster, backend="mock", audit_to_stderr=False),
+                             config=config)
+    service.start_arena()
+    return service
+
+
+def wire(service, arena):
+    """Point the service at the simulated arena, commands and all.
+
+    **Both halves matter.** Setting `_camera` makes the service *see* the
+    simulated dogs; routing `robot_move` and `robot_turn` into
+    `SimulatedArena.apply_*` makes it *move* them. Wiring only the camera gives
+    a loop that commands a real robot nobody is watching and measures a picture
+    that never changes — which is exactly the failure mode the first version of
+    these tests had, and it reported `no_progress` rather than anything that
+    pointed at the test.
+    """
+    service._camera = arena
+    original = service.call_tool
+
+    async def routed(robot_id, tool, arguments=None):
+        arguments = dict(arguments or {})
+        if tool == "robot_move":
+            arena.apply_move(robot_id, arguments)
+            return {"ok": True}
+        if tool == "robot_turn":
+            arena.apply_turn(robot_id, float(arguments.get("degrees") or 0.0))
+            return {"ok": True}
+        return await original(robot_id, tool, arguments)
+
+    service.call_tool = routed  # type: ignore[assignment]
+    return service
+
+
+async def _settled(service, arena, *, seconds: float = 4.0):
+    """Start the detector and wait for the first real measurement."""
+    import asyncio as _asyncio
+
+    wire(service, arena)
+    detector = _asyncio.create_task(service._arena_loop())
+    for _ in range(int(seconds / 0.05)):
+        await _asyncio.sleep(0.05)
+        if service.arena_state()["state"] == "ok":
+            return detector
+    detector.cancel()
+    raise AssertionError("the simulated arena never produced a measurement")
+
+
+async def test_the_loop_closes_the_gap(loop_service):
+    """1.8 m apart, told to be 1.0 — a misalignment to correct, not a march
+    across the room.
+
+    The gap is chosen to be inside the default budget on purpose. A step travels
+    appreciably less than `MAX_STEP_M` once the normalised speed is worked
+    through, so six steps close about a metre; a test asking for more would be
+    testing the budget rather than the loop.
+    """
+    arena = SimulatedArena([(1.0, 2.0, 0.0), (2.8, 2.0, 0.0)])
+    detector = await _settled(loop_service, arena)
+    try:
+        result = await loop_service.align_formation(
+            Formation(distance_m=1.0, bearing_deg=0.0, mover="b"),
+            max_steps=6, settle_s=0.05,
+        )
+    finally:
+        detector.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await detector
+
+    assert result["outcome"] == "converged", result
+    assert result["steps"], "it converged without moving anything"
+
+    # Every step measured again and the error shrank each time, which is what
+    # "closed loop" has to mean — and what an open-loop plan cannot do.
+    errors = [abs(step["measured"]["distance_error_m"]) for step in result["steps"]]
+    assert errors == sorted(errors, reverse=True), errors
+    assert math.dist(arena.poses[0][:2], arena.poses[1][:2]) == pytest.approx(
+        1.0, abs=0.12
+    )
+
+
+async def test_it_converges_despite_a_wrong_speed_constant(loop_service):
+    """**The reason the loop exists.**
+
+    The simulated robot's maximum is 1.9 m/s and the planner assumes 3.0, so
+    every step lands short of where it was aimed. An open-loop plan would stop
+    there, confidently in the wrong place; the loop measures again and takes
+    another step.
+    """
+    # A 0.6 m gap, which takes more than one step because the planner's speed
+    # constant is wrong by a third.
+    arena = SimulatedArena([(1.4, 2.0, 0.0), (3.0, 2.0, 0.0)], max_speed_mps=1.9)
+    detector = await _settled(loop_service, arena)
+    try:
+        result = await loop_service.align_formation(
+            Formation(distance_m=1.0, bearing_deg=0.0, mover="b"),
+            max_steps=8, settle_s=0.05,
+        )
+    finally:
+        detector.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await detector
+
+    assert result["outcome"] == "converged", result
+    assert len(result["steps"]) > 1, "one shot was enough, so nothing was proven"
+    assert result["outcome"] == "converged", result
+
+    final = arena.poses
+    assert math.dist(final[0][:2], final[1][:2]) == pytest.approx(1.0, abs=0.15)
+
+
+async def test_an_already_correct_formation_is_left_alone(loop_service):
+    """Pressing the button twice must not shuffle two robots that are already
+    where they should be."""
+    arena = SimulatedArena([(1.0, 2.0, 0.0), (2.0, 2.0, 0.0)])
+    detector = await _settled(loop_service, arena)
+    try:
+        result = await loop_service.align_formation(
+            Formation(distance_m=1.0, bearing_deg=0.0), settle_s=0.05,
+        )
+    finally:
+        detector.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await detector
+
+    assert result["outcome"] == "converged"
+    assert result["steps"] == []
+    assert arena.commands == []
+
+
+async def test_it_stops_when_it_stops_making_progress(loop_service):
+    """A loop chasing a target it cannot reach does not fail, it oscillates —
+    and two robots oscillating at each other in a room is worse than two robots
+    standing slightly wrong."""
+    arena = SimulatedArena([(1.0, 2.0, 0.0), (4.0, 2.0, 0.0)])
+
+    # Commands do nothing at all: the robot is held, or a wheel is off the
+    # ground, or the speed constant is wrong by more than a step can absorb.
+    def ignore(robot_id, args):
+        arena.commands.append((robot_id, dict(args)))
+        arena.tick()
+
+    loop_service.state.estop.release  # noqa: B018 - no latch in this test
+    detector = await _settled(loop_service, arena)
+    arena.apply_move = ignore  # type: ignore[assignment]
+    try:
+        result = await loop_service.align_formation(
+            Formation(distance_m=1.0, bearing_deg=0.0, mover="b"),
+            max_steps=6, settle_s=0.02,
+        )
+    finally:
+        detector.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await detector
+
+    assert result["outcome"] == "no_progress", result
+    assert "没有变小" in result["detail"]
+    assert len(result["steps"]) <= 2, "it kept going after learning nothing"
+
+
+async def test_it_refuses_without_a_measurement(loop_service):
+    """Driving on from a stale position is driving blind."""
+    loop_service._camera = None
+    result = await loop_service.align_formation(Formation(), settle_s=0.02)
+    assert result["outcome"] == "no_measurement"
+    assert result["steps"] == []
+
+
+async def test_the_estop_stops_it(loop_service):
+    """A latched stop has to stop this too, and be checked every step rather
+    than once at the start."""
+    arena = SimulatedArena([(1.0, 2.0, 0.0), (4.0, 2.0, 0.0)])
+    wire(loop_service, arena)
+    from unitree_fleet_web.state import EStopScope
+
+    loop_service.state.estop.engage(
+        scope=EStopScope.ALL, robot_id="", reason="test"
+    )
+    result = await loop_service.align_formation(Formation(mover="b"), settle_s=0.02)
+    assert result["outcome"] == "estopped"
+
+
+async def test_every_step_is_recorded(loop_service):
+    """So the operator can see what it did and why it stopped, rather than
+    being told "not converged"."""
+    arena = SimulatedArena([(0.5, 2.0, 0.0), (3.5, 2.0, 0.0)])
+    detector = await _settled(loop_service, arena)
+    try:
+        result = await loop_service.align_formation(
+            Formation(distance_m=1.0, mover="b"), max_steps=3, settle_s=0.02,
+        )
+    finally:
+        detector.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await detector
+
+    assert result["steps"]
+    step = result["steps"][0]
+    assert step["moves"], "a step with no commands is not a step"
+    assert "distance_error_m" in step["measured"]
+    assert step["measured"]["distance_m"] > 0

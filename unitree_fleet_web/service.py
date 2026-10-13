@@ -26,6 +26,7 @@ from unitree_robot_agent.fleet import FleetManager
 from unitree_robot_agent.server import build_server
 
 from .config import ConsoleConfig
+from .formation import Formation, Plan
 from .motion import MotionController, MotionLimits
 from .posture import PostureBelief
 from .routines import ROUTINES, validate as validate_routine
@@ -1924,6 +1925,151 @@ class ConsoleService:
             "adequate": calibration.adequate,
             "residual_m": round(calibration.residual_m, 3),
         }
+
+    # ── formation ────────────────────────────────────────────────────
+
+    async def align_formation(
+        self,
+        target: "Formation",
+        *,
+        max_steps: int = 6,
+        tolerance_m: float = 0.10,
+        tolerance_deg: float = 8.0,
+        settle_s: float = 0.6,
+    ) -> Dict[str, Any]:
+        """Drive the pair into formation, measuring after every step.
+
+        **Closed loop, because the open-loop version cannot exist.** A move is
+        ordered as a fraction of the robot's own maximum speed for a duration,
+        and nobody has measured what that maximum is — so a step lands somewhere
+        near where it was aimed and the next measurement decides what to do
+        about it.
+
+        Four ways this stops, and all of them matter more than the fifth step
+        would:
+
+        * **Converged** — within tolerance.
+        * **No progress** — the error did not shrink, so the constants are wrong
+          in a way another step will not fix. Continuing is how a formation loop
+          walks two robots into a wall while chasing a number.
+        * **Lost the measurement** — a dog left the frame, or the camera went
+          stale. Driving on from a stale position is driving blind.
+        * **E-stop** — checked every step, because a latched stop must stop
+          this too.
+
+        Every step is recorded, so the operator can see what it did and why it
+        stopped rather than being told "not converged".
+        """
+        from .formation import Formation, converged, plan
+
+        if not isinstance(target, Formation):
+            target = Formation(**target)
+
+        steps: List[Dict[str, Any]] = []
+
+        for index in range(max(1, max_steps)):
+            if self.state.estop.engaged:
+                return self._formation_result(steps, target, "estopped",
+                                              "急停锁存，编队中止")
+
+            poses = dict(self._arena.get("poses") or {})
+            state = self.arena_state()
+            if state.get("state") != "ok" or len(poses) < 2:
+                return self._formation_result(
+                    steps, target, "no_measurement",
+                    "看不到两只狗 —— 相机没画面、出画了、或者没标定",
+                )
+
+            current = converged(poses, target,
+                                tolerance_m=tolerance_m, tolerance_deg=tolerance_deg)
+            if current["ready"]:
+                return self._formation_result(steps, target, "converged", "")
+
+            if steps:
+                # Progress is measured on the number that is supposed to shrink.
+                before = steps[-1].get("distance_error_m")
+                if before is not None and abs(current["distance_error_m"]) >= abs(before) - 0.01:
+                    return self._formation_result(
+                        steps, target, "no_progress",
+                        f"间距差没有变小（{abs(before):.2f} m → "
+                        f"{abs(current['distance_error_m']):.2f} m）—— 再走也不会更好",
+                    )
+
+            move_plan = plan(poses, target, tolerance_m=tolerance_m,
+                             tolerance_deg=tolerance_deg)
+            if not move_plan.moves:
+                return self._formation_result(steps, target, "no_move",
+                                              "规划不出可执行的修正")
+
+            await self._apply_formation_step(move_plan)
+            await asyncio.sleep(max(0.0, settle_s))
+
+            # Wait for a frame taken *after* the moves, so the next decision is
+            # made on what is there now rather than on what was there before.
+            await self._wait_for_fresh_frame(timeout_s=2.5)
+
+            steps.append({
+                "index": index,
+                **move_plan.as_dict(),
+                "measured": current,
+            })
+
+        return self._formation_result(steps, target, "budget", "步数用完了")
+
+    @staticmethod
+    def _formation_result(
+        steps: List[Dict[str, Any]], target: "Formation", outcome: str, detail: str
+    ) -> Dict[str, Any]:
+        return {
+            "outcome": outcome,
+            "detail": detail,
+            "converged": outcome == "converged",
+            "target": target.as_dict(),
+            "steps": steps,
+        }
+
+    async def _apply_formation_step(self, move_plan: "Plan") -> None:
+        """Send one step's commands, all at once.
+
+        Concurrently, for the same reason `fleet_action` is: the two dogs are
+        supposed to act together, and a sequential loop would finish dog 1's
+        shuffle before starting dog 2's.
+        """
+        async def one(move) -> None:
+            args = move.move_args()
+            if args:
+                with contextlib.suppress(Exception):
+                    await self.call_tool(move.robot_id, "robot_move", args)
+            if abs(move.turn_deg) >= 1.0:
+                with contextlib.suppress(Exception):
+                    await self.call_tool(
+                        move.robot_id, "robot_turn",
+                        {"degrees": move.turn_deg, "confirm": True},
+                    )
+
+        await asyncio.gather(*(one(move) for move in move_plan.moves))
+
+    async def _wait_for_fresh_frame(self, *, timeout_s: float = 2.5) -> bool:
+        """Block until the arena has been re-measured, or give up.
+
+        `_arena` is only replaced when the detection loop has seen a *new* frame
+        and re-run, so comparing the timestamp is what makes the next decision
+        use a picture taken after the moves rather than before them.
+        """
+        camera = self._camera
+        if camera is None:
+            return False
+        frame = camera.latest()
+        before = frame.at if frame is not None else 0.0
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+            frame = camera.latest()
+            if frame is not None and frame.at > before:
+                # A frame arrived; give the loop a moment to have processed it.
+                await asyncio.sleep(0.15)
+                return True
+        return False
 
     def controls_payload(self, robot_id: str) -> Dict[str, Any]:
         """The control descriptors this robot can actually honour.

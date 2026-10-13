@@ -59,6 +59,13 @@ DEFAULT_TOLERANCE_DEG = 8.0
 
 #: Moves before the loop gives up. Bounded because a loop chasing a target it
 #: cannot reach does not fail, it oscillates.
+#:
+#: **What that budget is worth, measured rather than assumed:** a step is capped
+#: at `MAX_STEP_M` and a normalised command travels somewhat less than that in
+#: practice, so six steps close roughly **a metre**. This is a correction for two
+#: dogs that are nearly in formation, not a way to march them across a room —
+#: and a gap beyond the budget reports `budget` rather than quietly shuffling
+#: until it runs out of tries.
 DEFAULT_MAX_STEPS = 6
 
 
