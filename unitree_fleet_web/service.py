@@ -1958,6 +1958,26 @@ class ConsoleService:
                 code="no_calibration_path",
                 hint="用 --arena-calibration 指定一个可写的路径。",
             )
+        # **A mirror guard was written here and removed, and the reason is worth
+        # keeping.** Clicking the four corners in the reverse order does produce
+        # a valid homography that mirrors the arena — measured: the same camera,
+        # the same arena, only the order reversed, every distance identical and
+        # every direction wrong. The formation steers by direction, so it would
+        # drive the two dogs apart while reporting that it was bringing them
+        # together.
+        #
+        # The guard used the sign of the transform's determinant. **It was
+        # inverted.** The image's y axis points down and the arena's +y points
+        # away from the camera, so the *correct* calibration is
+        # orientation-reversing; measured against the order the page generates
+        # (`defaultWorldPoints`), the guard called the correct order mirrored
+        # and would have refused every legitimate calibration.
+        #
+        # There is no independent signal to check it against: the world corners
+        # are generated from the arena size, not measured, so nothing in the
+        # data says which way round is right. The mitigation is the one that
+        # already exists — the panel prescribes the order and the printed sheet
+        # shows it. See `Calibration.mirrored` for the measurement.
         try:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             Path(path).write_text(

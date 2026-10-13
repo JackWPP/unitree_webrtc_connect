@@ -88,6 +88,49 @@ class Calibration:
             )
         return self._matrix
 
+    @property
+    def mirrored(self) -> bool:
+        """Whether the transform reverses orientation. **Not an error signal.**
+
+        Kept because it is the honest record of an attempted guard, and because
+        the next person to think of it should find out here rather than by
+        breaking every calibration.
+
+        A reversed click order does produce a valid homography that mirrors the
+        arena — measured, same camera, same arena, only the order reversed:
+
+            image point (1100, 100)   normal -> (4.0, 0.0)
+                                      reversed -> (-0.0, 4.0)
+            distance between two dogs  both -> 1.60 m
+
+        The distances are identical and the directions are wrong, which is
+        genuinely dangerous: the formation steers by direction.
+
+        **But the determinant is the wrong way to detect it.** The image's y
+        axis points down and the arena's +y points *away from the camera*, so
+        the correct calibration is orientation-**reversing** and its determinant
+        is negative. Measured against the order the page itself generates
+        (`defaultWorldPoints`, "anticlockwise from the far-left corner"):
+
+            correct order   (80,80),(720,80),(720,720),(80,720)
+                          + (0,4),(4,4),(4,0),(0,0)
+                          -> projects (720,80) to (4.0, 4.0), which is right
+                          -> and this property says True
+
+        It would have refused every legitimate calibration. Worse, refusing is
+        the failure mode that looks like diligence.
+
+        There is no independent check available: the world corners are
+        *generated* from the arena size, not measured, so nothing in the data
+        says which way round is right. The mitigation is the one that already
+        exists — the panel prescribes the click order and the printed sheet
+        shows it.
+        """
+        matrix = self.matrix
+        return float(matrix[0][0]) * float(matrix[1][1]) - float(
+            matrix[0][1]
+        ) * float(matrix[1][0]) < 0
+
     def to_world(self, point: Point) -> Point:
         """Image pixels to metres on the calibrated plane."""
         import numpy as np
@@ -194,6 +237,7 @@ class Calibration:
             "adequate": self.adequate,
             "scale_factor": round(self.scale_factor, 3),
             "camera_world_xy": list(self.camera_world_xy) if self.camera_world_xy else None,
+            "mirrored": self.mirrored,
         }
 
     @staticmethod

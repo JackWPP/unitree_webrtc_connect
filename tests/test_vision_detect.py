@@ -347,3 +347,85 @@ def test_a_calibration_round_trips_through_json():
         original.to_world((400.0, 400.0))
     )
     assert restored.tag_height_m == 0.35
+
+
+# ─── an attempted guard that was wrong, and why ───────────────────────
+#
+# A reversed click order produces a valid homography that mirrors the arena:
+# the same camera, the same arena, only the order reversed, and every distance
+# comes out identical while every direction is wrong. That is real and it is
+# dangerous — the formation steers by direction.
+#
+# A guard was written for it using the sign of the transform's determinant. It
+# was **inverted**: the image's y axis points down and the arena's +y points
+# away from the camera, so the *correct* calibration is orientation-reversing.
+# Measured against the order the page generates (`defaultWorldPoints`), it
+# reported the correct order as mirrored and would have refused every
+# legitimate calibration.
+#
+# These tests pin the convention so the mistake cannot be made twice.
+
+
+def test_the_convention_the_page_actually_generates():
+    """`defaultWorldPoints(4, 4)` returns `[[0,4],[4,4],[4,0],[0,0]]` —
+    "anticlockwise from the far-left corner, with arena +y away from the
+    camera" — and the panel says to click 左上 → 右上 → 右下 → 左下.
+
+    That pairing is correct, and it projects the image's top-right corner to the
+    arena's far-right corner.
+    """
+    from unitree_robot_agent.vision.detect import Calibration
+
+    image = [(80, 80), (720, 80), (720, 720), (80, 720)]
+    world = [(0, 4), (4, 4), (4, 0), (0, 0)]
+    calibration = Calibration(image, world)
+
+    # The four by four check: image corners land on the arena corners they name.
+    assert calibration.to_world((80, 80)) == pytest.approx((0.0, 4.0), abs=0.05)
+    assert calibration.to_world((720, 80)) == pytest.approx((4.0, 4.0), abs=0.05)
+    assert calibration.to_world((720, 720)) == pytest.approx((4.0, 0.0), abs=0.05)
+    assert calibration.to_world((80, 720)) == pytest.approx((0.0, 0.0), abs=0.05)
+
+
+def test_the_correct_calibration_is_orientation_reversing():
+    """**The fact that made the guard wrong.**
+
+    Image y points down, arena +y points away from the camera, so the correct
+    map flips orientation and its determinant is negative. A guard that refuses
+    negative determinants refuses everything.
+    """
+    from unitree_robot_agent.vision.detect import Calibration
+
+    calibration = Calibration(
+        [(80, 80), (720, 80), (720, 720), (80, 720)],
+        [(0, 4), (4, 4), (4, 0), (0, 0)],
+    )
+    assert calibration.mirrored is True, (
+        "if this is ever False, the axis conventions have changed and the "
+        "reasoning in `Calibration.mirrored` needs revisiting"
+    )
+
+
+def test_a_reversed_click_order_produces_identical_distances():
+    """Why the failure is dangerous rather than obvious: **the numbers are the
+    right size.** An operator comparing separations would see nothing wrong."""
+    import math
+
+    from unitree_robot_agent.vision.detect import Calibration
+
+    world = [(0, 4), (4, 4), (4, 0), (0, 0)]
+    correct = Calibration([(80, 80), (720, 80), (720, 720), (80, 720)], world)
+    reversed_order = Calibration(
+        [(80, 80), (80, 720), (720, 720), (720, 80)], world
+    )
+
+    def separation(calibration):
+        return math.dist(
+            calibration.to_world((300, 400)), calibration.to_world((500, 400))
+        )
+
+    assert separation(correct) == pytest.approx(separation(reversed_order), abs=0.05)
+    # ...and the places are different, which is the half nothing reports.
+    assert correct.to_world((720, 80)) != pytest.approx(
+        reversed_order.to_world((720, 80)), abs=0.5
+    )
