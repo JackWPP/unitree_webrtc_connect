@@ -16,8 +16,10 @@ import logging
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
+from unitree_robot_agent.bridge import ToolBridge
 from unitree_robot_agent.errors import AgentError, UnknownRobot
 from unitree_robot_agent.fleet import FleetManager
+from unitree_robot_agent.server import build_server
 
 from .config import ConsoleConfig
 from .state import ConsoleState, EStopScope, InputMode
@@ -26,6 +28,54 @@ logger = logging.getLogger("unitree_fleet_web.service")
 
 #: Joystick axes are normalised; the robot applies its own limits on top.
 AXIS_LIMIT = 1.0
+
+#: The tools the console may invoke, by name.
+#:
+#: An allowlist rather than a passthrough, and deliberately so. The console is
+#: reachable over HTTP; handing it "call any tool" would expose
+#: `robot_fetch_key` (which returns a credential), `robot_doctor` and the audit
+#: tail to anything that can reach the port. These are the operations an
+#: operator legitimately needs, and every one of them still enforces its own
+#: guards — `confirm`, the dangerous-action gate, safe mode, rate limits — and
+#: still writes to the audit trail, because it is the same function the MCP
+#: server exposes.
+#:
+#: Not listed, on purpose:
+#:   * `robot_move` / `robot_joystick` / `robot_turn` — the console has its own
+#:     teleop endpoints, which carry the dead-man watchdog. Two paths to the
+#:     same actuators is one path too many.
+#:   * `robot_snapshot` — served as an MJPEG stream instead.
+#:   * `robot_fetch_key`, `robot_auth_status`, `robot_doctor`,
+#:     `robot_discover`, `robot_audit_tail` — diagnostics and credentials.
+CONSOLE_TOOLS = frozenset(
+    {
+        # reads
+        "robot_status",
+        "robot_get_posture",
+        "robot_list_actions",
+        "robot_lowstate",
+        "robot_errors",
+        "robot_fleet_status",
+        "robot_roster",
+        # posture and named actions
+        "robot_stand",
+        "robot_lie_down",
+        "robot_play_action",
+        "robot_switch_state",
+        "robot_arm_gesture",
+        # Go2 extras
+        "go2_motion_mode",
+        "go2_set_led",
+        "go2_get_vui",
+        "go2_obstacle_avoid",
+        "go2_set_volume",
+        "go2_set_brightness",
+        "go2_get_state",
+        # safety
+        "robot_stop",
+        "robot_stop_all",
+    }
+)
 
 
 def _clamp(value: Any, limit: float = AXIS_LIMIT) -> float:
@@ -68,6 +118,61 @@ class ConsoleService:
             self.state.focused = fleet.roster.default_id or fleet.ids[0]
         for rid in fleet.ids:
             self.state.video_enabled.setdefault(rid, True)
+
+        # A server bundle is built purely so the console can call the *tool*
+        # functions. Those are the single implementation of every guarded
+        # operation; a second copy here would be the one that forgets a guard.
+        # `fleet_from_env=False` because the fleet is already decided.
+        self._bridge: Optional[ToolBridge] = None
+        try:
+            default = fleet.resolve("") if fleet.ids else None
+            if default is not None:
+                bundle = build_server(default, fleet=fleet, fleet_from_env=False)
+                self._bridge = ToolBridge(bundle)
+        except Exception as exc:  # noqa: BLE001 - teleop must still work
+            logger.warning("tool bridge unavailable: %r", exc)
+
+    # ── tool access ──────────────────────────────────────────────────
+
+    @property
+    def tools_available(self) -> List[str]:
+        """Console-invocable tools that actually registered on this server.
+
+        Capability gating happens at registration, so a Go2 never offers
+        `robot_arm_gesture` and an R1 never offers `go2_set_led` — the console
+        should not offer a button that cannot work.
+        """
+        if self._bridge is None:
+            return []
+        present = self._bridge.names()
+        return sorted(CONSOLE_TOOLS & present)
+
+    async def call_tool(
+        self, robot_id: str, tool: str, arguments: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Invoke one allow-listed tool, bound to ``robot_id``."""
+        if tool not in CONSOLE_TOOLS:
+            raise AgentError(
+                f"{tool!r} is not available from the console.",
+                code="tool_not_allowed",
+                hint="Only the operations an operator needs are exposed here.",
+            )
+        self.fleet.get(robot_id)  # validates, raises UnknownRobot
+        if self._bridge is None:
+            raise AgentError(
+                "The tool bridge is not available on this server.",
+                code="tool_bridge_unavailable",
+                hint="Install the `agent` extra, or use the dedicated endpoints.",
+            )
+
+        payload = dict(arguments or {})
+        # The binding wrapper reads robot_id from the call arguments, so the
+        # tool acts on the robot the operator clicked.
+        payload["robot_id"] = robot_id
+        result = await self._bridge.call(tool, payload)
+        if isinstance(result, dict):
+            return result
+        return {"ok": True, "result": str(result)}
 
     # ── lifecycle ────────────────────────────────────────────────────
 

@@ -198,6 +198,13 @@ select {
 .pill.bad { color: #ffb4b4; border-color: var(--danger); }
 .pen.has-faults { border-color: #6b2b2b; }
 
+/* ── posture / actions ────────────────────────────────────────────── */
+
+.posture { display: flex; flex-wrap: wrap; gap: 6px; }
+.posture:empty { display: none; }
+.posture .btn { padding: 6px 10px; font-size: 13px; }
+.posture select { padding: 6px 8px; font-size: 13px; max-width: 100%; }
+
 /* ── pad ──────────────────────────────────────────────────────────── */
 
 .pad { display: flex; align-items: center; gap: 14px; }

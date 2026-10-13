@@ -50,9 +50,16 @@ agent = [
 # Dual-dog web console (unitree-fleet-console). Starlette already arrives with
 # the `agent` extra's `mcp`; it is named explicitly so the console can be
 # installed on its own.
+#
+# `mcp` is required because the console drives the *tool* functions rather
+# than reimplementing them: that is what keeps one set of guard rails
+# (`confirm`, the dangerous-action gate, safe mode, rate limiting, the audit
+# trail) instead of two that drift. The tool modules annotate with
+# `mcp.types.ToolAnnotations`, and building the server bundle needs the SDK.
 console = [
     "starlette>=0.37",
     "uvicorn>=0.27",
+    "mcp>=2.0",
 ]
 # Everything the bundled examples import (OpenCV windows, Flask LiDAR
 # plotter, sound card, MP3 conversion).

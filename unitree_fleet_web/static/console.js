@@ -134,6 +134,7 @@ function buildPens(fleet) {
       keys: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="keys"]`),
       faults: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="faults"]`),
       faultCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="fault-count"]`),
+      posture: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="posture"]`),
     };
     updateVideo(robot.robot_id, true);
   }
@@ -362,7 +363,96 @@ async function setMode(mode) {
   } catch (err) { toast('切换模式失败: ' + err.message, 'bad'); }
 }
 
-/* ── input ─────────────────────────────────────────────────────────── */
+/* ── posture / actions ─────────────────────────────────────────────── */
+
+/* Every button below calls the SAME guarded tool function the MCP server
+ * exposes, through /api/robot/<id>/tool. That means the `confirm` gate, the
+ * dangerous-action gate, safe mode, the rate limiter and the audit trail all
+ * apply unchanged.
+ *
+ * These buttons send `confirm: true`. That is a deliberate decision, not a
+ * bypass: for an LLM `confirm` is a separate deliberation step, but a human
+ * clicking a labelled button on a console *is* the confirmation. The gates
+ * that are not about human intent — safe mode, the dangerous-action
+ * allow-list, rate limiting — still refuse. */
+async function callTool(robotId, tool, args) {
+  try {
+    const payload = Object.assign({ tool, args: args || {} });
+    const result = await api(`/api/robot/${encodeURIComponent(robotId)}/tool`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (result && result.ok === false) {
+      toast(`${robotId} ${tool}: ${result.error || 'failed'}` +
+            (result.hint ? ' — ' + result.hint : ''), 'bad');
+    } else {
+      toast(`${robotId} ${tool} ok`, 'ok');
+    }
+    return result;
+  } catch (err) {
+    toast(`${robotId} ${tool}: ${err.message}`, 'bad');
+    return null;
+  }
+}
+
+function postureButton(robotId, label, tool, args) {
+  const button = document.createElement('button');
+  button.className = 'btn';
+  button.textContent = label;
+  button.addEventListener('click', () => callTool(robotId, tool, args));
+  return button;
+}
+
+async function buildPosture(robotId, available) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.posture) return;
+  entry.posture.textContent = '';
+
+  if (available.includes('robot_stand')) {
+    entry.posture.appendChild(
+      postureButton(robotId, '站立', 'robot_stand', { confirm: true }));
+  }
+  if (available.includes('robot_lie_down')) {
+    entry.posture.appendChild(
+      postureButton(robotId, '趴下', 'robot_lie_down', { confirm: true }));
+  }
+
+  if (!available.includes('robot_play_action')) {
+    if (!entry.posture.childElementCount) entry.posture.classList.add('hidden');
+    return;
+  }
+
+  // Ask the robot what it can actually do rather than hard-coding a list.
+  let actions = [];
+  try {
+    const listed = await api(`/api/robot/${encodeURIComponent(robotId)}/tool`, {
+      method: 'POST',
+      body: JSON.stringify({ tool: 'robot_list_actions', args: { include_dangerous: false } }),
+    });
+    actions = (listed && listed.actions) || [];
+  } catch (_) { /* leave the picker empty */ }
+
+  if (!actions.length) return;
+
+  const picker = document.createElement('select');
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '选择动作…';
+  picker.appendChild(placeholder);
+
+  for (const action of actions) {
+    const option = document.createElement('option');
+    option.value = action.name;
+    option.textContent = action.name;
+    picker.appendChild(option);
+  }
+  picker.addEventListener('change', () => {
+    const name = picker.value;
+    picker.value = '';
+    if (name) callTool(robotId, 'robot_play_action', { name, confirm: true });
+  });
+  entry.posture.appendChild(picker);
+}
 
 function groupFor(robotId) {
   if (state.mode !== 'split') return null;
@@ -537,6 +627,17 @@ async function boot() {
     state.focused = (snapshot.state && snapshot.state.focused) || firstId();
     document.getElementById('input-mode').value = state.mode;
     buildPens(snapshot.fleet);
+
+    // Only offer operations this robot registered — capability gating happens
+    // server-side, so an R1 never gets a Go2 LED button.
+    let available = [];
+    try {
+      available = (await api('/api/console/tools')).tools || [];
+    } catch (_) { /* read-only console */ }
+    state.tools = available;
+    for (const robot of snapshot.fleet.robots) {
+      buildPosture(robot.robot_id, available);
+    }
   } catch (err) {
     toast('无法读取机队信息: ' + err.message, 'bad');
     return;

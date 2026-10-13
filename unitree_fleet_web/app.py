@@ -226,6 +226,28 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
 
     # ── per-robot commands ───────────────────────────────────────────
 
+    async def get_console_tools(request) -> Response:
+        """Which guarded operations this console can invoke.
+
+        Capability-gated server-side, so the UI never offers a button that
+        cannot work on this robot.
+        """
+        return JSONResponse({"tools": service.tools_available})
+
+    async def post_robot_tool(request) -> Response:
+        robot_id = request.path_params["robot_id"]
+        body = await _read_body(request)
+        tool = str(body.get("tool") or "")
+        arguments = body.get("args") or {}
+        if not isinstance(arguments, dict):
+            return _error_response(
+                AgentError("`args` must be an object.", code="bad_args")
+            )
+        try:
+            return JSONResponse(await service.call_tool(robot_id, tool, arguments))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
     async def get_robot_status(request) -> Response:
         robot_id = request.path_params["robot_id"]
         try:
@@ -384,7 +406,9 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/fleet/bind", post_bind, methods=["POST"]),
         Route("/api/fleet/teleop", post_fleet_teleop, methods=["POST"]),
         Route("/api/fleet/release", post_fleet_release, methods=["POST"]),
+        Route("/api/console/tools", get_console_tools),
         Route("/api/robot/{robot_id}/status", get_robot_status),
+        Route("/api/robot/{robot_id}/tool", post_robot_tool, methods=["POST"]),
         Route("/api/robot/{robot_id}/teleop", post_robot_teleop, methods=["POST"]),
         Route("/api/robot/{robot_id}/move", post_robot_move, methods=["POST"]),
         Route("/api/robot/{robot_id}/stop", post_robot_stop, methods=["POST"]),

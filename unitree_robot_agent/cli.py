@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .bridge import ToolBridge
 from .config import AgentConfig, config_from_env
 from .runtime import create_runtime
 from .server import ServerBundle, build_server, serve_async
@@ -554,16 +555,7 @@ def _get_tool(bundle: ServerBundle, name: str):
 
 async def _invoke(bundle: ServerBundle, tool_name: str, arguments: Dict[str, Any]):
     """Call a registered tool directly (used by the CLI, not by the MCP client)."""
-    tool = _get_tool(bundle, tool_name)
-    if tool is None:
-        return {"ok": False, "error": "tool_not_found", "message": f"{tool_name} is not registered"}
-    fn = getattr(tool, "fn", None) or getattr(tool, "func", None)
-    if fn is None:
-        return {"ok": False, "error": "tool_not_callable", "message": f"{tool_name} has no callable"}
-    result = fn(**arguments)
-    if asyncio.iscoroutine(result):
-        result = await result
-    return result
+    return await ToolBridge(bundle).call(tool_name, arguments)
 
 
 async def _ainvoke(bundle: ServerBundle, tool_name: str, arguments: Dict[str, Any]):

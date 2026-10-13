@@ -325,3 +325,67 @@ def test_the_console_javascript_renders_the_fault_fields(open_client):
     source = open_client.get("/static/console.js").text
     for field in ("faults", "faults_authoritative", "source_label", "motor", "code_hex"):
         assert field in source, f"console.js no longer reads {field}"
+
+
+# ─── console tool bridge ──────────────────────────────────────────────
+
+
+def test_the_console_exposes_an_allowlist_not_a_passthrough(open_client):
+    """A generic "call any tool" endpoint reachable over HTTP would expose
+    `robot_fetch_key` (which returns a credential) and the audit tail."""
+    tools = open_client.get("/api/console/tools").json()["tools"]
+    assert "robot_stand" in tools
+    assert "robot_status" in tools
+    for forbidden in ("robot_fetch_key", "robot_auth_status", "robot_doctor",
+                      "robot_discover", "robot_audit_tail", "robot_snapshot",
+                      "robot_move", "robot_joystick", "robot_turn"):
+        assert forbidden not in tools, f"{forbidden} must not be console-reachable"
+
+
+def test_an_off_allowlist_tool_is_refused(open_client):
+    response = open_client.post(
+        "/api/robot/dog1/tool", json={"tool": "robot_fetch_key", "args": {}}
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "tool_not_allowed"
+
+
+def test_a_tool_call_goes_through_the_same_guards_as_mcp(open_client):
+    """Not a reimplementation: the console calls the tool function itself, so
+    `confirm`, the dangerous-action gate and safe mode all still apply."""
+    refused = open_client.post(
+        "/api/robot/dog1/tool", json={"tool": "robot_stand", "args": {}}
+    ).json()
+    assert refused["ok"] is False
+    assert refused["error"] == "confirm_required"
+
+    accepted = open_client.post(
+        "/api/robot/dog1/tool",
+        json={"tool": "robot_stand", "args": {"confirm": True}},
+    ).json()
+    assert accepted["ok"] is True
+    assert accepted["robot_id"] == "dog1"
+
+
+def test_a_tool_call_acts_only_on_the_named_robot(open_client):
+    open_client.post(
+        "/api/robot/dog2/tool",
+        json={"tool": "robot_stand", "args": {"confirm": True}},
+    )
+    payload = open_client.get("/api/fleet/status").json()
+    connected = {r["robot_id"]: r["connected"] for r in payload["robots"]}
+    assert connected["dog2"] is True
+    assert connected["dog1"] is False
+
+
+def test_an_unknown_robot_tool_call_is_a_404(open_client):
+    response = open_client.post(
+        "/api/robot/dog9/tool", json={"tool": "robot_stand", "args": {"confirm": True}}
+    )
+    assert response.status_code == 404
+
+
+def test_the_js_offers_only_the_tools_the_server_advertises(open_client):
+    source = open_client.get("/static/console.js").text
+    assert "/api/console/tools" in source
+    assert "/api/robot/" in source and "/tool" in source
