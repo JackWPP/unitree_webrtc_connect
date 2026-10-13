@@ -221,13 +221,19 @@ select, input[type="range"] { accent-color: var(--accent); }
 
 /* ── stage: picture beside the pad ────────────────────────────────── */
 
-.stage { display: flex; gap: 10px; align-items: stretch; }
+.stage { display: flex; gap: 10px; align-items: flex-start; }
 
+/* Capped, because the picture must not push the controls off the screen.
+   On a 1000 px window in one column the video wanted 450 px of height, which
+   put the tab panels — posture, sense, settings — below the fold on a 900 px
+   screen. The controls are what the page is for; the picture is how you check
+   they worked. `object-fit: contain` letterboxes rather than distorts. */
 .video-wrap {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
   aspect-ratio: 16 / 9;
+  max-height: min(34vh, 400px);
   background: #090b0e;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
