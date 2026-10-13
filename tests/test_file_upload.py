@@ -200,3 +200,148 @@ async def test_progress_is_reported_per_chunk_and_ends_at_100():
 )
 def test_file_status_reads_the_shapes_we_know(response, expected):
     assert _file_status(response) == expected
+
+
+# ─── the download half ────────────────────────────────────────────────
+
+
+def _downloader(response):
+    class FakePubSub:
+        async def publish(self, topic, data=None, msg_type=None):
+            return response
+
+    from unitree_webrtc_connect.msgs.rtc_inner_req import WebRTCDataChannelFileDownloader
+
+    return WebRTCDataChannelFileDownloader(FakeChannel(), FakePubSub())
+
+
+async def test_a_download_returns_the_decoded_bytes():
+    import base64 as b64
+
+    payload = b"\x00\x01binary file contents"
+    encoded = b64.b64encode(payload).decode()
+    up = _downloader({"info": {"file": {"data": encoded}}})
+
+    assert await up.download_file("/unitree/map.pcd") == payload
+
+
+async def test_a_download_failure_raises_instead_of_returning_a_string():
+    """The success value is `bytes`; returning "error" meant a caller that
+    skipped the type check would write that word to a file and move on."""
+    from unitree_webrtc_connect import FileDownloadError
+
+    up = _downloader({"info": {"file": {}}})
+    with pytest.raises(FileDownloadError, match="no data"):
+        await up.download_file("/unitree/map.pcd")
+
+
+async def test_a_download_that_blows_up_raises_with_the_path():
+    from unitree_webrtc_connect import FileDownloadError
+    from unitree_webrtc_connect.msgs.rtc_inner_req import WebRTCDataChannelFileDownloader
+
+    class Exploding:
+        async def publish(self, topic, data=None, msg_type=None):
+            raise RuntimeError("link dropped")
+
+    up = WebRTCDataChannelFileDownloader(FakeChannel(), Exploding())
+    with pytest.raises(FileDownloadError, match="/unitree/map.pcd"):
+        await up.download_file("/unitree/map.pcd")
+
+
+async def test_a_download_reports_progress_once_complete():
+    import base64 as b64
+
+    seen = []
+    up = _downloader({"info": {"file": {"data": b64.b64encode(b"x").decode()}}})
+    await up.download_file("/unitree/map.pcd", progress_callback=seen.append)
+    assert seen == [100]
+
+
+async def test_a_cancelled_download_says_so():
+    """Cancellation happens *during* the request, from another task.
+
+    `download_file` resets the flag on entry, so setting it beforehand is
+    wiped — which is correct: the flag means "cancel the transfer in flight".
+    """
+    import asyncio
+
+    from unitree_webrtc_connect.msgs.rtc_inner_req import WebRTCDataChannelFileDownloader
+
+    class SlowPubSub:
+        async def publish(self, topic, data=None, msg_type=None):
+            await asyncio.sleep(0.05)
+            return {"info": {"file": {"data": ""}}}
+
+    up = WebRTCDataChannelFileDownloader(FakeChannel(), SlowPubSub())
+    downloading = asyncio.create_task(up.download_file("/unitree/map.pcd"))
+    await asyncio.sleep(0.01)
+    up.cancel()
+    assert await downloading == "cancel"
+
+
+# ─── the resolver that stitches the chunks ────────────────────────────
+
+
+def test_the_resolver_joins_file_chunks_into_one_blob():
+    """No coverage existed for the chunk stitching either.
+
+    The downloader only ever sees the *joined* payload, so a resolver that
+    dropped the last chunk or appended out of order would corrupt every map
+    with nothing to catch it.
+
+    Note the protocol shape, which is easy to get wrong: the robot base64s the
+    whole file and then slices that base64 *string* into chunks. It does not
+    base64 each chunk independently, so the chunks must be concatenated before
+    decoding — which is exactly what the resolver does.
+    """
+    import base64 as b64
+
+    from unitree_webrtc_connect.msgs.future_resolver import FutureResolver
+
+    payload = bytes(range(256)) * 40
+    encoded = b64.b64encode(payload).decode()
+    size = len(encoded) // 3 + 1
+    chunks = [encoded[i:i + size] for i in range(0, len(encoded), size)]
+    assert len(chunks) == 3
+
+    resolver = FutureResolver()
+    message = None
+    for index, chunk in enumerate(chunks, start=1):
+        message = {
+            "type": "rtc_inner_req",
+            "topic": "",
+            "info": {
+                "req_uuid": "req_abc",
+                "req_type": "request_static_file",
+                "file": {
+                    "enable_chunking": True,
+                    "chunk_index": index,
+                    "total_chunk_num": len(chunks),
+                    "data": chunk,
+                },
+            },
+        }
+        resolver.run_resolve_for_topic(message)
+
+    joined = message["info"]["file"]["data"]
+    assert b64.b64decode(joined) == payload
+    # The per-request storage is cleaned up.
+    assert resolver.chunk_data_storage == {}
+
+
+def test_the_resolver_rejects_a_zero_chunk_count():
+    from unitree_webrtc_connect.msgs.future_resolver import FutureResolver
+
+    resolver = FutureResolver()
+    with pytest.raises(ValueError, match="cannot be zero"):
+        resolver.run_resolve_for_topic(
+            {
+                "type": "rtc_inner_req",
+                "topic": "",
+                "info": {
+                    "req_uuid": "x",
+                    "req_type": "request_static_file",
+                    "file": {"enable_chunking": True, "chunk_index": 1, "total_chunk_num": 0},
+                },
+            }
+        )

@@ -14,6 +14,16 @@ class FileUploadError(RuntimeError):
     """
 
 
+class FileDownloadError(RuntimeError):
+    """A chunked file download did not complete.
+
+    The downloader used to return the *string* ``"error"`` on failure, in a
+    function whose success value is ``bytes``. A caller that skipped the type
+    check would write "error" to a file and move on. It raises now, so the
+    failure cannot be mistaken for content.
+    """
+
+
 def _file_status(response):
     """Pull ``file_status`` out of a chunk acknowledgement, if present.
 
@@ -223,7 +233,13 @@ class WebRTCDataChannelFileDownloader:
         self.chunk_data_storage = {}
 
     async def download_file(self, file_path, chunk_size=60*1024, progress_callback=None):
-        """Downloads a file in chunks with the possibility to cancel the download."""
+        """Download a file, returning its bytes.
+
+        Returns ``"cancel"`` if cancelled, and raises
+        :class:`FileDownloadError` on failure — the string ``"error"`` it used
+        to return is indistinguishable from content to a caller that is not
+        checking types, and this function's success value is ``bytes``.
+        """
         self.cancel_download = False
 
         try:
@@ -243,14 +259,16 @@ class WebRTCDataChannelFileDownloader:
             if self.cancel_download:
                 logging.info("Download canceled.")
                 return "cancel"
-            
+
             # Extract the complete data after all chunks have been combined in the resolver
             complete_data = response.get("info", {}).get("file", {}).get("data")
 
             if not complete_data:
-                logging.error("Failed to get the file data.")
-                return "error"
-            
+                raise FileDownloadError(
+                    f"the robot returned no data for {file_path}; the file is "
+                    f"missing, unreadable, or the reply was not a file response"
+                )
+
             # Decode the Base64-encoded data
             decoded_data = base64.b64decode(complete_data)
 
@@ -260,9 +278,14 @@ class WebRTCDataChannelFileDownloader:
 
             return decoded_data
 
+        except FileDownloadError:
+            raise
         except Exception as e:
-            logging.error("Failed to download file:", e)
-            return "error"
+            raise FileDownloadError(f"downloading {file_path} failed: {e}") from e
+
+    def cancel(self):
+        """Cancel the download in flight."""
+        self.cancel_download = True
 
 def cancel(self):
     """Cancel the ongoing download."""
