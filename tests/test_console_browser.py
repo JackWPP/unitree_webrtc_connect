@@ -344,3 +344,30 @@ def test_each_pen_has_an_audit_panel(rendered):
         assert 'data-role="audit-wrap"' in block
         assert 'data-role="audit"' in block
         assert "最近操作" in block
+
+
+def test_the_drive_control_is_a_joystick_not_a_button_pad(rendered):
+    """Six arrow buttons are six binary inputs for two continuous axes: you
+    cannot hold "half forward", and a diagonal costs two simultaneous presses.
+    The replacement is a draggable stick on the same axes WASD/QE drive."""
+    for robot_id in ("dog1", "dog2"):
+        block = pen_block(rendered, robot_id)
+        assert 'class="joy"' in block
+        assert 'data-role="knob-move"' in block
+        assert 'data-role="stick-turn"' in block
+        assert 'data-role="knob-turn"' in block
+        # ...and the pad is gone.
+        assert "pad-key" not in block
+        assert "pad-grid" not in block
+
+
+def test_the_joystick_contract_in_the_source(console_js):
+    """The three things an on-screen stick gets wrong if nobody checks:
+    pointer capture (a fast drag leaving the circle stops steering), unit-disc
+    clamping (a corner gives 1.41 of full deflection), and release-to-zero
+    (the dead-man is meaningless if a lost pointerup leaves it deflected)."""
+    assert "setPointerCapture" in console_js
+    assert "lostpointercapture" in console_js
+    assert "length > 1" in console_js, "no unit-disc clamp"
+    assert "releaseSticks" in console_js
+    assert "window.addEventListener('blur'" in console_js

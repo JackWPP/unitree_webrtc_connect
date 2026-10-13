@@ -243,34 +243,104 @@ select, input[type="range"] { accent-color: var(--accent); }
   justify-content: center;
   gap: 6px;
 }
-.pad-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 40px);
-  grid-template-rows: repeat(2, 40px);
-  gap: 5px;
-}
-.pad-key {
-  background: var(--panel-2);
+/* ── joystick ─────────────────────────────────────────────────────── */
+
+.drive { gap: 8px; }
+
+.joy {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
   border: 1px solid var(--line);
-  color: var(--fg);
-  border-radius: var(--radius-sm);
-  font-size: 15px;
-  cursor: pointer;
+  background: radial-gradient(circle at 50% 50%, var(--panel-2), var(--panel));
+  /* Without this the browser claims a drag as a scroll and the stick never
+     moves on a touch screen or a trackpad. */
+  touch-action: none;
+  cursor: grab;
   user-select: none;
-  transition: background 0.1s ease, border-color 0.1s ease;
+  flex: none;
 }
-.pad-key:hover { background: var(--panel-3); }
-.pad-key.active, .pad-key:active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #06121f;
+.joy:active { cursor: grabbing; }
+/* Centre crosshair, so "centred" is a visible place rather than a guess. */
+.joy-ring::before, .joy-ring::after {
+  content: '';
+  position: absolute;
+  background: var(--line);
+  opacity: 0.7;
 }
+.joy-ring::before { left: 50%; top: 12px; bottom: 12px; width: 1px; }
+.joy-ring::after { top: 50%; left: 12px; right: 12px; height: 1px; }
+
+.joy-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  background: var(--panel-3);
+  border: 1px solid #3a4353;
+  box-shadow: 0 2px 8px -3px #000;
+  transition: background 0.1s ease;
+  pointer-events: none;
+}
+.joy.active .joy-knob { background: var(--accent); border-color: var(--accent); }
+/* Target far ahead of what is being sent: the robot is not keeping up. */
+.joy.stalled .joy-knob { background: var(--warn); border-color: var(--warn); }
+
+.joy-tag {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -16px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.turn-track {
+  position: relative;
+  width: 104px;
+  height: 30px;
+  border-radius: 15px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  flex: none;
+  margin-top: 6px;
+}
+.turn-track::before {
+  content: '';
+  position: absolute;
+  left: 14px; right: 14px; top: 50%;
+  height: 1px;
+  background: var(--line);
+}
+.turn-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  border-radius: 50%;
+  background: var(--panel-3);
+  border: 1px solid #3a4353;
+  pointer-events: none;
+}
+.turn-track.active .turn-knob { background: var(--accent); border-color: var(--accent); }
+
 .hint {
-  margin: 0;
+  margin: 14px 0 0;
   font-size: 11px;
   color: var(--muted);
   text-align: center;
-  max-width: 134px;
+  max-width: 118px;
   line-height: 1.35;
 }
 

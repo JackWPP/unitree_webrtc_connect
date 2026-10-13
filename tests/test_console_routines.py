@@ -361,3 +361,43 @@ async def test_every_built_in_routine_completes_without_a_failed_step(service, r
         if step["state"] != "done"
     ]
     assert not bad, f"{routine_id} has a step that does not work: {bad}"
+
+
+# ─── where the robot is, when it says ─────────────────────────────────
+
+
+async def test_a_position_is_reported_when_the_robot_publishes_one(service):
+    """`position` rides on the state topic, so it costs no extra read. It is
+    the only part of "where is it" reachable without a topic nobody has
+    confirmed over WebRTC."""
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    spot = service.where("dog1")
+    assert "x" in spot and "y" in spot and "yaw" in spot
+    assert spot["frame"] == "odom"
+
+
+async def test_an_absent_position_is_an_empty_dict_not_a_zero(service):
+    """A robot whose state topic is silent must render nothing. A zero would
+    look like a measurement, and "it has not moved" is a very different claim
+    from "it has not told me where it is"."""
+    await service.connect("dog1")
+    service._telemetry["dog1"] = {"sport_state": {}}  # noqa: SLF001
+
+    assert service.where("dog1") == {}
+
+
+async def test_a_malformed_position_does_not_raise(service):
+    await service.connect("dog1")
+    for bad in ({"sport_state": {"position": ["x", "y"]}},
+                {"sport_state": {"position": [1]}},
+                {"sport_state": {"position": "1,2"}}):
+        service._telemetry["dog1"] = bad  # noqa: SLF001
+        assert service.where("dog1") == {}
+
+
+async def test_the_status_payload_carries_where_per_robot(service):
+    await service.connect("dog1")
+    payload = await service.status()
+    assert set(payload["where"]) == set(service.fleet.ids)

@@ -892,7 +892,7 @@ def test_the_fleet_action_list_uses_the_same_labels_as_the_panel(open_client):
 def test_the_console_js_has_the_fleet_bar_and_the_drive_aids(open_client):
     source = open_client.get("/static/console.js").text
     for marker in ("loadFleetActions", "runFleetAction", "renderStick",
-                   "renderPadKeys", "state.trim"):
+                   "bindJoystick", "releaseSticks", "state.trim"):
         assert marker in source, f"console.js lost {marker}"
 
 
@@ -1045,3 +1045,17 @@ def test_the_console_js_renders_a_timeline_with_per_dog_lanes(open_client):
         assert marker in source, f"console.js lost {marker}"
     html = open_client.get("/").text
     assert "routine-timeline" in html
+
+
+def test_the_status_payload_reports_where_each_robot_is(open_client):
+    """Absent for a robot that does not publish a position — the UI renders
+    nothing rather than a zero that looks like a measurement."""
+    payload = open_client.get("/api/fleet/status").json()
+    assert "where" in payload
+    assert set(payload["where"]) == {"dog1", "dog2"}
+
+
+def test_the_console_js_hides_an_absent_position(open_client):
+    source = open_client.get("/static/console.js").text
+    assert "renderWhere" in source
+    assert "relativ" in source.lower() or "相对" in source

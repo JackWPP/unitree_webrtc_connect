@@ -1094,6 +1094,51 @@ class ConsoleService:
                 out[key] = value
         return out
 
+    def where(self, robot_id: str) -> Dict[str, Any]:
+        """Where the robot says it is, when it says anything at all.
+
+        `position` rides on the state topic — the same one that carries the
+        gait — so this costs no extra read and simply does not appear on a
+        robot that never publishes it. That is the honest shape for a WebRTC
+        capability: the data is either in the frame we already have or the
+        field is absent, and the UI renders nothing rather than a zero that
+        looks like a measurement.
+
+        Frame caveat, stated because it matters: each robot's own odometry
+        starts at its own zero, so two dogs' positions are **not** in a shared
+        frame. They can be compared to their own start, never to each other,
+        without something that gives a common origin — which the confirmed
+        topics do not have.
+        """
+        snapshot = self._telemetry.get(robot_id) or {}
+        sport = snapshot.get("sport_state") or {}
+        position = sport.get("position")
+        if not isinstance(position, (list, tuple)) or len(position) < 2:
+            return {}
+
+        try:
+            x, y = float(position[0]), float(position[1])
+            yaw = float(position[2]) if len(position) > 2 else 0.0
+        except (TypeError, ValueError):
+            return {}
+
+        out: Dict[str, Any] = {
+            "x": round(x, 3),
+            "y": round(y, 3),
+            "yaw": round(yaw, 3),
+            "distance": round((x * x + y * y) ** 0.5, 3),
+            "frame": "odom",
+        }
+        velocity = sport.get("velocity")
+        if isinstance(velocity, (list, tuple)) and len(velocity) >= 3:
+            try:
+                out["speed"] = round(
+                    (float(velocity[0]) ** 2 + float(velocity[1]) ** 2) ** 0.5, 3
+                )
+            except (TypeError, ValueError):
+                pass
+        return out
+
     def controls_payload(self, robot_id: str) -> Dict[str, Any]:
         """The control descriptors this robot can actually honour.
 
@@ -1268,6 +1313,7 @@ class ConsoleService:
             "video": {rid: self.video_status(rid) for rid in self.fleet.ids},
             "routine": self.routine_state(),
             "motion": {rid: self.motion(rid).snapshot() for rid in self.fleet.ids},
+            "where": {rid: self.where(rid) for rid in self.fleet.ids},
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a

@@ -42,7 +42,10 @@ const state = {
   focused: '',
   focusMap: {},           // robot_id -> { pen, video, ... }
   held: new Set(),        // physical keys currently down
-  sticky: {},             // robot_id -> {axis: bool} from on-screen pad
+  // robot_id -> {mx, my, turn}, each -1..1, from dragging the on-screen stick.
+  // Continuous, not boolean: a stick you can only push fully is six buttons
+  // wearing a circle.
+  pointer: {},
   lastZeroSent: 0,
   // Grouped control descriptors per robot, from /api/console/controls.
   controls: {},
@@ -112,20 +115,13 @@ function buildPens(fleet) {
     pen.querySelector('[data-role="video-toggle"]').addEventListener('click', toggleVideo);
     pen.querySelector('[data-role="link-toggle"]').addEventListener('click', () => toggleLink(robot.robot_id));
 
-    // On-screen pad: pointer down drives that axis for as long as it is held.
-    pen.querySelectorAll('.pad-key').forEach((key) => {
-      const axis = key.dataset.axis;
-      const press = (on) => {
-        state.sticky[robot.robot_id] = state.sticky[robot.robot_id] || {};
-        state.sticky[robot.robot_id][axis] = on;
-        key.classList.toggle('active', on);
-        if (on) setFocus(robot.robot_id, true);
-      };
-      key.addEventListener('pointerdown', (ev) => { ev.preventDefault(); press(true); });
-      key.addEventListener('pointerup', () => press(false));
-      key.addEventListener('pointerleave', () => press(false));
-      key.addEventListener('pointercancel', () => press(false));
-    });
+    // On-screen sticks. Dragging either one drives the same two axes WASD/QE
+    // drive; they are not a separate input path, they are a second way to
+    // express the same intent — which is why the knobs also follow the keys.
+    const moveEl = pen.querySelector('[data-role="stick-move"]');
+    const turnEl = pen.querySelector('[data-role="stick-turn"]');
+    if (moveEl) bindJoystick(robot.robot_id, moveEl, 'move');
+    if (turnEl) bindJoystick(robot.robot_id, turnEl, 'turn');
 
     host.appendChild(node);
 
@@ -146,8 +142,12 @@ function buildPens(fleet) {
       panels: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="panels"]`),
       batteryBar: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="battery-bar"]`),
       faultBadge: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="fault-badge"]`),
-      stickDot: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="stick-dot"]`),
+      joyMove: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="stick-move"]`),
+      joyTurn: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="stick-turn"]`),
+      knobMove: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="knob-move"]`),
+      knobTurn: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="knob-turn"]`),
       drive: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="drive"]`),
+      where: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="where"]`),
       auditWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-wrap"]`),
       audit: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit"]`),
       auditCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-count"]`),
@@ -285,27 +285,19 @@ function renderStick(robotId, axes) {
   if (!entry) return;
   const lx = Math.max(-1, Math.min(1, axes.lx || 0));
   const ly = Math.max(-1, Math.min(1, axes.ly || 0));
-  if (entry.stickDot) {
-    entry.stickDot.style.transform =
-      `translate(calc(-50% + ${(lx * 15).toFixed(1)}px), calc(-50% + ${(-ly * 15).toFixed(1)}px))`;
-  }
-  renderPadKeys(robotId, axes);
-}
+  const rx = Math.max(-1, Math.min(1, axes.rx || 0));
 
-/* The on-screen pad is a control, so it should also be a readout: a key held
- * down lights the same arrow the mouse would. Without this there is no way to
- * tell "my key is stuck" from "the robot is ignoring me". */
-function renderPadKeys(robotId, axes) {
-  const entry = state.focusMap[robotId];
-  if (!entry) return;
-  const sticky = state.sticky[robotId] || {};
-  for (const key of entry.pen.querySelectorAll('.pad-key')) {
-    const axis = key.dataset.axis || '';
-    const value = axes[axis.slice(0, 2)] || 0;
-    const lit = axis.endsWith('+') ? value > 0.01 : value < -0.01;
-    // Never clear a key the pointer is holding — that press owns the class.
-    if (lit) key.classList.add('active');
-    else if (!sticky[axis]) key.classList.remove('active');
+  // The knobs show the axes, whichever input produced them. A key held down
+  // moves the same knob a drag would — that is what makes the on-screen stick
+  // a readout of the keyboard rather than a competing control.
+  if (entry.knobMove) {
+    const radius = (entry.joyMove ? entry.joyMove.clientWidth : 104) / 2 - 17;
+    entry.knobMove.style.transform =
+      `translate(${(lx * radius).toFixed(1)}px, ${(-ly * radius).toFixed(1)}px)`;
+  }
+  if (entry.knobTurn) {
+    const radius = (entry.joyTurn ? entry.joyTurn.clientWidth : 104) / 2 - 14;
+    entry.knobTurn.style.transform = `translateX(${(rx * radius).toFixed(1)}px)`;
   }
 }
 
@@ -463,8 +455,8 @@ function renderStatus(payload) {
     renderVideoHealth(robot.robot_id);
     renderFlags(robot.robot_id);
     renderDrive(robot.robot_id);
+    renderWhere(robot.robot_id);
     renderFaults(robot.robot_id, robot);
-    renderPadKeys(robot.robot_id, axesNow(robot.robot_id));
   }
 
   state.connecting = payload.connecting || [];
@@ -474,6 +466,7 @@ function renderStatus(payload) {
   state.videoHealth = payload.video || {};
   state.lastStatus = payload;
   state.motion = payload.motion || {};
+  state.where = payload.where || {};
   renderFleetTargets();
   renderRoutine(payload.routine);
   state.flags = payload.flags || state.flags || {};
@@ -1061,6 +1054,33 @@ function renderDrive(robotId) {
   }
 }
 
+/* Where the robot is, relative to where *it* started.
+ *
+ * Deliberately not a shared map: each robot's odometry has its own origin, so
+ * plotting two dogs on one set of axes would invent a relationship that does
+ * not exist. The chip shows its own displacement and heading, and says
+ * "相对起点" so nobody reads it as a shared frame.
+ *
+ * Absent when the robot does not publish a position — the field rides on the
+ * state topic, which some firmware never sends. A zero would look like a
+ * measurement. */
+function renderWhere(robotId) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.where) return;
+  const spot = (state.where && state.where[robotId]) || {};
+
+  if (!('x' in spot)) {
+    entry.where.classList.add('hidden');
+    return;
+  }
+  const arrow = ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗'][
+    ((Math.round((spot.yaw || 0) / (Math.PI / 4)) % 8) + 8) % 8
+  ];
+  entry.where.classList.remove('hidden');
+  entry.where.textContent = `位移 ${spot.distance}m ${arrow}`;
+  entry.where.title = `相对本机里程计原点：x=${spot.x} y=${spot.y} 朝向=${(spot.yaw * 57.3).toFixed(0)}°`;
+}
+
 function renderFlags(robotId) {
   const entry = state.focusMap[robotId];
   if (!entry || !entry.flags) return;
@@ -1106,11 +1126,11 @@ function axesNow(robotId) {
     if (group) break;
   }
 
-  const sticky = state.sticky[robotId] || {};
-  for (const axis of Object.keys(sticky)) {
-    if (!sticky[axis]) continue;
-    const sign = axis.endsWith('+') ? 1 : -1;
-    axes[axis.slice(0, 2)] += sign;
+  const pointer = state.pointer[robotId];
+  if (pointer) {
+    axes.lx += pointer.mx || 0;
+    axes.ly += pointer.my || 0;
+    axes.rx += pointer.turn || 0;
   }
   return {
     lx: Math.max(-1, Math.min(1, axes.lx)),
@@ -1127,6 +1147,67 @@ function isIdle(axes) {
  * two halves independently. In the other modes both groups collapse into one
  * logical operator source. */
 /* Send one already-resolved frame for a named source. */
+/* ── on-screen sticks ──────────────────────────────────────────────── */
+
+function bindJoystick(robotId, el, kind) {
+  let captured = null;
+
+  const read = (event) => {
+    const rect = el.getBoundingClientRect();
+    const radiusX = rect.width / 2 - 6;
+    const radiusY = rect.height / 2 - 6;
+    let dx = (event.clientX - (rect.left + rect.width / 2)) / radiusX;
+    let dy = (event.clientY - (rect.top + rect.height / 2)) / radiusY;
+    if (kind === 'turn') dy = 0;
+    // Clamp to the unit *disc*, not a square: a stick pushed into a corner
+    // should give full deflection in that direction, not 1.41 of it.
+    const length = Math.hypot(dx, dy);
+    if (length > 1) { dx /= length; dy /= length; }
+
+    const input = state.pointer[robotId] || (state.pointer[robotId] = { mx: 0, my: 0, turn: 0 });
+    if (kind === 'move') {
+      input.mx = dx;
+      input.my = -dy;   // screen y grows downward; forward is up
+    } else {
+      input.turn = dx;
+    }
+    el.classList.add('active');
+  };
+
+  const release = () => {
+    const input = state.pointer[robotId];
+    if (input) {
+      if (kind === 'move') { input.mx = 0; input.my = 0; } else { input.turn = 0; }
+    }
+    el.classList.remove('active');
+  };
+
+  el.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    captured = event.pointerId;
+    // Without capture a fast drag that leaves the circle stops steering.
+    el.setPointerCapture(event.pointerId);
+    read(event);
+    setFocus(robotId, true);
+  });
+  el.addEventListener('pointermove', (event) => {
+    if (captured === event.pointerId) read(event);
+  });
+  el.addEventListener('pointerup', release);
+  el.addEventListener('pointercancel', release);
+  el.addEventListener('lostpointercapture', release);
+}
+
+function releaseSticks() {
+  for (const input of Object.values(state.pointer)) {
+    input.mx = 0; input.my = 0; input.turn = 0;
+  }
+  for (const entry of Object.values(state.focusMap)) {
+    if (entry.joyMove) entry.joyMove.classList.remove('active');
+    if (entry.joyTurn) entry.joyTurn.classList.remove('active');
+  }
+}
+
 /* ── response shaping ──────────────────────────────────────────────── */
 
 /* Two shaping stages sit between the key and the robot: this one, and the
@@ -1279,6 +1360,9 @@ function wireInput() {
 
   // Losing focus while holding a key would otherwise leave the robot driving.
   window.addEventListener('blur', () => {
+    // A drag that is interrupted by the window losing focus has no pointerup,
+    // so the stick would stay deflected with nobody touching it.
+    releaseSticks();
     state.held.clear();
     releaseAll();
   });
