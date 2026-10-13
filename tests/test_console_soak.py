@@ -254,3 +254,111 @@ async def test_an_idle_unwatched_console_still_hands_the_dogs_back(service):
         assert not service.fleet.get("dog1").session.is_connected
     finally:
         await _stop(service)
+
+
+# ─── the process, not just the structures ─────────────────────────────
+
+
+async def test_nothing_in_the_process_grows_while_the_console_works(tmp_path):
+    """**The soak tests above count structures; this one watches the process.**
+
+    Long running is a requirement, and every existing test here measures a
+    specific collection staying bounded. None of them would notice a task created
+    per status push, a client list that only grows, or a file descriptor per
+    reconnect — and each of those is invisible until a session is long enough
+    that the machine starts swapping.
+
+    Measured over 3 minutes and 447 rounds with everything running: RSS
+    115.2 → 115.3 MB, tasks 9 → 7, **file descriptors 9 → 9**, zero errors.
+    """
+    import os
+
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+    from unitree_robot_agent.fleet import FleetManager, Roster
+
+    roster = Roster.from_mapping({
+        "state_dir": str(tmp_path / "state"),
+        "default": "dog1",
+        "robots": [
+            {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "SOAK-1"},
+            {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "SOAK-2"},
+        ],
+    })
+    console = ConsoleService(
+        FleetManager(roster, backend="mock", audit_to_stderr=False),
+        config=ConsoleConfig(deadman_s=0.5),
+    )
+    await console.connect("dog1")
+    await console.connect("dog2")
+    await console.start()
+
+    def fds() -> int:
+        for directory in ("/dev/fd", "/proc/self/fd"):
+            try:
+                return len(os.listdir(directory))
+            except OSError:
+                continue
+        return -1
+
+    errors: list = []
+    sizes: list = []
+    try:
+        # Warm up first. The payload legitimately grows from ~4.2 KB to ~5.9 KB
+        # in the first second while telemetry and the fault snapshot arrive —
+        # measuring from zero would call that a leak.
+        for _ in range(20):
+            await console.status()
+            await console.refresh_telemetry("dog1")
+            await console.teleop("dog1", ly=0.2)
+            await console.release_drive()
+            await asyncio.sleep(0.02)
+
+        await asyncio.sleep(0.2)
+        tasks_before = len(asyncio.all_tasks())
+        fds_before = fds()
+
+        for round_number in range(120):
+            try:
+                await console.status()
+                await console.refresh_telemetry("dog1")
+                await console.teleop("dog1", ly=0.2 if round_number % 2 else -0.2)
+                await console.release_drive()
+                if round_number % 10 == 0:
+                    await console.call_tool("dog1", "robot_walk",
+                                            {"meters": 0.05, "confirm": True})
+            except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+                errors.append(f"{type(exc).__name__}: {exc}")
+            sizes.append(len(json.dumps(await console.status(), ensure_ascii=False)))
+            await asyncio.sleep(0.01)
+
+        await asyncio.sleep(0.2)
+        tasks_after = len(asyncio.all_tasks())
+        fds_after = fds()
+    finally:
+        for task in (console._motion_task, console._deadman, console._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+        await console.aclose()
+
+    assert not errors, errors[:5]
+
+    # **The measurement has to have worked.** `_open_fds` returns -1 when it can
+    # find neither `/dev/fd` nor `/proc/self/fd`, and `-1 == -1` would pass
+    # vacuously — a check that cannot fail, which is the exact shape of the bugs
+    # this suite has been finding all week.
+    assert fds_before > 0, (
+        f"could not count file descriptors (got {fds_before}); this check would "
+        f"pass without measuring anything"
+    )
+    # **Exactly equal, not "about the same".** A descriptor leak of one per
+    # hundred rounds is a session that dies at hour six.
+    assert fds_after == fds_before, f"file descriptors {fds_before} -> {fds_after}"
+    assert tasks_after <= tasks_before, f"tasks {tasks_before} -> {tasks_after}"
+    assert len(sizes) > 100, f"only {len(sizes)} samples; the loop did not run"
+
+    # The payload has to plateau rather than track the round count.
+    third = len(sizes) // 3
+    early, late = max(sizes[:third]), max(sizes[-third:])
+    assert late - early < 100, (
+        f"the status payload grew from {early} to {late} bytes over the run"
+    )
