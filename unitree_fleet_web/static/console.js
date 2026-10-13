@@ -739,9 +739,12 @@ function selectWidget(robotId, control) {
 
   const picker = document.createElement('select');
   if (control.title) picker.title = control.title;
+  // Not `control.label`: the caption beside it already says that, and the
+  // result read "运动模式 [运动模式 ▾]" — the same words twice, which is what
+  // a pile of widgets looks like rather than a designed row.
   const placeholder = document.createElement('option');
   placeholder.value = '';
-  placeholder.textContent = control.label;
+  placeholder.textContent = '选择…';
   picker.appendChild(placeholder);
 
   const fill = (options) => {
@@ -881,11 +884,21 @@ function panelFor(robotId, tab) {
   return panel;
 }
 
+/* The open tab lives in the URL hash, so a view can be linked, bookmarked or
+ * reloaded without losing your place. Read once at boot; clicking updates it. */
+function tabFromHash() {
+  const match = /(?:^|[#&])tab=([a-z_]+)/.exec(location.hash || '');
+  return match ? match[1] : null;
+}
+
 function showTab(robotId, tab) {
   const entry = state.focusMap[robotId];
   if (!entry) return;
   state.tab = state.tab || {};
   state.tab[robotId] = tab;
+  if (location.hash !== `#tab=${tab}`) {
+    history.replaceState(null, '', `#tab=${tab}`);
+  }
   for (const button of entry.tabs.querySelectorAll('.tab')) {
     button.classList.toggle('active', button.dataset.tab === tab);
   }
@@ -978,8 +991,8 @@ function renderControls(robotId) {
     }
   }
 
-  const remembered = state.tab && state.tab[robotId];
-  showTab(robotId, tabs.includes(remembered) ? remembered : tabs[0]);
+  const preferred = (state.tab && state.tab[robotId]) || tabFromHash();
+  showTab(robotId, tabs.includes(preferred) ? preferred : tabs[0]);
 }
 
 /* ── loading the panel ─────────────────────────────────────────────── */

@@ -8,6 +8,23 @@
 
 ---
 
+
+## 界面
+
+四个标签页 + 顶部「一起做动作」条。截图来自 mock 双狗（真机验证见 `HARDWARE_BRINGUP.md`）。
+
+| 驾驶 | 姿态 |
+|---|---|
+| ![驾驶](screenshots/console-drive.png) | ![姿态](screenshots/console-posture.png) |
+
+| 感知 | 设置 |
+|---|---|
+| ![感知](screenshots/console-sense.png) | ![设置](screenshots/console-settings.png) |
+
+编排运行中（顶部进度条 + 常驻停止按钮）：
+
+![编排](screenshots/console-routine.png)
+
 ## 0. 执行摘要与当前进度
 
 ### 三个前提的核查结果
