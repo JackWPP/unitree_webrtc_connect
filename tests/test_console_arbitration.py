@@ -148,3 +148,114 @@ async def test_the_window_is_the_signal_and_it_is_a_property(service):
     runtime = service.fleet.get("dog1")
     assert isinstance(runtime.motion.window_active, bool)
     assert runtime.motion.window_active is False
+
+
+# ─── one closed-loop move at a time ───────────────────────────────────
+
+
+async def test_two_closed_loop_moves_cannot_share_the_robot(service):
+    """**The failure that reports success.**
+
+    Two concurrent `forward_m` calls each read their own start position — both
+    nearly zero — and each measures its progress from there. The robot walks
+    once and **both report `reached`**:
+
+        task 1: reason=reached actual_m=0.183
+        task 2: reason=reached actual_m=0.174
+        final position: 0.183   (expected 0.4)
+
+    Neither caller can tell, and the operator gets half a move that two layers
+    called a success. `unitree_harness` refuses with `-11 skill busy` rather
+    than queueing, and so does this.
+    """
+    from unitree_robot_agent.errors import AgentError
+
+    await service.connect("dog1")
+    runtime = service.fleet.get("dog1")
+    await runtime.session.call("rt/api/sport/request", 1002, None)
+
+    first = asyncio.create_task(runtime.motion.forward_m(0.2, speed=0.3))
+    await asyncio.sleep(0.05)
+    second = asyncio.create_task(runtime.motion.forward_m(0.2, speed=0.3))
+
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    refused = [r for r in results if isinstance(r, AgentError)]
+    assert len(refused) == 1, results
+    assert refused[0].code == "skill_busy"
+    assert "不能同时" in str(refused[0])
+
+
+async def test_the_skill_is_released_when_the_move_ends(service):
+    """A lock that is not released is a robot nobody can move again."""
+    await service.connect("dog1")
+    runtime = service.fleet.get("dog1")
+    await runtime.session.call("rt/api/sport/request", 1002, None)
+
+    await runtime.motion.forward_m(0.15, speed=0.3)
+    assert runtime.motion.skill_owner == ""
+    assert runtime.motion.window_active is False
+
+    # ...and a second move is accepted.
+    result = await runtime.motion.forward_m(0.15, speed=0.3)
+    assert result["reason"] in ("reached", "stalled"), result
+
+
+async def test_the_skill_is_released_even_when_the_move_fails(service):
+    """`finally`, not the happy path. A move that raises must not leave the
+    robot claimed forever."""
+    from unitree_robot_agent.errors import AgentError
+
+    await service.connect("dog1")
+    runtime = service.fleet.get("dog1")
+
+    with pytest.raises(AgentError):
+        await runtime.motion.forward_m(float("nan"))
+    assert runtime.motion.skill_owner == ""
+
+
+# ─── a routine and a formation cannot both drive the dogs ─────────────
+
+
+async def test_a_formation_is_refused_while_a_routine_runs(service):
+    """Both drive every connected robot. The motion window stops them colliding
+    at the tool level; this stops them being started together at all, which is
+    the part a person has to decide."""
+    from unitree_robot_agent.errors import AgentError
+
+    await service.connect("dog1")
+    await service.start()
+    try:
+        await service.start_routine("dance")
+        await asyncio.sleep(0.3)
+        assert service.routine_state()["running"] is True
+
+        with pytest.raises(AgentError) as caught:
+            service.start_formation({"distance_m": 1.0})
+        assert caught.value.code == "routine_running"
+    finally:
+        await service.stop_routine(reason="test")
+        for task in (service._motion_task, service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+
+
+async def test_a_routine_is_refused_while_a_formation_runs(service):
+    """The mirror, so one direction cannot be fixed and the other forgotten."""
+    from unitree_robot_agent.errors import AgentError
+
+    await service.connect("dog1")
+    await service.start()
+    try:
+        service._formation = {"state": "running"}  # noqa: SLF001
+        service._formation_task = asyncio.create_task(asyncio.sleep(5))  # noqa: SLF001
+
+        with pytest.raises(AgentError) as caught:
+            await service.start_routine("greet")
+        assert caught.value.code == "formation_running"
+    finally:
+        if service._formation_task is not None:  # noqa: SLF001
+            service._formation_task.cancel()  # noqa: SLF001
+        for task in (service._motion_task, service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()

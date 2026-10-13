@@ -130,7 +130,7 @@ def register(server, ctx: ToolContext) -> None:
                 with contextlib.suppress(Exception):
                     events = getter() or []
             decoded = _decode_errors(events)[-max(1, min(int(limit), 200)):]
-            store = ctx.runtime.faults
+            store = ctx.faults
             active = [fault.as_dict() for fault in store.active()]
             return ctx.ok(
                 # The authoritative answer to "what is wrong right now". The
@@ -165,12 +165,12 @@ def register(server, ctx: ToolContext) -> None:
     )
     async def robot_auth_status(robot_id: str = "") -> Dict[str, Any]:
         async def _impl():
-            payload = ctx.runtime.auth.describe()
+            payload = ctx.auth.describe()
             payload["aes_key_cached"] = bool(ctx.config.load_cached_aes_key())
             payload["devices"] = [
                 {"sn": d["sn"], "alias": d.get("alias"), "series": d.get("series"),
                  "model": d.get("model"), "online": d.get("online"), "has_key": d.get("has_key")}
-                for d in getattr(ctx.runtime.auth, "_device_cache", [])
+                for d in getattr(ctx.auth, "_device_cache", [])
             ]
             return ctx.ok(**payload)
 
@@ -190,7 +190,7 @@ def register(server, ctx: ToolContext) -> None:
         args = {"serial_number": serial_number}
 
         async def _impl():
-            lookup = await ctx.runtime.auth.resolve_aes_key(serial_number or None)
+            lookup = await ctx.auth.resolve_aes_key(serial_number or None)
             payload = {
                 "found": lookup.ok,
                 "sn": lookup.sn,
@@ -286,7 +286,7 @@ def register(server, ctx: ToolContext) -> None:
                 "robot_profile": ctx.profile.describe(),
                 "environment": _environment_probe(),
                 "backend": getattr(ctx.backend, "name", type(ctx.backend).__name__),
-                "auth": ctx.runtime.auth.describe(),
+                "auth": ctx.auth.describe(),
             }
 
             findings: List[str] = []

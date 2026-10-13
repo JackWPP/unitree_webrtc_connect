@@ -49,7 +49,7 @@ def register(server, ctx: ToolContext) -> None:
         async def _impl():
             window = max(1.0, min(float(timeout_s), 30.0))
             width = int(max_width) if max_width and int(max_width) > 0 else None
-            result = await ctx.runtime.vision.capture(
+            result = await ctx.vision.capture(
                 source, timeout=window, save=save, max_width=width
             )
             if not result.ok:
@@ -92,7 +92,7 @@ def register(server, ctx: ToolContext) -> None:
 
         async def _impl():
             window = max(1.0, min(float(timeout_s), 20.0))
-            statuses = await ctx.runtime.vision.probe(timeout=window)
+            statuses = await ctx.vision.probe(timeout=window)
             working = [s.name for s in statuses if s.available]
             return ctx.ok(
                 sources=[s.to_dict() for s in statuses],
@@ -122,10 +122,10 @@ def register(server, ctx: ToolContext) -> None:
         args = {"limit": limit}
 
         async def _impl():
-            records = ctx.runtime.vision.history(limit)
+            records = ctx.vision.history(limit)
             return ctx.ok(
                 records=records,
-                store=str(ctx.runtime.vision.store_dir),
+                store=str(ctx.vision.store_dir),
                 count=len(records),
             )
 

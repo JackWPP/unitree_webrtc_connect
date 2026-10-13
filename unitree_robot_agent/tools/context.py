@@ -111,6 +111,40 @@ class ToolContext:
     def backend(self):
         return self.active.backend
 
+    # ── the rest of the runtime, bound the same way ──────────────────
+    #
+    # **These are not conveniences.** `ctx.runtime` is the *default* robot's
+    # runtime — captured when the tools were registered and never rebound — so a
+    # tool body that reaches for `ctx.runtime.motion` drives the default dog no
+    # matter which `robot_id` it was called with. The response is built by
+    # `ok()`, which uses `self.config.robot_id` and therefore follows the
+    # binding, so **the call reports the robot the operator clicked while acting
+    # on a different one**:
+    #
+    #     call_tool("dog2", "robot_walk", {"meters": 0.15})
+    #       -> {"ok": true, "robot_id": "dog2", "reason": "reached"}
+    #     dog1 position: (0.149, 0.0)      <- it walked
+    #     dog2 position: (0.0, 0.0)        <- it did not
+    #
+    # Measured. Everything below had the same defect, because `ctx.session` was
+    # the only runtime attribute that followed the binding.
+
+    @property
+    def motion(self):
+        return self.active.motion
+
+    @property
+    def faults(self):
+        return self.active.faults
+
+    @property
+    def auth(self):
+        return self.active.auth
+
+    @property
+    def vision(self):
+        return self.active.vision
+
     # ── response helpers ─────────────────────────────────────────────
 
     def ok(self, **payload) -> Dict[str, Any]:

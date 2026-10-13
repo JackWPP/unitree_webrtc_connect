@@ -749,6 +749,12 @@ class ConsoleService:
                 code="routine_running",
                 hint="先停止当前编排。",
             )
+        if self._formation_task is not None and not self._formation_task.done():
+            raise AgentError(
+                "编队正在运行，不能同时开始编排。",
+                code="formation_running",
+                hint="先停止编队，或者等它跑完。",
+            )
         if self.state.estop.engaged:
             raise MotionBlocked(
                 "急停已锁存，无法开始编排。",
@@ -2005,6 +2011,17 @@ class ConsoleService:
                 "已经在编队中。",
                 code="formation_running",
                 hint="先等它结束，或者停下来。",
+            )
+        if self._routine is not None and self._routine.get("running"):
+            # Both drive every connected robot, so one would fight the other for
+            # the same dogs — and the operator would be watching two progress
+            # displays that disagree about what is happening. The motion window
+            # stops them colliding at the *tool* level; this stops them being
+            # started together at all, which is the part a person has to decide.
+            raise AgentError(
+                "编排正在运行，不能同时编队。",
+                code="routine_running",
+                hint="先停止编排，或者等它跑完。",
             )
         try:
             parsed = parse_formation(target or {})

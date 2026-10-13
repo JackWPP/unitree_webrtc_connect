@@ -67,6 +67,8 @@ class MotionController:
         #: Cleared while a window runs, so a stop can await its exit.
         self._idle = asyncio.Event()
         self._idle.set()
+        #: Which closed-loop move currently owns the robot. See `_window`.
+        self._skill_owner = ""
 
     # ── windows ──────────────────────────────────────────────────────
 
@@ -76,14 +78,48 @@ class MotionController:
 
     @contextlib.asynccontextmanager
     async def _window(self, what: str):
-        """Mark a motion window: holds the link and answers abort_window()."""
+        """Claim the robot for one closed-loop motion.
+
+        **One at a time, and refusing rather than queueing.** `unitree_harness`
+        calls this `_skill_lock` and returns `-11 skill busy`; the reason it does
+        not queue is worth restating, because the failure is invisible.
+
+        Two concurrent `forward_m` calls each read their own start position —
+        both nearly zero — and each measures its progress from there. The robot
+        walks once, and **both report `reached`**:
+
+            task 1: reason=reached actual_m=0.183
+            task 2: reason=reached actual_m=0.174
+            final position: 0.183   (expected 0.4)
+
+        Neither caller can tell, and the operator gets half a move that two
+        layers called a success. A queue would at least run both eventually, but
+        a step that fires ten seconds after it was asked for is a step aimed at
+        where the robot used to be, so a refusal is the honest answer.
+
+        The check and the claim sit here with no `await` between them, which is
+        what makes them atomic on a single-threaded event loop.
+        """
+        if self._skill_owner:
+            raise AgentError(
+                f"机器人正在执行 {self._skill_owner}，不能同时开始 {what}。",
+                code="skill_busy",
+                hint="等它结束，或者用 robot_stop 打断它。",
+            )
+        self._skill_owner = what
         self._abort.clear()
         self._idle.clear()
         try:
             async with self.session.hold(what):
                 yield
         finally:
+            self._skill_owner = ""
             self._idle.set()
+
+    @property
+    def skill_owner(self) -> str:
+        """Which closed-loop move holds the robot, or "" when none does."""
+        return self._skill_owner
 
     async def abort_window(self, *, timeout: float = 2.0) -> bool:
         """Ask a running window to stop and wait for it to leave.

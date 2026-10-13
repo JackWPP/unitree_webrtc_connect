@@ -340,7 +340,7 @@ def register(server, ctx: ToolContext) -> None:
             if peak is not None:
                 peak = min(peak, SPEED_LIMIT)
 
-            result = await ctx.runtime.motion.turn(
+            result = await ctx.motion.turn(
                 target, speed=peak, timeout=guard.config.max_turn_seconds
             )
             payload = dict(result)
@@ -400,7 +400,7 @@ def register(server, ctx: ToolContext) -> None:
             await ctx.session.ensure_connected()
 
             peak = abs(float(speed or 0.0)) or None
-            result = await ctx.runtime.motion.forward_m(target, speed=peak)
+            result = await ctx.motion.forward_m(target, speed=peak)
             payload = dict(result)
             payload["action"] = "walk"
             return ctx.ok(**payload)
@@ -484,7 +484,7 @@ async def _drive_joystick(
     The controller zeroes the sticks in ``finally``, so a failure can never
     leave the robot walking.
     """
-    return await ctx.runtime.motion.drive(lx=lx, ly=ly, rx=rx, duration=duration)
+    return await ctx.motion.drive(lx=lx, ly=ly, rx=rx, duration=duration)
 
 
 def _resolve_state(ctx: ToolContext, name: str):
