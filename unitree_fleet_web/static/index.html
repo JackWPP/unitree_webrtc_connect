@@ -305,10 +305,13 @@
     <nav class="tabs" data-role="tabs"></nav>
     <div class="panels" data-role="panels"></div>
 
-    <!-- Kept out of the tab panels: a fault is the one thing that has to be
-         visible whichever tab is open, so the head carries a badge and the
-         list lives under 感知. -->
-    <div class="faults hidden" data-role="faults-wrap">
+    <!-- A fault is the one thing that has to be visible whichever tab is open,
+         so the head carries a badge and this is where the badge points. It is
+         **moved into 感知** by `renderControls`, the same way the source list
+         is — an earlier version left it here as a hidden sibling that nothing
+         ever unhid, so an operator saw "2 faults", clicked through, and found
+         an empty panel. -->
+    <div class="faults" data-role="faults-wrap">
       <ul class="fault-list" data-role="faults"></ul>
     </div>
 

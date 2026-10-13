@@ -2425,6 +2425,11 @@ class ConsoleService:
             "sync": self.sync_state(),
             "arena": self.arena_state(),
             "formation": self.formation_state(),
+            # How many browsers are watching, over either transport. It was in
+            # `snapshot()` and read by `renderStatus`, which runs on this
+            # payload — so the watcher line could never light up. The page reads
+            # it here, so it is sent here.
+            "watching": self._clients,
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a

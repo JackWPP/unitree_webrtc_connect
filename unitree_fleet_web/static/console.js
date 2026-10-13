@@ -155,6 +155,7 @@ function buildPens(fleet) {
       speed: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="speed"]`),
       gait: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="gait"]`),
       sources: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="sources"]`),
+      faultsWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="faults-wrap"]`),
       auditWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-wrap"]`),
       audit: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit"]`),
       auditCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-count"]`),
@@ -1042,11 +1043,12 @@ function renderControls(robotId) {
   // The data-source list goes in 感知: it is what an operator wants when
   // something is not showing up, and that is the tab they will open. The
   // element itself comes from the template — see the comment there.
-  if (entry.sources) {
-    const senseHost = panelFor(robotId, 'sense');
-    senseHost.textContent = '';
-    senseHost.appendChild(entry.sources);
-  }
+  const senseHost = panelFor(robotId, 'sense');
+  senseHost.textContent = '';
+  // Faults first: it is what the head badge points at, and a diagnostic below
+  // a list of data sources is a diagnostic nobody scrolls to.
+  if (entry.faultsWrap) senseHost.appendChild(entry.faultsWrap);
+  if (entry.sources) senseHost.appendChild(entry.sources);
   entry.controls.classList.add('hidden');
 
   const controls = (spec && spec.controls) || [];
