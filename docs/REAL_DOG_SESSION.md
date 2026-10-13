@@ -61,22 +61,70 @@ unitree-fetch-aes-key --email 13536824436 --password '123321456789qwe' \
 **先准备 roster。** 控制台不知道狗在哪，必须先告诉它 —— 而且**两只狗的 roster
 要一起写好**，第 5 步就不用再回头改：
 
+### 直接可以用的一份
+
+`/tmp/fleet-demo/real-duo.json` 已经生成好了（0600），可以直接：
+
+```sh
+export UNITREE_AGENT_ROSTER=/tmp/fleet-demo/real-duo.json
+```
+
+内容：
+
+| | dog1 | dog2 |
+|---|---|---|
+| 序列号 | `B42N6000Q3UC1M8C` | **`B42D1000P4J7JC08`** |
+| 别名 | Go2_58174 | Go2_31437 |
+| IP | `192.168.31.188` | **待填** |
+| 密钥 | 有（内联） | **不需要** |
+
+### 关于这两只狗最重要的一件事：**它们是不同世代的固件**
+
+用云端账号查出来的，不是猜的：
+
+```
+B42N6000Q3UC1M8C  dev.key 有值   → 固件 ≥ 1.1.15，data2=3，要每机密钥
+B42D1000P4J7JC08  dev.key 为空   → 固件 < 1.1.15，data2=2 或明文，不要密钥
+```
+
+**这直接就是你说的"两只狗不一样"的一个具体来源。** 预期会看到：
+
+- **dog2 可能发布 dog1 不发布的 topic**，反之亦然 —— 上次会话里
+  `rt/sportmodestate` 在 dog1 上是静默的，dog2 上不一定
+- **能力差异会在控制台里显示出来**（感知页的数据来源清单是**每狗一份**的）
+- 所以第 1 步的探针**要两只都跑**，报告里也是每狗一张表
+
+**如果 dog2 连不上**：先跑 `--preflight` 看它卡在哪一步。密钥那一步不该拦它。
+
+### 自己写一份
+
 ```sh
 cat > /tmp/dogs.json <<'JSON'
 {
   "default": "dog1",
   "state_dir": "/tmp/unitree-console",
   "robots": [
-    {"id": "dog1", "model": "Go2", "ip": "192.168.31.188", "sn": "B42N6000Q3UC1M8C"},
-    {"id": "dog2", "model": "Go2", "ip": "192.168.31.XXX", "sn": "第二只的SN"}
+    {"id": "dog1", "model": "Go2", "ip": "192.168.31.188",
+     "sn": "B42N6000Q3UC1M8C", "aes_128_key": "<32位十六进制>"},
+    {"id": "dog2", "model": "Go2", "sn": "B42D1000P4J7JC08"}
   ]
 }
 JSON
-export UNITREE_AGENT_ROSTER=/tmp/dogs.json
+chmod 600 /tmp/dogs.json
 ```
 
-**第二只的 IP 和 SN 要从路由器后台或者狗身上的标签拿。** 上次会话时它不在网上，
-所以这个值我没有。
+**注意 dog1 的密钥要内联**（`aes_128_key`），而不是指望密钥文件 ——
+密钥文件在 `state_dir/dog1/keys.json`，换一个 `state_dir` 就找不到了。
+上次会话能连上就是因为当时那份 roster 把它内联了。
+
+### 不知道 IP 的时候
+
+```sh
+.venv/bin/python scripts/find_dogs.py --email <账号> --password <密码> --region cn
+```
+
+它会**同时**试三条路：多播、扫本网段、查账号设备列表，然后打印一份
+**可以直接粘贴的 roster**。上面那两只狗的序列号就是这么来的。
 
 然后**只读体检**（不占用狗的 WebRTC 槽位，可以放心跑）：
 
@@ -366,6 +414,7 @@ export UNITREE_AGENT_ROSTER=/tmp/dogs.json
 ## 10. 要带回来的东西（按重要性）
 
 0. **`scripts/session_report.py -o /tmp/session.md` 的产物** —— 它已经包含了下面第 1 项
+0.5 **两只狗的探针结果分开看** —— 它们是不同世代固件，能力集可能不同
 1. **探针的 `--json` 输出** —— 决定后面所有功能能不能做
 2. **同步标定那一节：界面数字 vs 肉眼观察** —— 决定要不要上视觉
 3. **站立闸门那一节**：从按 W 到狗动起来，实际多久；中间有没有"边起边走"
