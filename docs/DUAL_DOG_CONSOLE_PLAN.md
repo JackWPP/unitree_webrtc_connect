@@ -26,20 +26,20 @@
 | C2 | 建工作分支 `feat/dual-dog-console` | ✅ | `4806f3e` |
 | C3 | 吸收 upstream PR **#63**（`%Z`→`%z` 时区） | ✅ | 干净落盘，无冲突 |
 | C4 | 吸收 upstream PR **#66**（WAF 可诊断 + TLS 指纹可切换） | ✅ | 3 文件干净落盘；README 手工合并 |
-| P0.1 | **可运行环境 + 测试全绿** | ✅ | Python 3.14.8 + aiortc 1.15.0；**288 passed**（接手时 collection 阶段即挂） |
+| P0.1 | **可运行环境 + 测试全绿** | ✅ | Python 3.14.8 + aiortc 1.15.0；**318 passed**（接手时 collection 阶段即挂） |
 | P0.4a | **离线 ICE 并发探针**（全案最大未知） | ✅ | 3 连接：transport 独立、端口零冲突、关一个不影响其余 |
 | P1.1 | 身份层：`RobotSpec` + `Roster` | ✅ | `f4679fe`；重复 id / 同 SN / 同 IP 均被拒；每狗派生独立 `state_dir` |
 | P1.2 | **per-device key store —— 修掉静默错配 bug** | ✅ | `f4679fe`；含回归测试 + 旧 `keys.json` 格式迁移 |
 | P1.4–P1.5 | `robot_id` 进 config / audit；**audit 跨写 bug 修复** | ✅ | `8c9b52a`；每个 `AuditLog` 私有 logger；顺带修好 `to_stderr` 从不生效 |
 | P1.7 | `FleetManager`：N 个 Runtime、逐台容错、诚实的 `stop_all` | ✅ | `8c9b52a`；20 个测试 |
 | P1.8 | **连接隔离**：进程级串行 + discovery 下线程 | ✅ | `d579183`；实测 0.3s 阻塞扫描期间心跳仍在跑（≥10 tick） |
-| P1.11–P1.13 | **Web 操作台**（Starlette + 原生 asyncio + 双栏 UI） | ✅ | `aeeed6d`；实机端口实测：estop 锁存→409→解除→200，MJPEG 325KB 真帧 |
+| P1.10 | **MCP 侧舰队化**：31 个工具加 `robot_id` + 4 个舰队工具 + 舰队资源 | ✅ | `fdeb289`；工具体一行未改（注册层用 ContextVar 绑定）；22 个新测试 |
+| P1.11–P1.13 | **Web 操作台**（Starlette + 原生 asyncio + 双栏 UI） | ✅ | `aeeed6d`；端口实测 11/11 通过：estop 锁存→409→解除→200，MJPEG 真帧 |
 | P2.1–P2.2 | 舰队急停（逐台结果）+ **锁存式** e-stop | ✅ | `aeeed6d`；舰队锁存不可被单狗解除收窄 |
-| P2.x | **切换目标自动归零** + 死手看门狗 | ✅ | `aeeed6d`；`driving` 是集合，覆盖 Both 模式 |
+| P2.x | **切换目标自动归零** + 死手看门狗 + Split 双人键盘 | ✅ | `7cc4549`；驱动归属按 source 分键，覆盖 Both/Split |
+| P0.5 | `pyproject.toml`：aiortc 加上界、Python 提到 ≥3.10 | ✅ | `aiortc>=1.9.0,<2`；`requires-python>=3.10` |
 | P0.3 | 真机固件/`data2` 探测 | ⏸ **等硬件** | 局域网扫描 Go2/G1/R1 组均无应答，狗不在线 |
 | P0.4b | 真机并发连接 + 阻塞验证 | ⏸ **等硬件** | 同上 |
-| P1.10 | MCP 侧舰队化（31 个工具加 `robot_id` + 舰队工具/资源） | 待做 | fleet 核心已就绪，接上即可 |
-| P0.5 | `pyproject.toml`：aiortc 加上界、Python 提到 ≥3.10 | ✅ | `aiortc>=1.9.0,<2`；`requires-python>=3.10` |
 
 **P0.4a 的实测结论（最重要的一条）**：`unitree_webrtc_connect/__init__.py:1-17` 把 ICE 凭据钉在**类属性**上，进程内所有 peer connection 共享同一组 ufrag/pwd（实测 3 条连接只有 1 个 ufrag）——**但这不构成阻塞**：3 条连接拿到 3 个独立 transport，36 个 host candidate **端口两两不同**，关掉第 0 条另两条存活。
 
@@ -47,8 +47,9 @@
 
 ### 现在怎么用
 
+一份 `fleet.json` 同时驱动两个前端（Web 控制台与 MCP agent）：
+
 ```sh
-# 起控制台（当前 mock 双狗，不需要机器人）
 cat > fleet.json <<'JSON'
 { "default": "dog1",
   "robots": [
@@ -56,17 +57,22 @@ cat > fleet.json <<'JSON'
     {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B42D2000BBBB", "role": "wing"}]}
 JSON
 export UNITREE_AGENT_ROSTER=$PWD/fleet.json
-unitree-fleet-console --backend mock          # 无机器人演示
-unitree-fleet-console --backend webrtc        # 真机（狗上线后）
+
+unitree-fleet-console --backend mock          # Web 控制台，无机器人演示
+unitree-fleet-console --backend webrtc        # Web 控制台，真机（狗上线后）
+unitree-robot-mcp selftest                    # MCP 离线自检（对 roster 免疫，20/20）
+unitree-robot-mcp serve                       # MCP server，工具自动带 robot_id
 ```
 
-浏览器打开 `http://127.0.0.1:8765`。键盘 `WASD` 前进/平移、`QE` 转向；`Split` 模式下第二只狗用 `IJKL+UO`。急停是**锁存**的——必须显式解除。
+浏览器打开 `http://127.0.0.1:8765`。键盘 `WASD` 前进/平移、`QE` 转向；`Split` 模式下第二只狗用 `IJKL+UO`——**一个操作员同时开两只**。急停是**锁存**的，必须显式解除。
+
+MCP 侧先调 `robot_roster` 拿 id；每个工具都接受 `robot_id`，省略则作用于名册默认狗。停止全部用 `robot_stop_all`，并**必须检查 `not_stopped`**——链路不通的狗会列在那里，它没有停下。
 
 ### 立刻可做的下一步
 
-1. **P1.10 MCP 侧舰队化**（不需要机器人）：31 个工具加 `robot_id`，新增 `robot_roster` / `robot_fleet_status` / `robot_stop_all`，资源 `unitree://fleet/status`。fleet 核心已就绪，这是把"共享核心"这句话兑现的最后一块。
-2. **P0.3/P0.4b**（狗上线时）：`scripts/probe_dual_connection.py --ips <dog1>,<dog2>` + 固件探测，然后 `unitree-fleet-console --backend webrtc`。
-3. **Phase 3 小赢**：unitree_ui 的故障目录 + 快照/增量 store（舰队排障必需），以及 `upload_file` 的 per-chunk ack 修复（现在是 fire-and-forget，损坏的上传会报成功）。
+1. **P0.3/P0.4b**（狗上线时，唯一的硬阻塞）：`scripts/probe_dual_connection.py --ips <dog1>,<dog2>` + 固件探测，然后 `unitree-fleet-console --backend webrtc`。
+2. **Phase 3 小赢**（不需要机器人）：unitree_ui 的故障目录 + 快照/增量 store（舰队排障必需，我们现在只会追加事件、答不了"现在到底哪坏了"），以及 `upload_file` 的 per-chunk ack 修复（现在是 fire-and-forget，损坏的上传会报成功）。
+3. **控制台增强**：手柄（Gamepad API）接入、每狗动作按钮（stand/sit/hello）、故障面板。
 
 ---
 
