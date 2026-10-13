@@ -49,6 +49,11 @@ DEFAULT_LEASE_S = 5.0
 DEFAULT_TELEMETRY_HZ = 1.0
 
 #: Velocity re-send rate while driving. See DEFAULT_MOTION_HZ in service.py.
+#: How often to look at the arena camera. Higher than the status push because
+#: detection is cheap and a position that lags a moving dog by a fifth of a
+#: second is a position that is wrong by wherever the dog went next.
+DEFAULT_ARENA_HZ = 10.0
+
 DEFAULT_MOTION_HZ = 50.0
 
 #: How long the auto-stand gate waits before giving up and dropping the target.
@@ -102,6 +107,14 @@ class ConsoleConfig:
     motion_hz: float = DEFAULT_MOTION_HZ
     #: See DEFAULT_STAND_TIMEOUT_S.
     stand_timeout_s: float = DEFAULT_STAND_TIMEOUT_S
+    #: Arena camera for the fiducial markers: a device index ("0"), a device
+    #: path, or a video file. Empty disables it, and the console then says the
+    #: map is unavailable rather than drawing an empty arena.
+    arena_camera: str = ""
+    #: JSON with the four calibration points. Without it there is no mapping
+    #: from pixels to metres, so there is no position — only a bearing.
+    arena_calibration: str = ""
+    arena_hz: float = DEFAULT_ARENA_HZ
     #: Hand the links back this long after the last browser leaves. See
     #: DEFAULT_UNWATCHED_RELEASE_S.
     unwatched_release_s: float = DEFAULT_UNWATCHED_RELEASE_S

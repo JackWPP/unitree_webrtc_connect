@@ -254,6 +254,14 @@ class ConsoleService:
         #: How far apart the dogs have got, measured against a shared reference
         #: the operator marks. See `sync.SyncMonitor`.
         self._sync = SyncMonitor()
+        #: The arena camera and what it currently sees. Empty until a camera is
+        #: configured, and the panel says which of the reasons applies rather
+        #: than drawing an arena with no dogs in it.
+        self._camera = None
+        self._calibration = None
+        self._arena: Dict[str, Any] = {}
+        self._arena_task: Optional[asyncio.Task] = None
+        self._arena_error = ""
         #: The auto-stand gate's bookkeeping, per robot.
         self._gate: Dict[str, Dict[str, float]] = {}
         #: In-flight auto-stand requests, so shutdown can cancel them.
@@ -362,6 +370,13 @@ class ConsoleService:
             self._telemetry_task = asyncio.create_task(
                 self._telemetry_loop(), name="console-telemetry"
             )
+        if self.config.arena_camera and (
+            self._arena_task is None or self._arena_task.done()
+        ):
+            self.start_arena()
+            self._arena_task = asyncio.create_task(
+                self._arena_loop(), name="console-arena"
+            )
         if self.config.motion_hz > 0 and (
             self._motion_task is None or self._motion_task.done()
         ):
@@ -370,6 +385,17 @@ class ConsoleService:
             )
 
     async def aclose(self) -> None:
+        if self._arena_task is not None:
+            self._arena_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._arena_task
+            self._arena_task = None
+        if self._camera is not None:
+            # Explicitly, not on garbage collection: an open webcam is held
+            # against every other program on the machine.
+            await self._camera.aclose()
+            self._camera = None
+
         for task in list(self._gate_tasks):
             task.cancel()
         for task in list(self._gate_tasks):
@@ -1565,6 +1591,140 @@ class ConsoleService:
     def sync_state(self) -> Dict[str, Any]:
         return self._sync.summary({rid: self._pose_of(rid) for rid in self.fleet.ids})
 
+    # ── the arena camera ─────────────────────────────────────────────
+
+    def start_arena(self) -> Dict[str, Any]:
+        """Open the arena camera if one is configured. Idempotent.
+
+        Returns what happened rather than raising: a console with no camera is a
+        console that drives robots, which is still the point, and refusing to
+        start because a webcam is unplugged would be the wrong trade.
+        """
+        if not self.config.arena_camera:
+            self._arena_error = "no camera configured"
+            return {"started": False, "reason": self._arena_error}
+        if self._camera is not None:
+            return {"started": True, "reason": "already running"}
+
+        from unitree_robot_agent.vision import ArenaCamera, Calibration
+
+        if not self.config.arena_calibration:
+            # A camera with no calibration gives a bearing and no distance, and
+            # a map with no scale is a picture rather than a measurement.
+            self._arena_error = "camera configured but no calibration"
+            return {"started": False, "reason": self._arena_error}
+
+        try:
+            raw = json.loads(Path(self.config.arena_calibration).read_text(encoding="utf-8"))
+            self._calibration = Calibration.from_dict(raw)
+        except Exception as exc:  # noqa: BLE001
+            self._arena_error = f"calibration unreadable: {type(exc).__name__}: {exc}"
+            logger.warning("arena calibration: %s", self._arena_error)
+            return {"started": False, "reason": self._arena_error}
+
+        self._camera = ArenaCamera(self.config.arena_camera)
+        self._camera.start()
+        self._arena_error = ""
+        logger.info(
+            "arena camera %s opened; calibration residual %.2f m",
+            self.config.arena_camera, self._calibration.residual_m,
+        )
+        return {
+            "started": True,
+            "reason": "",
+            "residual_m": round(self._calibration.residual_m, 3),
+            "scale_factor": round(self._calibration.scale_factor, 3),
+        }
+
+    async def _arena_loop(self) -> None:
+        """Look at the camera and work out where the dogs are.
+
+        Detection is cheap and the map is only as good as its freshness, so this
+        runs faster than the status push. A frame that has not changed since the
+        last look is skipped — a still arena does not need re-reading, and
+        spending the CPU on it would make the console sluggish for no gain.
+        """
+        from unitree_robot_agent.vision.detect import locate
+
+        interval = 1.0 / max(1.0, self.config.arena_hz)
+        last_frame_at = 0.0
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                camera = self._camera
+                if camera is None or self._calibration is None:
+                    continue
+                if not self.robots_with_markers():
+                    self._arena = {
+                        "state": "no_markers",
+                        "detail": "还没有标记的登记信息",
+                    }
+                    continue
+
+                frame = camera.latest()
+                if frame is None or frame.at == last_frame_at:
+                    continue
+                last_frame_at = frame.at
+
+                result = await asyncio.to_thread(
+                    locate, frame.image, self._calibration, self._marker_manifest()
+                )
+                self._arena = {**result.as_dict(), "state": "ok", "age_s": round(frame.age_s, 2)}
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - a map must not kill the console
+                self._arena = {"state": "error", "detail": f"{type(exc).__name__}: {exc}"}
+                logger.warning("arena loop error: %r", exc)
+
+    def _marker_manifest(self) -> Dict[str, Any]:
+        from unitree_robot_agent.vision.markers import default_markers
+
+        return {
+            "family": "DICT_APRILTAG_36h11",
+            "markers": [
+                {"tag_id": m.tag_id, "robot_id": m.robot_id, "size_m": m.size_m}
+                for m in default_markers(list(self.fleet.ids))
+            ],
+        }
+
+    def robots_with_markers(self) -> List[str]:
+        return list(self.fleet.ids)
+
+    def arena_state(self) -> Dict[str, Any]:
+        """What the camera currently sees, and why it sees nothing when it does not.
+
+        The distinctions are the same ones the source list makes, and for the
+        same reason: "no camera", "camera but no calibration" and "camera
+        working, dogs out of shot" want three different reactions from the
+        operator, and one empty picture answers none of them.
+        """
+        camera = self._camera
+        if camera is None:
+            return {"state": "off", "detail": self._arena_error, "poses": {}, "missing": []}
+
+        status = camera.status()
+        out = {
+            "camera": status,
+            "calibration": (
+                {
+                    "residual_m": round(self._calibration.residual_m, 3),
+                    "scale_factor": round(self._calibration.scale_factor, 3),
+                    "adequate": self._calibration.adequate,
+                }
+                if self._calibration is not None else None
+            ),
+        }
+        if status["state"] == "failed":
+            return {**out, "state": "camera_failed", "detail": status["error"],
+                    "poses": {}, "missing": []}
+        if status["state"] == "stale":
+            return {**out, "state": "camera_stale", "detail": "",
+                    "poses": {}, "missing": list(self.fleet.ids)}
+        if not self._arena:
+            return {**out, "state": "starting", "detail": "",
+                    "poses": {}, "missing": list(self.fleet.ids)}
+        return {**out, **self._arena}
+
     def controls_payload(self, robot_id: str) -> Dict[str, Any]:
         """The control descriptors this robot can actually honour.
 
@@ -1752,6 +1912,7 @@ class ConsoleService:
             "body": {rid: self.body(rid) for rid in self.fleet.ids},
             "sources": {rid: self.source_status(rid) for rid in self.fleet.ids},
             "sync": self.sync_state(),
+            "arena": self.arena_state(),
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a
