@@ -1,15 +1,37 @@
+/* Unitree dual-dog console.
+ *
+ * Layout intent, since the shape is the design and not decoration:
+ *
+ * 1. Two robots sit side by side, not stacked. Stacking gave one dog a card
+ *    the full width of the screen with everything in a single column, which is
+ *    a portrait layout wearing a desktop window.
+ * 2. Each pen is a small grid, not a list. Picture and drive pad share a row,
+ *    because they are used together, and a pad five sections down the page is
+ *    not a control, it is a scroll target.
+ * 3. One strip of telemetry instead of a three-cell table with a number in
+ *    each cell and nothing else.
+ * 4. Control groups are tabs. Accordions cost a row each and hide everything;
+ *    tabs show one panel on a stable footprint.
+ *
+ * Density is a feature here: an operator watching two dogs wants as much state
+ * as possible without moving their eyes far.
+ */
+
 :root {
-  --bg: #12151a;
-  --panel: #1b1f27;
-  --panel-2: #232833;
-  --line: #2e3542;
-  --fg: #e6e9ef;
+  --bg: #0e1116;
+  --panel: #161a21;
+  --panel-2: #1e232c;
+  --panel-3: #262c37;
+  --line: #2a313d;
+  --line-soft: #222833;
+  --fg: #e8ebf1;
   --muted: #8b93a3;
   --accent: #4a9eff;
   --ok: #3ecf8e;
   --warn: #f5a524;
   --danger: #ef4444;
-  --danger-dim: #7f1d1d;
+  --radius: 10px;
+  --radius-sm: 7px;
 }
 
 * { box-sizing: border-box; }
@@ -18,12 +40,13 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-.muted { color: var(--muted); }
 .hidden { display: none !important; }
+.muted { color: var(--muted); }
 .spacer { flex: 1; }
 
 /* ── bars ─────────────────────────────────────────────────────────── */
@@ -32,15 +55,31 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 10px 16px;
+  gap: 12px;
+  padding: 9px 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
+.bar-left, .bar-right { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.brand { letter-spacing: 0.2px; }
 
-.footer { border-bottom: none; border-top: 1px solid var(--line); }
-.bar-left, .bar-right { display: flex; align-items: center; gap: 10px; }
-.brand { letter-spacing: .3px; }
+.footer {
+  border-bottom: none;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.footer label { color: var(--muted); }
+
+select, input[type="range"] { accent-color: var(--accent); }
+.bar select, .footer select {
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+}
 
 /* ── buttons ──────────────────────────────────────────────────────── */
 
@@ -48,50 +87,55 @@ body {
   background: var(--panel-2);
   color: var(--fg);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
   font: inherit;
+  font-size: 13px;
   cursor: pointer;
-  transition: background .12s, border-color .12s;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  white-space: nowrap;
 }
-.btn:hover:not(:disabled) { background: #2b3140; border-color: #3d465a; }
-.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:hover:not(:disabled) { background: var(--panel-3); border-color: #3a4353; }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.btn-stop { border-color: #3d465a; font-weight: 600; }
+.btn-stop { border-color: #3d4451; }
 .btn-estop {
-  background: var(--danger-dim);
+  background: var(--danger);
   border-color: var(--danger);
   color: #fff;
-  font-weight: 700;
+  font-weight: 600;
 }
-.btn-estop:hover:not(:disabled) { background: var(--danger); }
-.btn-estop-sm { border-color: var(--danger); color: #ffb4b4; }
-
-select {
-  background: var(--panel-2);
-  color: var(--fg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 7px 10px;
-  font: inherit;
+.btn-estop:hover:not(:disabled) { background: #f05252; border-color: #f05252; }
+.btn-estop-sm {
+  color: #ffb4b4;
+  border-color: #5c2626;
+  background: #2a1516;
 }
+.btn-estop-sm:hover:not(:disabled) { background: #3a1b1c; border-color: #7f1d1d; }
 
 /* ── estop banner ─────────────────────────────────────────────────── */
 
 .banner {
-  padding: 10px 16px;
-  background: var(--danger-dim);
-  border-bottom: 1px solid var(--danger);
-  color: #ffe4e4;
-  font-weight: 600;
-  letter-spacing: .3px;
+  background: linear-gradient(90deg, #7f1d1d, #5c1616);
+  color: #fff;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  border-bottom: 1px solid #a02020;
 }
 
-/* ── pens ─────────────────────────────────────────────────────────── */
+/* ── fleet grid ───────────────────────────────────────────────────── */
 
+/* Two pens side by side on a desktop; one centred when there is one dog, so a
+   single robot does not get a 1500px-wide card with a column of controls
+   floating in the middle of it. */
 .pens {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(460px, 760px));
+  justify-content: center;
+  align-items: start;
   gap: 14px;
   padding: 14px;
 }
@@ -99,58 +143,82 @@ select {
 .pen {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px;
+  border-radius: var(--radius);
+  padding: 11px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 9px;
+  min-width: 0;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.pen.focused { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-.pen.driving { border-color: var(--ok); }
+/* Focus has to be unmistakable: which dog the keyboard drives is the single
+   most dangerous thing to get wrong on this screen. */
+.pen.focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 6px 22px -14px var(--accent);
+}
+.pen.driving { border-color: #2f6b4d; }
 
-.pen-head { display: flex; align-items: center; gap: 8px; }
-.pen-name { font-weight: 700; font-size: 15px; }
+/* ── pen head ─────────────────────────────────────────────────────── */
+
+.pen-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
 .focus-btn {
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: 15px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: transparent;
+  color: transparent;
   cursor: pointer;
-  padding: 0 2px;
+  padding: 0;
+  flex: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
-.pen.focused .focus-btn { color: var(--accent); }
+.focus-btn:hover { border-color: var(--accent); }
+.pen.focused .focus-btn { border-color: var(--accent); background: var(--accent); }
+.pen-name { font-weight: 650; font-size: 15px; letter-spacing: 0.2px; }
+.pen-role { font-size: 12px; }
+
+.fault-badge {
+  border: 1px solid #7f1d1d;
+  background: #2a1516;
+  color: #ffb4b4;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
 
 .pill {
   font-size: 12px;
-  padding: 3px 9px;
+  padding: 2px 9px;
   border-radius: 999px;
-  background: var(--panel-2);
   border: 1px solid var(--line);
   color: var(--muted);
+  white-space: nowrap;
 }
-.pill.up { color: var(--ok); border-color: #23543f; }
-.pill.down { color: var(--muted); }
+.pill.ok { color: var(--ok); border-color: #1f5c43; }
+.pill.warn { color: var(--warn); border-color: #6b4a12; }
+.pill.bad { color: #ffb4b4; border-color: #7f1d1d; }
 
-/* ── video ────────────────────────────────────────────────────────── */
+/* ── pen actions ──────────────────────────────────────────────────── */
 
-/* The picture is the reason the console exists, but at 16:9 of a full column
-   it was ~800px tall and pushed obstacle avoidance, lighting and the nudges
-   below the fold — you had to scroll to reach a stop button's neighbours.
-   Capped to a share of the viewport instead: still the largest thing on the
-   card, no longer the only thing on screen. */
+.pen-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+.pen-actions .btn { text-align: center; }
+
+/* ── stage: picture beside the pad ────────────────────────────────── */
+
+.stage { display: flex; gap: 10px; align-items: stretch; }
+
 .video-wrap {
-  --video-max-h: min(42vh, 460px);
   position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
   aspect-ratio: 16 / 9;
-  /* Width follows the height cap rather than staying full-width and letting
-     `object-fit: contain` letterbox the sides — the picture is 16:9 and the
-     box should be too, at whatever size it ends up. */
-  width: min(100%, calc(var(--video-max-h) * 16 / 9));
-  max-height: var(--video-max-h);
-  margin: 0 auto;
-  background: #0c0e12;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  background: #090b0e;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 .video { width: 100%; height: 100%; object-fit: contain; display: block; }
@@ -160,208 +228,299 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
+  text-align: center;
+  padding: 10px;
+  font-size: 13px;
   color: var(--muted);
-  background: #0c0e12;
+  background: #090b0e;
 }
 
-/* ── facts ────────────────────────────────────────────────────────── */
-
-.facts {
+.drive {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.pad-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin: 0;
+  grid-template-columns: repeat(3, 40px);
+  grid-template-rows: repeat(2, 40px);
+  gap: 5px;
 }
-.facts div {
+.pad-key {
   background: var(--panel-2);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 7px 9px;
+  color: var(--fg);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s ease, border-color 0.1s ease;
 }
-.facts dt { color: var(--muted); font-size: 11px; margin: 0; }
-.facts dd { margin: 2px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pad-key:hover { background: var(--panel-3); }
+.pad-key.active, .pad-key:active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06121f;
+}
+.hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  max-width: 134px;
+  line-height: 1.35;
+}
 
-/* ── faults ───────────────────────────────────────────────────────── */
+/* ── telemetry strip ──────────────────────────────────────────────── */
 
-.faults { border-top: 1px solid var(--line); padding-top: 8px; }
-.faults-head {
+.strip {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
   font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 5px;
+  min-height: 34px;
 }
-.fault-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.fault-empty { color: var(--muted); font-size: 12px; padding: 2px 0; }
-.fault {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
-  padding: 4px 7px;
-  border-radius: 6px;
-  background: #2a1b1b;
-  border: 1px solid #5b2626;
+.gauge { display: flex; align-items: center; gap: 6px; flex: none; }
+.gauge-label { color: var(--muted); }
+.gauge-bar {
+  width: 62px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  overflow: hidden;
+  display: block;
 }
-.fault-what { color: #ffc9c9; }
-.fault-where { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.pill.bad { color: #ffb4b4; border-color: var(--danger); }
-.pen.has-faults { border-color: #6b2b2b; }
+.gauge-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--ok);
+  border-radius: 999px;
+  transition: width 0.35s ease, background 0.35s ease;
+}
+.gauge-bar > i.warn { background: var(--warn); }
+.gauge-bar > i.bad { background: var(--danger); }
+.gauge-value { font-variant-numeric: tabular-nums; min-width: 30px; }
+.strip-target {
+  margin-left: auto;
+  font-size: 11px;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-/* ── live flags (what the robot says it is set to) ────────────────── */
-
-.flags { display: flex; flex-wrap: wrap; gap: 6px; }
-.flags:empty { display: none; }
+.flags { display: flex; flex-wrap: wrap; gap: 5px; }
 .flag {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  padding: 2px 8px;
+  gap: 4px;
+  font-size: 11px;
+  padding: 1px 7px;
   border-radius: 999px;
   border: 1px solid var(--line);
   color: var(--muted);
-  background: var(--panel-2);
+  background: var(--panel);
 }
 .flag.on { color: var(--ok); border-color: #1f5c43; }
 .flag b { color: var(--fg); font-weight: 600; }
+
+.facts { display: flex; gap: 14px; margin: 0; flex-wrap: wrap; }
+.facts > div { display: flex; gap: 5px; align-items: baseline; }
+.facts dt { color: var(--muted); font-size: 12px; }
+.facts dd { margin: 0; font-size: 13px; }
+
+/* ── faults ───────────────────────────────────────────────────────── */
+
+.faults { border-top: 1px solid var(--line-soft); padding-top: 7px; }
+.faults-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.fault-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+  max-height: 150px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.fault-list li { display: flex; gap: 8px; align-items: baseline; }
+.fault-list .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.fault-list .what { flex: 1; overflow-wrap: anywhere; }
+.fault-list .what.bad { color: #ffb4b4; }
+
+/* ── tabs ─────────────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.tab:hover { color: var(--fg); }
+.tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+.tab .count {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 5px;
+  margin-left: 4px;
+}
+
+.panels { min-height: 92px; }
+.panel { display: none; }
+.panel.active { display: block; }
+.panel-empty { color: var(--muted); font-size: 12px; padding: 10px 2px; }
 
 /* ── controls ─────────────────────────────────────────────────────── */
 
 .controls { display: flex; flex-direction: column; gap: 2px; }
 .controls:empty { display: none; }
 
-.ctl-group { border-top: 1px solid var(--line); }
-.ctl-group > summary {
-  cursor: pointer;
-  padding: 7px 2px;
-  font-size: 13px;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  user-select: none;
-}
-.ctl-group > summary:hover { color: var(--fg); }
-.ctl-group[open] > summary { color: var(--fg); }
-.ctl-group > summary .count {
-  color: var(--muted);
-  font-size: 11px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 0 6px;
-  margin-left: auto;
-}
-/* A bare row of group names does not read as interactive. */
-.ctl-group > summary::before {
-  content: '▸';
-  font-size: 10px;
-  color: var(--muted);
-  transition: transform 0.12s ease;
-}
-.ctl-group[open] > summary::before { content: '▾'; }
-.ctl-body {
+.ctl-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 2px 0 10px;
+  padding: 4px 0;
 }
-.ctl-body .btn { padding: 6px 10px; font-size: 13px; }
+.ctl-row .btn { padding: 6px 10px; font-size: 13px; }
 
-/* A range control carries its own label and value so a slider that has not
-   been moved still says what it is currently set to. */
-.ctl-range { display: flex; align-items: center; gap: 7px; font-size: 12px; }
-.ctl-range > span { color: var(--muted); min-width: 28px; }
-.ctl-range input[type=range] { width: 104px; accent-color: var(--accent); }
-.ctl-range output { min-width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
-
-.ctl-select { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.ctl-select > span { color: var(--muted); }
-.controls select {
-  padding: 6px 8px;
-  font-size: 13px;
-  max-width: 100%;
+/* A labelled widget: the caption is what makes a bare slider meaningful. */
+.ctl-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
   background: var(--panel-2);
+}
+.ctl-field > span { color: var(--muted); white-space: nowrap; }
+.ctl-field input[type="range"] { width: 92px; }
+.ctl-field output {
+  min-width: 20px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+.ctl-field select {
+  background: var(--panel-3);
   color: var(--fg);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 6px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 13px;
+  max-width: 300px;
 }
 
-/* Off is the resting state of a toggle; on has to be visible at a glance. */
 .btn.toggle-on { background: #16412f; border-color: #1f5c43; color: var(--ok); }
+.btn.blocked { opacity: 0.45; cursor: not-allowed; }
 
 .ctl-read {
+  font: inherit;
   font-size: 12px;
   color: var(--muted);
+  background: var(--panel-2);
   border: 1px dashed var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 6px 9px;
+  cursor: pointer;
+  text-align: left;
   max-width: 100%;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-
-/* ── pad ──────────────────────────────────────────────────────────── */
-
-.pad { display: flex; align-items: center; gap: 14px; }
-.pad-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 44px);
-  grid-template-rows: repeat(2, 44px);
-  gap: 6px;
-}
-.pad-key {
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  color: var(--fg);
-  border-radius: 8px;
-  font-size: 16px;
-  cursor: pointer;
-  user-select: none;
-}
-.pad-key.active, .pad-key:active { background: var(--accent); border-color: var(--accent); color: #06121f; }
-.hint { margin: 0; font-size: 12px; color: var(--muted); }
-.pen-actions { display: flex; gap: 8px; }
-.pen-actions .btn { flex: 1; }
-
-@media (max-width: 780px) {
-  .pens { grid-template-columns: 1fr; }
-  .bar { flex-wrap: wrap; }
-}
-
-.muted.warn { color: var(--warn); }
-.pill.warn { color: var(--warn); border-color: #6b4a12; }
+.ctl-read:hover { color: var(--fg); border-color: #3a4353; }
 
 /* ── audit trail ──────────────────────────────────────────────────── */
 
-.audit { border-top: 1px solid var(--line); padding-top: 8px; font-size: 12px; }
+.audit { border-top: 1px solid var(--line-soft); padding-top: 7px; font-size: 12px; }
 .audit summary { cursor: pointer; color: var(--muted); }
+.audit summary:hover { color: var(--fg); }
 .audit-list {
   list-style: none;
   margin: 6px 0 0;
   padding: 0;
   display: grid;
   gap: 2px;
-  max-height: 180px;
+  max-height: 150px;
   overflow-y: auto;
 }
-.audit-list li {
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-  font-variant-numeric: tabular-nums;
-}
-.audit-list .when { color: var(--muted); white-space: nowrap; }
+.audit-list li { display: flex; gap: 8px; justify-content: space-between; }
+.audit-list .when { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .audit-list .what { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .audit-list .what.bad { color: #ffb4b4; }
 
-/* Blocked by safe mode or the dangerous gate. Disabled rather than hidden:
-   safe mode can be turned off, and a capability that vanishes looks like one
-   that never existed. */
-.btn.blocked, .controls select:disabled, .ctl-range input:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+/* ── toast ────────────────────────────────────────────────────────── */
+
+#toasts {
+  position: fixed;
+  right: 14px;
+  bottom: 58px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 50;
+  pointer-events: none;
+}
+.toast {
+  background: var(--panel-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 7px 11px;
+  font-size: 13px;
+  max-width: 380px;
+  box-shadow: 0 8px 24px -12px #000;
+}
+.toast.bad { border-left-color: var(--danger); }
+.toast.ok { border-left-color: var(--ok); }
+
+/* ── narrow screens: fall back to a single column ─────────────────── */
+
+@media (max-width: 980px) {
+  .pens { grid-template-columns: 1fr; }
+  .bar { flex-wrap: wrap; }
+}
+
+/* A phone is genuinely portrait; the pad goes full width under the picture
+   rather than being squeezed into a narrow column beside it. */
+@media (max-width: 560px) {
+  .stage { flex-direction: column; }
+  .drive { flex-direction: row; justify-content: space-between; width: 100%; }
+  .hint { max-width: none; text-align: left; }
+  .pen-actions { grid-template-columns: repeat(2, 1fr); }
 }

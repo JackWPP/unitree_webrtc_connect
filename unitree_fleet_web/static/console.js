@@ -142,6 +142,10 @@ function buildPens(fleet) {
       linkToggle: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="link-toggle"]`),
       controls: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="controls"]`),
       flags: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="flags"]`),
+      tabs: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="tabs"]`),
+      panels: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="panels"]`),
+      batteryBar: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="battery-bar"]`),
+      faultBadge: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="fault-badge"]`),
       auditWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-wrap"]`),
       audit: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit"]`),
       auditCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-count"]`),
@@ -259,6 +263,16 @@ function renderFaults(robotId, robot) {
     : (faults.length ? String(faults.length) + '?' : '?');
   entry.faultCount.className = 'pill' + (faults.length ? ' bad' : (known ? ' up' : ''));
   entry.pen.classList.toggle('has-faults', faults.length > 0);
+
+  // The badge lives in the head, so a fault is visible from whichever tab is
+  // open. Hiding it behind a panel would mean the one thing that must not be
+  // missed is the one thing that can be.
+  if (entry.faultBadge) {
+    entry.faultBadge.classList.toggle('hidden', faults.length === 0);
+    entry.faultBadge.title = faults.length
+      ? `${faults.length} 条故障 —— 点击查看` : '';
+    entry.faultBadge.onclick = () => showTab(robot.robot_id, 'sense');
+  }
 }
 
 function updateKeysHint() {
@@ -378,6 +392,16 @@ function renderStatus(payload) {
       ? '—' : `${percent}%`;
     entry.battery.title = battery.power_voltage_v
       ? `${battery.power_voltage_v} V` : '';
+
+    // A number alone makes the operator read and compare; a bar is seen at a
+    // glance. Thresholds are the ones an operator acts on: under 30% stop
+    // planning long runs, under 15% bring it home.
+    if (entry.batteryBar) {
+      const known = typeof percent === 'number';
+      entry.batteryBar.style.width = known ? `${Math.max(0, Math.min(100, percent))}%` : '0';
+      entry.batteryBar.classList.toggle('warn', known && percent < 30 && percent >= 15);
+      entry.batteryBar.classList.toggle('bad', known && percent < 15);
+    }
 
     // When the panels have nothing, say why. An empty panel and a robot that
     // reports nothing look identical, and they want different reactions.
@@ -667,9 +691,13 @@ function paintToggle(button, control, on) {
 
 function selectWidget(robotId, control) {
   const wrap = document.createElement('label');
-  wrap.className = 'ctl-select';
+  wrap.className = 'ctl-field';
+  // The caption is a label, not a paragraph: `title` is a full explanation and
+  // belongs in the tooltip. Rendering it as the caption turned one dropdown
+  // into a sentence wide enough to push everything else off the row.
   const caption = document.createElement('span');
-  caption.textContent = control.title || control.label;
+  caption.textContent = control.label;
+  if (control.title) caption.title = control.title;
   wrap.appendChild(caption);
 
   const picker = document.createElement('select');
@@ -723,7 +751,7 @@ function selectWidget(robotId, control) {
 
 function rangeWidget(robotId, control) {
   const wrap = document.createElement('label');
-  wrap.className = 'ctl-range';
+  wrap.className = 'ctl-field';
   const caption = document.createElement('span');
   caption.textContent = control.label;
   if (control.title) caption.title = control.title;
@@ -780,47 +808,141 @@ function summariseRead(result, fallback) {
   return parts.length ? parts.join('  ') : (result.note || fallback);
 }
 
+/* Which tab a control lives on. The backend decides what a control *is*
+   (`group`); where it appears is presentation, so the mapping is here — a
+   group the backend adds later still renders, on a tab named after it. */
+const TAB_OF_GROUP = {
+  posture: 'posture',
+  gait: 'posture',
+  motion_nudge: 'drive',
+  motion: 'settings',
+  lighting: 'settings',
+  safety_net: 'sense',
+  media: 'sense',
+};
+
+const TAB_LABELS = {
+  drive: '驾驶',
+  posture: '姿态',
+  sense: '感知',
+  settings: '设置',
+  log: '记录',
+};
+
+const TAB_ORDER = ['drive', 'posture', 'sense', 'settings'];
+
+function panelFor(robotId, tab) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.panels) return null;
+  let panel = entry.panels.querySelector(`[data-tab="${CSS.escape(tab)}"]`);
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.dataset.tab = tab;
+    entry.panels.appendChild(panel);
+  }
+  return panel;
+}
+
+function showTab(robotId, tab) {
+  const entry = state.focusMap[robotId];
+  if (!entry) return;
+  state.tab = state.tab || {};
+  state.tab[robotId] = tab;
+  for (const button of entry.tabs.querySelectorAll('.tab')) {
+    button.classList.toggle('active', button.dataset.tab === tab);
+  }
+  for (const panel of entry.panels.querySelectorAll('.panel')) {
+    panel.classList.toggle('active', panel.dataset.tab === tab);
+  }
+}
+
+function buildTabBar(robotId, tabs) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.tabs) return;
+  entry.tabs.textContent = '';
+  for (const tab of tabs) {
+    const button = document.createElement('button');
+    button.className = 'tab';
+    button.dataset.tab = tab;
+    button.textContent = TAB_LABELS[tab] || tab;
+    const count = state.tabCounts && state.tabCounts[robotId] && state.tabCounts[robotId][tab];
+    if (count) {
+      const badge = document.createElement('span');
+      badge.className = 'count';
+      badge.textContent = String(count);
+      button.appendChild(badge);
+    }
+    button.addEventListener('click', () => showTab(robotId, tab));
+    entry.tabs.appendChild(button);
+  }
+}
+
 function renderControls(robotId) {
   const entry = state.focusMap[robotId];
-  if (!entry || !entry.controls) return;
+  if (!entry || !entry.controls || !entry.tabs || !entry.panels) return;
+
   const spec = state.controls[robotId];
   entry.controls.textContent = '';
-  if (!spec || !spec.groups || !spec.groups.length) {
-    entry.controls.classList.add('hidden');
+  entry.panels.textContent = '';
+  entry.tabs.textContent = '';
+  entry.controls.classList.add('hidden');
+
+  const controls = (spec && spec.controls) || [];
+  if (!controls.length) {
+    entry.tabs.classList.add('hidden');
     return;
   }
-  entry.controls.classList.remove('hidden');
+  entry.tabs.classList.remove('hidden');
 
-  const byGroup = new Map();
-  for (const control of spec.controls || []) {
-    if (!byGroup.has(control.group)) byGroup.set(control.group, []);
-    byGroup.get(control.group).push(control);
+  // The drive tab is never empty: nudges come from the server, but the pad
+  // itself is always there, so the tab exists even if no nudge control did.
+  const buckets = new Map();
+  buckets.set('drive', []);
+  for (const control of controls) {
+    const tab = TAB_OF_GROUP[control.group] || control.group;
+    if (!buckets.has(tab)) buckets.set(tab, []);
+    buckets.get(tab).push(control);
   }
 
-  for (const group of spec.groups) {
-    const items = byGroup.get(group);
-    if (!items || !items.length) continue;
-
-    const section = document.createElement('details');
-    section.className = 'ctl-group';
-    // Open the posture group by default: it is what an operator reaches for,
-    // and a panel of seven collapsed rows helps nobody.
-    section.open = group === 'posture';
-
-    const summary = document.createElement('summary');
-    summary.textContent = GROUP_LABELS[group] || group;
-    const count = document.createElement('span');
-    count.className = 'count';
-    count.textContent = `${items.length}`;
-    summary.appendChild(count);
-    section.appendChild(summary);
-
-    const body = document.createElement('div');
-    body.className = 'ctl-body';
-    for (const control of items) body.appendChild(controlWidget(robotId, control));
-    section.appendChild(body);
-    entry.controls.appendChild(section);
+  const tabs = TAB_ORDER.filter((tab) => buckets.has(tab) && buckets.get(tab).length);
+  for (const tab of buckets.keys()) {
+    if (!tabs.includes(tab) && buckets.get(tab).length) tabs.push(tab);
   }
+
+  state.tabCounts = state.tabCounts || {};
+  state.tabCounts[robotId] = {};
+  for (const tab of tabs) state.tabCounts[robotId][tab] = buckets.get(tab).length;
+
+  const canBuzz = controls.some((c) => c.kind === 'button' && c.group === 'motion_nudge');
+  buildTabBar(robotId, tabs);
+
+  for (const tab of tabs) {
+    const panel = panelFor(robotId, tab);
+    if (tab !== 'drive') {
+      const row = document.createElement('div');
+      row.className = 'ctl-row';
+      for (const control of buckets.get(tab)) row.appendChild(controlWidget(robotId, control));
+      panel.appendChild(row);
+      continue;
+    }
+    // Drive: nudges + turns, in two rows so "translate" and "rotate" read
+    // apart. Split on `degrees` alone — a move control still carries
+    // `omega: 0.0`, so testing for its absence dropped every move button out
+    // of both buckets and the row rendered empty.
+    const turns = buckets.get(tab).filter((c) => (c.args || {}).degrees !== undefined);
+    const moves = buckets.get(tab).filter((c) => (c.args || {}).degrees === undefined);
+    for (const group of [moves, turns]) {
+      if (!group.length) continue;
+      const row = document.createElement('div');
+      row.className = 'ctl-row';
+      for (const control of group) row.appendChild(controlWidget(robotId, control));
+      panel.appendChild(row);
+    }
+  }
+
+  const remembered = state.tab && state.tab[robotId];
+  showTab(robotId, tabs.includes(remembered) ? remembered : tabs[0]);
 }
 
 /* ── loading the panel ─────────────────────────────────────────────── */

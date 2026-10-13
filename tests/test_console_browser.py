@@ -233,31 +233,52 @@ def test_each_pen_gets_its_own_video_stream(rendered):
         assert f"/api/robot/{robot_id}/stream.mjpeg" in block
 
 
-def test_the_control_panel_renders_every_group(rendered):
+def test_the_layout_is_two_columns_not_a_stack(rendered):
+    """The console was a single column: on a desktop it gave one dog a card the
+    full width of the window with every control stacked below the picture, and
+    the drive pad five sections down the page. The shape is the design."""
+    assert ".stage" in rendered or "stage" in rendered
+    # Picture and pad share a row.
+    assert 'class="stage"' in rendered
+    assert 'class="drive"' in rendered
+    # Telemetry is one strip, not a three-cell table.
+    assert 'class="strip"' in rendered
+    assert "gauge-bar" in rendered
+    # Tabs, not accordions.
+    assert 'class="tabs"' in rendered
+    assert 'class="panels"' in rendered
+    # Accordions hid every control behind a row each. The audit trail is still
+    # a <details> — it is history, not a control — so count them per pen.
+    for robot_id in ("dog1", "dog2"):
+        block = pen_block(rendered, robot_id)
+        assert block.count("<details") == 1, "control groups should be tabs, not accordions"
+        assert 'class="audit"' in block
+
+
+def test_the_control_panel_renders_every_tab(rendered):
     """Proves the whole chain ran: page → /api/console/controls → descriptor →
     widgets in the DOM, per dog.
 
     The panel used to render controls for 4 of the 22 tools the console
     exposed; everything else was reachable only by curl. A browser render is
-    the only thing that catches this class of gap, because the endpoint tests
+    the only thing that catches that class of gap, because the endpoint tests
     would all still pass with an empty page.
     """
     for robot_id in ("dog1", "dog2"):
         block = pen_block(rendered, robot_id)
 
-        for group in ("姿态与动作", "步法动作", "运动模式", "避障与感知",
-                      "灯光与声音", "微动"):
-            assert group in block, f"{robot_id} has no {group} group"
+        for tab in ("驾驶", "姿态", "感知", "设置"):
+            assert f'class="tab' in block and tab in block, f"{robot_id} has no {tab} tab"
 
         # One widget of each kind, so a broken renderer for any of them fails.
         assert "避障：开" in block or "避障：关" in block      # toggle
-        assert "雷达：" in block                               # toggle, second one
         assert "站立" in block and "趴下" in block             # button
         assert "<select" in block                              # select
         assert 'type="range"' in block                         # range
         assert "亮度" in block and "音量" in block
-        # The capability that had no route up before this round.
-        assert "恢复" in block
+        # The capability that had no route up before: a fallen Go2 could not
+        # stand up through any tool.
+        assert "起身" in block
 
 
 def test_the_blocked_controls_are_disabled_not_missing(rendered, console_js):

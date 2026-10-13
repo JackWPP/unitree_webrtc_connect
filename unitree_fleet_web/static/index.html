@@ -14,8 +14,8 @@
     <span id="fleet-summary" class="muted">连接中…</span>
   </div>
   <div class="bar-right">
-    <button id="btn-stop-all" class="btn btn-stop" title="停止所有机器狗">⏹ 全部停止</button>
-    <button id="btn-estop" class="btn btn-estop" title="急停：锁存并阻尼">🔴 急停</button>
+    <button id="btn-stop-all" class="btn btn-stop" title="停止所有机器狗">全部停止</button>
+    <button id="btn-estop" class="btn btn-estop" title="急停：锁存并阻尼">急停</button>
     <button id="btn-estop-release" class="btn" disabled title="解除急停锁存">解除急停</button>
   </div>
 </header>
@@ -47,71 +47,89 @@
 <!-- Template is cloned per robot. All values are written with textContent,
      never innerHTML: a robot's name is operator-supplied and would otherwise
      be a stored-XSS vector, which is exactly what the previous web console
-     shipped (an unescaped inline onclick built from the dog's name). -->
+     shipped (an unescaped inline onclick built from the dog's name).
+
+     Layout notes, because the shape is the design:
+     * The pen is a two-column card, not a vertical list. On a wide screen a
+       stacked column wasted most of the width and pushed every control below
+       the fold.
+     * The video and the drive pad share a row. The pad is the thing an
+       operator touches most, so it sits beside the picture rather than under
+       five other sections.
+     * Telemetry is a single strip, not a three-column table with one number in
+       each cell.
+     * The control groups are tabs, not accordions: accordions hide everything
+       and still cost a row each. -->
 <template id="pen-template">
   <section class="pen" data-robot>
+
     <header class="pen-head">
-      <button class="focus-btn" data-role="focus" title="选中这只狗">●</button>
+      <button class="focus-btn" data-role="focus" title="选中这只狗（空格切换）">●</button>
       <span class="pen-name" data-role="name"></span>
       <span class="pen-role muted" data-role="role"></span>
+      <button class="fault-badge hidden" data-role="fault-badge" title="有故障，见「感知」页">
+        <span data-role="fault-count">0</span>
+      </button>
       <span class="spacer"></span>
       <span class="pill" data-role="link">—</span>
     </header>
-
-    <div class="video-wrap">
-      <img class="video" data-role="video" alt="实时画面">
-      <div class="video-off" data-role="video-off">画面已关闭</div>
-    </div>
-
-    <dl class="facts">
-      <div><dt>电量</dt><dd data-role="battery">—</dd></div>
-      <div><dt>状态</dt><dd data-role="state">—</dd></div>
-      <div><dt>目标</dt><dd data-role="target">—</dd></div>
-    </dl>
-
-    <!-- Live settings the robot reports about itself: motion mode, obstacle
-         avoidance, brightness, volume. Read-only mirror of what the controls
-         below have actually set — a toggle that flips locally but is rejected
-         by the robot would otherwise look like it worked. -->
-    <div class="flags" data-role="flags"></div>
-
-    <div class="faults" data-role="faults-wrap">
-      <div class="faults-head">
-        <span>故障</span>
-        <span class="pill" data-role="fault-count">—</span>
-      </div>
-      <ul class="fault-list" data-role="faults"></ul>
-    </div>
-
-    <div class="pad">
-      <div class="pad-grid" data-role="pad">
-        <button class="pad-key" data-axis="ly+" title="前进">↑</button>
-        <button class="pad-key" data-axis="rx-" title="左转">⟲</button>
-        <button class="pad-key" data-axis="rx+" title="右转">⟳</button>
-        <button class="pad-key" data-axis="ly-" title="后退">↓</button>
-        <button class="pad-key" data-axis="lx-" title="左移">←</button>
-        <button class="pad-key" data-axis="lx+" title="右移">→</button>
-      </div>
-      <p class="hint" data-role="keys"></p>
-    </div>
 
     <div class="pen-actions">
       <button class="btn" data-role="link-toggle">连接</button>
       <button class="btn" data-role="stop">停止</button>
       <button class="btn btn-estop-sm" data-role="estop">急停</button>
-      <button class="btn" data-role="video-toggle">关闭画面</button>
+      <button class="btn" data-role="video-toggle">画面</button>
     </div>
 
-    <!-- Every group below is rendered from /api/console/controls, which is
-         derived from the tools this robot actually registered. A capability
-         the model lacks never gets a button, so the panel cannot offer
-         something that will only fail. -->
-    <div class="controls" data-role="controls"></div>
+    <div class="stage">
+      <div class="video-wrap">
+        <img class="video" data-role="video" alt="实时画面">
+        <div class="video-off" data-role="video-off">画面已关闭</div>
+      </div>
+
+      <div class="drive">
+        <div class="pad-grid" data-role="pad">
+          <button class="pad-key" data-axis="ly+" title="前进 (W)">↑</button>
+          <button class="pad-key" data-axis="rx-" title="左转 (Q)">⟲</button>
+          <button class="pad-key" data-axis="rx+" title="右转 (E)">⟳</button>
+          <button class="pad-key" data-axis="ly-" title="后退 (S)">↓</button>
+          <button class="pad-key" data-axis="lx-" title="左移 (A)">←</button>
+          <button class="pad-key" data-axis="lx+" title="右移 (D)">→</button>
+        </div>
+        <p class="hint" data-role="keys"></p>
+      </div>
+    </div>
+
+    <div class="strip">
+      <div class="gauge" data-role="battery-wrap">
+        <span class="gauge-label">电量</span>
+        <span class="gauge-bar"><i data-role="battery-bar"></i></span>
+        <span class="gauge-value" data-role="battery">—</span>
+      </div>
+      <div class="flags" data-role="flags"></div>
+      <span class="strip-target muted" data-role="target" title="连接目标"></span>
+    </div>
+
+    <dl class="facts hidden">
+      <div><dt>状态</dt><dd data-role="state">—</dd></div>
+    </dl>
+
+    <nav class="tabs" data-role="tabs"></nav>
+    <div class="panels" data-role="panels"></div>
+
+    <!-- Kept out of the tab panels: a fault is the one thing that has to be
+         visible whichever tab is open, so the head carries a badge and the
+         list lives under 感知. -->
+    <div class="faults hidden" data-role="faults-wrap">
+      <ul class="fault-list" data-role="faults"></ul>
+    </div>
 
     <details class="audit" data-role="audit-wrap">
       <summary>最近操作 <span class="muted" data-role="audit-count"></span></summary>
       <ul class="audit-list" data-role="audit"></ul>
     </details>
+
+    <div class="controls hidden" data-role="controls"></div>
   </section>
 </template>
 
