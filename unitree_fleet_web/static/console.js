@@ -673,16 +673,46 @@ function wireButtons() {
 
 /* ── live status ───────────────────────────────────────────────────── */
 
+/* Status arrives over a WebSocket, but the console must not depend on it.
+ *
+ * Rendering the page in a real browser is what surfaced this: the socket was
+ * closed, and every live field — link pills, battery, faults, the fleet
+ * summary — sat on its initial placeholder text forever. A proxy that blocks
+ * upgrades, a locked-down network, or a hiccup would leave an operator
+ * staring at "连接中…" while the HTTP API was perfectly reachable.
+ *
+ * So polling is the fallback and the socket is the optimisation: the poll
+ * loop runs always and simply stands down while the socket is open. */
+function startPolling() {
+  if (state.pollTimer) return;
+  state.pollTimer = setInterval(async () => {
+    if (state.wsOpen) return;
+    try {
+      renderStatus(await api('/api/fleet/status'));
+    } catch (_) { /* keep trying; the next tick may succeed */ }
+  }, 1000);
+}
+
 function wireSocket() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const suffix = TOKEN ? '?token=' + encodeURIComponent(TOKEN) : '';
-  const socket = new WebSocket(`${proto}//${location.host}/ws${suffix}`);
+  let socket;
+  try {
+    socket = new WebSocket(`${proto}//${location.host}/ws${suffix}`);
+  } catch (_) {
+    return;  // polling already covers us
+  }
 
+  socket.addEventListener('open', () => {
+    state.wsOpen = true;
+    document.getElementById('link-state').textContent = '';
+  });
   socket.addEventListener('message', (event) => {
     try { renderStatus(JSON.parse(event.data)); } catch (_) { /* ignore */ }
   });
   socket.addEventListener('close', () => {
-    document.getElementById('link-state').textContent = '状态推送已断开，重连中…';
+    state.wsOpen = false;
+    startPolling();
     setTimeout(wireSocket, 2000);
   });
   socket.addEventListener('error', () => socket.close());
@@ -716,6 +746,7 @@ async function boot() {
     return;
   }
   wireSocket();
+  startPolling();   // the socket stands it down once it is open
   setInterval(tick, TICK_MS);
 }
 
