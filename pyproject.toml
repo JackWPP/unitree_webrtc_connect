@@ -40,6 +40,13 @@ audiohub = [
 agent = [
     "mcp>=2.0",
 ]
+# Dual-dog web console (unitree-fleet-console). Starlette already arrives with
+# the `agent` extra's `mcp`; it is named explicitly so the console can be
+# installed on its own.
+console = [
+    "starlette>=0.37",
+    "uvicorn>=0.27",
+]
 # Everything the bundled examples import (OpenCV windows, Flask LiDAR
 # plotter, sound card, MP3 conversion).
 examples = [
@@ -54,6 +61,8 @@ examples = [
 dev = [
     "pytest",
     "pytest-asyncio",
+    # Starlette's TestClient needs httpx; tests only.
+    "httpx",
 ]
 # Convenience union of every optional group above.
 all = [
@@ -67,13 +76,17 @@ all = [
     "flask",
     "flask-socketio",
     "mcp>=2.0",
+    "starlette>=0.37",
+    "uvicorn>=0.27",
     "pytest",
     "pytest-asyncio",
+    "httpx",
 ]
 
 [project.scripts]
 unitree-fetch-aes-key = "unitree_webrtc_connect._cli:main"
 unitree-robot-mcp = "unitree_robot_agent.cli:main"
+unitree-fleet-console = "unitree_fleet_web.cli:main"
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]
@@ -84,6 +97,7 @@ where = ["."]
 include = [
     "unitree_webrtc_connect*",
     "unitree_robot_agent*",
+    "unitree_fleet_web*",
 ]
 exclude = [
     "tests",

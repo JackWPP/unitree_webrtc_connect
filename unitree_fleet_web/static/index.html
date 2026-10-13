@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unitree 双狗控制台</title>
+<link rel="stylesheet" href="/static/console.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-left">
+    <strong class="brand">Unitree 双狗控制台</strong>
+    <span id="fleet-summary" class="muted">连接中…</span>
+  </div>
+  <div class="bar-right">
+    <button id="btn-stop-all" class="btn btn-stop" title="停止所有机器狗">⏹ 全部停止</button>
+    <button id="btn-estop" class="btn btn-estop" title="急停：锁存并阻尼">🔴 急停</button>
+    <button id="btn-estop-release" class="btn" disabled title="解除急停锁存">解除急停</button>
+  </div>
+</header>
+
+<div id="estop-banner" class="banner hidden">
+  <span id="estop-text">急停已锁存 —— 所有运动指令被拒绝</span>
+</div>
+
+<main id="pens" class="pens"></main>
+
+<footer class="bar footer">
+  <div class="bar-left">
+    <label for="input-mode">输入目标</label>
+    <select id="input-mode">
+      <option value="focus">Focus — 驱动当前选中的狗</option>
+      <option value="both">Both — 同时驱动两只</option>
+      <option value="split">Split — 各用一组按键</option>
+      <option value="per_source">Per-source — 按输入设备绑定</option>
+    </select>
+    <span id="mode-hint" class="muted"></span>
+  </div>
+  <div class="bar-right">
+    <span id="link-state" class="muted">—</span>
+  </div>
+</footer>
+
+<!-- Template is cloned per robot. All values are written with textContent,
+     never innerHTML: a robot's name is operator-supplied and would otherwise
+     be a stored-XSS vector, which is exactly what the previous web console
+     shipped (an unescaped inline onclick built from the dog's name). -->
+<template id="pen-template">
+  <section class="pen" data-robot>
+    <header class="pen-head">
+      <button class="focus-btn" data-role="focus" title="选中这只狗">●</button>
+      <span class="pen-name" data-role="name"></span>
+      <span class="pen-role muted" data-role="role"></span>
+      <span class="spacer"></span>
+      <span class="pill" data-role="link">—</span>
+    </header>
+
+    <div class="video-wrap">
+      <img class="video" data-role="video" alt="实时画面">
+      <div class="video-off" data-role="video-off">画面已关闭</div>
+    </div>
+
+    <dl class="facts">
+      <div><dt>电量</dt><dd data-role="battery">—</dd></div>
+      <div><dt>状态</dt><dd data-role="state">—</dd></div>
+      <div><dt>目标</dt><dd data-role="target">—</dd></div>
+    </dl>
+
+    <div class="pad">
+      <div class="pad-grid" data-role="pad">
+        <button class="pad-key" data-axis="ly+" title="前进">↑</button>
+        <button class="pad-key" data-axis="rx-" title="左转">⟲</button>
+        <button class="pad-key" data-axis="rx+" title="右转">⟳</button>
+        <button class="pad-key" data-axis="ly-" title="后退">↓</button>
+        <button class="pad-key" data-axis="lx-" title="左移">←</button>
+        <button class="pad-key" data-axis="lx+" title="右移">→</button>
+      </div>
+      <p class="hint" data-role="keys"></p>
+    </div>
+
+    <div class="pen-actions">
+      <button class="btn" data-role="stop">停止</button>
+      <button class="btn btn-estop-sm" data-role="estop">急停</button>
+      <button class="btn" data-role="video-toggle">关闭画面</button>
+    </div>
+  </section>
+</template>
+
+<script src="/static/console.js"></script>
+</body>
+</html>
