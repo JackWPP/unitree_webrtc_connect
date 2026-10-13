@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -1710,6 +1711,15 @@ class ConsoleService:
                     "residual_m": round(self._calibration.residual_m, 3),
                     "scale_factor": round(self._calibration.scale_factor, 3),
                     "adequate": self._calibration.adequate,
+                    # The corners, so the map can be drawn to scale instead of
+                    # being given a size by the frontend that the calibration
+                    # disagrees with.
+                    "bounds": [
+                        round(min(x for x, _y in self._calibration.world_points), 3),
+                        round(min(y for _x, y in self._calibration.world_points), 3),
+                        round(max(x for x, _y in self._calibration.world_points), 3),
+                        round(max(y for _x, y in self._calibration.world_points), 3),
+                    ],
                 }
                 if self._calibration is not None else None
             ),
@@ -1723,7 +1733,32 @@ class ConsoleService:
         if not self._arena:
             return {**out, "state": "starting", "detail": "",
                     "poses": {}, "missing": list(self.fleet.ids)}
-        return {**out, **self._arena}
+
+        # The separation is computed here rather than in the page: it is the
+        # number the feature exists to produce, and doing it server-side keeps
+        # one implementation of it instead of one per consumer.
+        poses = self._arena.get("poses") or {}
+        gap = self._separation_from(poses)
+        return {**out, **self._arena, "separation": gap}
+
+    @staticmethod
+    def _separation_from(poses: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Distance, bearing and heading spread between the two dogs."""
+        names = sorted(poses)
+        if len(names) < 2:
+            return None
+        a, b = poses[names[0]], poses[names[1]]
+        dx = b["x"] - a["x"]
+        dy = b["y"] - a["y"]
+        return {
+            "a": names[0],
+            "b": names[1],
+            "distance_m": round(math.hypot(dx, dy), 3),
+            "yaw_spread_deg": round(
+                abs((a["heading_deg"] - b["heading_deg"] + 180.0) % 360.0 - 180.0), 1
+            ),
+            "bearing_deg_from_a_to_b": round(math.degrees(math.atan2(dy, dx)), 1),
+        }
 
     def controls_payload(self, robot_id: str) -> Dict[str, Any]:
         """The control descriptors this robot can actually honour.

@@ -44,6 +44,21 @@
        stop button are always on screen while it runs. -->
   <div class="fleet-row routines" id="fleet-routines"></div>
 
+  <!-- The arena, seen from above. Only useful with a camera and a calibration,
+       so it says which of those is missing rather than drawing an empty field —
+       an empty field and two dogs out of shot look identical otherwise. -->
+  <details class="arena" id="arena-panel">
+    <summary>
+      场地视图
+      <span class="flag" id="arena-state">未配置</span>
+      <span class="muted" id="arena-detail"></span>
+    </summary>
+    <div class="arena-body">
+      <svg id="arena-map" class="arena-map" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="arena-legend muted" id="arena-legend"></div>
+    </div>
+  </details>
+
   <!-- Two dogs, one intent. `robot_turn(-90)` is closed loop on each robot's
        own gyro, so two dogs end a turn at different headings and the error
        accumulates over a sequence. This says how far apart they have got, and

@@ -1006,3 +1006,32 @@ select, input[type="range"] { accent-color: var(--accent); }
 /* One legend line. The keycaps carry the eye; the note explains the axis. */
 .hint-row { display: block; }
 .hint-note { color: var(--muted); }
+
+/* ── the arena, seen from above ───────────────────────────────────── */
+
+.arena { border-top: 1px solid var(--line-soft); padding-top: 6px; font-size: 12px; }
+.arena > summary { cursor: pointer; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.arena > summary:hover { color: var(--fg); }
+.arena-body { display: flex; gap: 14px; padding: 8px 0 2px; align-items: flex-start; }
+
+.arena-map {
+  width: 260px;
+  height: 260px;
+  flex: none;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+/* One metre of every grid line, so a glance gives a distance without reading
+   an axis. The calibration decides how many there are. */
+.arena-map .grid { stroke: var(--line-soft); stroke-width: 1; }
+.arena-map .edge { stroke: var(--line); stroke-width: 1.5; fill: none; }
+.arena-map .dog { stroke: none; }
+.arena-map .dog-label { fill: var(--fg); font-size: 11px; font-family: inherit; }
+.arena-map .gap { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.arena-map .gap-label { fill: var(--muted); font-size: 10px; font-family: inherit; }
+
+.arena-legend { display: flex; flex-direction: column; gap: 4px; }
+.arena-legend .pair { font-variant-numeric: tabular-nums; }
+.arena-legend b { color: var(--fg); font-weight: 600; }
+.arena-legend .warn { color: var(--warn); }

@@ -526,6 +526,7 @@ function renderStatus(payload) {
   state.sources = payload.sources || {};
   state.sync = payload.sync || null;
   renderSync(state.sync);
+  renderArena(payload.arena);
   renderFleetTargets();
   renderRoutine(payload.routine);
   state.flags = payload.flags || state.flags || {};
@@ -1915,6 +1916,232 @@ function wireEditor() {
   }
 }
 
+/* ── the arena map ─────────────────────────────────────────────────── */
+
+/* A top-down view of the calibrated arena with both dogs in it.
+ *
+ * This is the one panel in the console that shows a *relationship* rather than
+ * a value: the two dogs in a single coordinate system, which is what odometry
+ * cannot produce and a camera cannot help producing.
+ *
+ * Drawn from the calibration's own bounds rather than a fixed extent — an arena
+ * the drawing disagrees with is a map that lies about distances. */
+const ARENA_STATES = {
+  off: ['未配置', ''],
+  starting: ['启动中', 'warn'],
+  ok: ['实时', 'on'],
+  camera_failed: ['相机打不开', 'bad'],
+  camera_stale: ['画面停更', 'bad'],
+  no_markers: ['没有登记标记', 'warn'],
+  error: ['检测出错', 'bad'],
+};
+
+const DOG_COLOURS = ['#58a6ff', '#d29922', '#3ecf8e', '#ef4444'];
+
+function renderArena(arena) {
+  const panel = document.getElementById('arena-panel');
+  const stateEl = document.getElementById('arena-state');
+  const detail = document.getElementById('arena-detail');
+  const legend = document.getElementById('arena-legend');
+  const svg = document.getElementById('arena-map');
+  if (!panel || !svg) return;
+  if (!arena) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+
+  // Opened automatically when there is something to look at, and left alone
+  // otherwise. A map that is working is the panel an operator wants; a map that
+  // is not is a row they should be able to ignore.
+  if (arena.state === 'ok' && !panel.dataset.touched) panel.open = true;
+  // A deep link for the same reason the editor has one: `#arena` is how a
+  // screenshot of it is possible at all, and how it gets bookmarked.
+  if (/(?:^|[#&])arena\b/.test(location.hash || '')) {
+    panel.open = true;
+    panel.dataset.touched = '1';
+  }
+
+  const [label, tone] = ARENA_STATES[arena.state] || [arena.state, ''];
+  stateEl.textContent = label;
+  stateEl.className = 'flag' + (tone ? ' ' + tone : '');
+
+  const calibration = arena.calibration;
+  if (arena.state !== 'ok') {
+    // Say which of the several reasons it is. "An empty field" answers none of
+    // them, and two dogs out of shot look exactly like a camera that is off.
+    const why = {
+      off: arena.detail || '没有配置场地相机',
+      starting: '正在等第一帧',
+      camera_failed: arena.detail || '相机打不开',
+      camera_stale: '超过两秒没有新画面',
+      no_markers: arena.detail || '还没有登记标记',
+      error: arena.detail || '检测出错',
+    }[arena.state] || arena.detail || '';
+    detail.textContent = why;
+    svg.textContent = '';
+    legend.textContent = '';
+    if (calibration && calibration.residual_m > 0) {
+      const note = document.createElement('span');
+      note.className = 'warn';
+      note.textContent = `标定残差 ${calibration.residual_m} m`;
+      legend.appendChild(note);
+    }
+    return;
+  }
+
+  const bounds = (calibration && calibration.bounds) || [0, 0, 4, 4];
+  const [minX, minY, maxX, maxY] = bounds;
+  const width = Math.max(0.1, maxX - minX);
+  const height = Math.max(0.1, maxY - minY);
+  const pad = 26;
+  const size = 400;
+  // One scale for both axes, so the map is not stretched. A stretched map makes
+  // a square formation look rectangular and the operator cannot tell.
+  const scale = Math.min((size - pad * 2) / width, (size - pad * 2) / height);
+  const toX = (x) => pad + (x - minX) * scale;
+  // Screen y grows downward and arena y grows upward.
+  const toY = (y) => size - pad - (y - minY) * scale;
+
+  svg.textContent = '';
+
+  const grid = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  for (let x = Math.ceil(minX); x <= maxX; x += 1) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', toX(x)); line.setAttribute('y1', toY(minY));
+    line.setAttribute('x2', toX(x)); line.setAttribute('y2', toY(maxY));
+    line.setAttribute('class', 'grid');
+    grid.appendChild(line);
+  }
+  for (let y = Math.ceil(minY); y <= maxY; y += 1) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', toX(minX)); line.setAttribute('y1', toY(y));
+    line.setAttribute('x2', toX(maxX)); line.setAttribute('y2', toY(y));
+    line.setAttribute('class', 'grid');
+    grid.appendChild(line);
+  }
+  svg.appendChild(grid);
+
+  const edge = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  edge.setAttribute('x', toX(minX)); edge.setAttribute('y', toY(maxY));
+  edge.setAttribute('width', width * scale); edge.setAttribute('height', height * scale);
+  edge.setAttribute('class', 'edge');
+  svg.appendChild(edge);
+
+  const poses = arena.poses || {};
+  const names = Object.keys(poses).sort();
+
+  // The gap, drawn before the dogs so the arrows sit on top of it.
+  if (arena.separation && names.length >= 2) {
+    const a = poses[arena.separation.a];
+    const b = poses[arena.separation.b];
+    if (a && b) {
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', toX(a.x)); line.setAttribute('y1', toY(a.y));
+      line.setAttribute('x2', toX(b.x)); line.setAttribute('y2', toY(b.y));
+      line.setAttribute('class', 'gap');
+      svg.appendChild(line);
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', (toX(a.x) + toX(b.x)) / 2);
+      text.setAttribute('y', (toY(a.y) + toY(b.y)) / 2 - 6);
+      text.setAttribute('class', 'gap-label');
+      text.textContent = `${arena.separation.distance_m} m`;
+      svg.appendChild(text);
+    }
+  }
+
+  names.forEach((name, index) => {
+    const pose = poses[name];
+    const colour = DOG_COLOURS[index % DOG_COLOURS.length];
+    // The arrow points where the nose points, in screen terms: arena +y is up.
+    // 26 px is about 0.4 m at the scale a 4 m arena draws at — dog-sized, which
+    // is the point: the arrows are the subject, and two dots would say less
+    // than one arrow each.
+    const length = 26;
+    const rad = (pose.heading_deg * Math.PI) / 180;
+    const tipX = toX(pose.x) + Math.cos(rad) * length;
+    const tipY = toY(pose.y) - Math.sin(rad) * length;
+    const leftX = toX(pose.x) + Math.cos(rad + 2.5) * length * 0.5;
+    const leftY = toY(pose.y) - Math.sin(rad + 2.5) * length * 0.5;
+    const rightX = toX(pose.x) + Math.cos(rad - 2.5) * length * 0.5;
+    const rightY = toY(pose.y) - Math.sin(rad - 2.5) * length * 0.5;
+
+    const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    arrow.setAttribute('points', `${tipX},${tipY} ${leftX},${leftY} ${rightX},${rightY}`);
+    arrow.setAttribute('class', 'dog');
+    arrow.setAttribute('fill', colour);
+    arrow.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'title'))
+      .textContent = `${name}: (${pose.x}, ${pose.y}) 朝 ${pose.heading_deg}°`;
+    svg.appendChild(arrow);
+
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', toX(pose.x) + 12);
+    label.setAttribute('y', toY(pose.y) + 4);
+    label.setAttribute('class', 'dog-label');
+    label.setAttribute('fill', colour);
+    label.textContent = name;
+    svg.appendChild(label);
+  });
+
+  // Names the dogs the frame did not contain, rather than leaving a gap the
+  // operator has to notice.
+  for (const name of arena.missing || []) {
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', pad);
+    text.setAttribute('y', size - 6);
+    text.setAttribute('class', 'gap-label');
+    text.textContent = `${name} 不在画面里`;
+    svg.appendChild(text);
+  }
+
+  detail.textContent = arena.age_s != null ? `${arena.age_s}s 前` : '';
+  legend.textContent = '';
+  if (arena.separation) {
+    const row = document.createElement('span');
+    row.className = 'pair';
+    const dist = document.createElement('b');
+    dist.textContent = `${arena.separation.distance_m} m`;
+    const yaw = document.createElement('b');
+    yaw.textContent = `${arena.separation.yaw_spread_deg}°`;
+    row.append('间距 ', dist, '　朝向差 ', yaw);
+    legend.appendChild(row);
+
+    // Which way to turn to face the other dog, which is what a formation
+    // command needs and a distance alone does not give: "close the gap" is
+    // ambiguous without knowing which way the gap is.
+    const bearing = document.createElement('span');
+    bearing.className = 'pair';
+    const arrow = ['→', '↗', '↑', '↖', '←', '↙', '↓', '↘'][
+      ((Math.round(arena.separation.bearing_deg_from_a_to_b / 45) % 8) + 8) % 8
+    ];
+    bearing.textContent =
+      `${arena.separation.b} 在 ${arena.separation.a} 的 ${arrow} `
+      + `${arena.separation.bearing_deg_from_a_to_b}°`;
+    legend.appendChild(bearing);
+
+    // A separation measured from a floor calibration is inflated by the tag
+    // height. Saying so beside the number is the difference between a
+    // measurement and a number somebody trusts too much.
+    if (calibration && calibration.scale_factor > 1.01) {
+      const note = document.createElement('span');
+      note.className = 'warn';
+      const inflated = (arena.separation.distance_m / calibration.scale_factor).toFixed(2);
+      note.textContent = `（地面标定，距离偏大 ×${calibration.scale_factor} —— 实际约 ${inflated} m）`;
+      legend.appendChild(note);
+    }
+  }
+  if (calibration && calibration.residual_m > 0) {
+    const note = document.createElement('span');
+    note.className = 'muted';
+    note.textContent = `标定残差 ${calibration.residual_m} m`;
+    legend.appendChild(note);
+  }
+
+  // Without a scale note the grid is decoration. With one it is a ruler, and
+  // "how far apart are they" stops needing the number to be read.
+  const ruler = document.createElement('span');
+  ruler.className = 'muted';
+  ruler.textContent = '每格 1 米 · 箭头指向狗头';
+  legend.appendChild(ruler);
+}
+
 /* ── two-dog synchronisation ───────────────────────────────────────── */
 
 /* The numbers are each dog's *change* since the marked reference, never its
@@ -1988,6 +2215,12 @@ async function markSync() {
   } catch (err) {
     toast('标记失败: ' + err.message, 'bad');
   }
+}
+
+function wireArena() {
+  const panel = document.getElementById('arena-panel');
+  // Once the operator has opened or closed it by hand, stop deciding for them.
+  if (panel) panel.addEventListener('toggle', () => { panel.dataset.touched = '1'; });
 }
 
 function wireSync() {
@@ -2272,6 +2505,7 @@ async function boot() {
   wireInput();
   wireFleetBar();
   wireSync();
+  wireArena();
   wireEditor();
   loadFleetActions();
   loadRoutines();
