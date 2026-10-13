@@ -232,3 +232,6 @@ select {
   .pens { grid-template-columns: 1fr; }
   .bar { flex-wrap: wrap; }
 }
+
+.muted.warn { color: var(--warn); }
+.pill.warn { color: var(--warn); border-color: #6b4a12; }

@@ -78,6 +78,25 @@ CONSOLE_TOOLS = frozenset(
 )
 
 
+#: The wireless-controller button field is a 16-bit mask.
+MAX_KEYS = 0xFFFF
+
+
+def _keys(value: Any) -> int:
+    """Coerce the button bitfield to a 16-bit integer.
+
+    Kept separate from :func:`_clamp` because it is a mask, not an axis:
+    running it through float clamping would silently mangle it.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if number < 0:
+        return 0
+    return min(number, MAX_KEYS)
+
+
 def _clamp(value: Any, limit: float = AXIS_LIMIT) -> float:
     """Coerce one joystick axis into ``[-limit, limit]``.
 
@@ -117,6 +136,9 @@ class ConsoleService:
         self._lease: Optional[asyncio.Task] = None
         #: Browsers currently watching. The lease exists only while > 0.
         self._clients = 0
+        #: Robots with an auto-connect already in flight, so a held key cannot
+        #: start a connect storm.
+        self._connecting: set = set()
         if not self.state.focused and fleet.ids:
             self.state.focused = fleet.roster.default_id or fleet.ids[0]
         for rid in fleet.ids:
@@ -315,6 +337,7 @@ class ConsoleService:
                 "lease_s": self.config.lease_s,
             },
             "watching": self._clients,
+            "connecting": sorted(self._connecting),
             "tools": self.tools_available,
         }
 
@@ -322,6 +345,10 @@ class ConsoleService:
         return {
             "robots": await self.fleet.status_all(live=live),
             "state": self.state.as_dict(),
+            # Robots whose link is coming up because the operator started
+            # driving. Without this the console looks dead for the seconds a
+            # handshake takes.
+            "connecting": sorted(self._connecting),
         }
 
     # ── teleop ───────────────────────────────────────────────────────
@@ -333,6 +360,8 @@ class ConsoleService:
         lx: float = 0.0,
         ly: float = 0.0,
         rx: float = 0.0,
+        ry: float = 0.0,
+        keys: int = 0,
         source: str = "",
     ) -> Dict[str, Any]:
         """One joystick frame aimed explicitly at one robot.
@@ -348,16 +377,26 @@ class ConsoleService:
         if zeroed:
             await self._zero_many(zeroed)
 
-        delivered = await self._frame(robot_id, lx=lx, ly=ly, rx=rx)
+        delivered = await self._frame(robot_id, lx=lx, ly=ly, rx=rx, ry=ry, keys=keys)
         return {
             "robot_id": robot_id,
             "delivered": delivered,
             "zeroed": zeroed,
-            "axes": {"lx": _clamp(lx), "ly": _clamp(ly), "rx": _clamp(rx)},
+            "axes": {
+                "lx": _clamp(lx), "ly": _clamp(ly), "rx": _clamp(rx), "ry": _clamp(ry),
+            },
+            "keys": _keys(keys),
         }
 
     async def teleop_source(
-        self, *, source: str, lx: float = 0.0, ly: float = 0.0, rx: float = 0.0
+        self,
+        *,
+        source: str,
+        lx: float = 0.0,
+        ly: float = 0.0,
+        rx: float = 0.0,
+        ry: float = 0.0,
+        keys: int = 0,
     ) -> Dict[str, Any]:
         """One input frame, routed by the console's own arbitration rules.
 
@@ -382,20 +421,42 @@ class ConsoleService:
             results.append(
                 {
                     "robot_id": robot_id,
-                    "delivered": await self._frame(robot_id, lx=lx, ly=ly, rx=rx),
+                    "delivered": await self._frame(
+                        robot_id, lx=lx, ly=ly, rx=rx, ry=ry, keys=keys
+                    ),
                 }
             )
         return {
             "source": source,
             "targets": targets,
             "zeroed": zeroed,
-            "axes": {"lx": _clamp(lx), "ly": _clamp(ly), "rx": _clamp(rx)},
+            "axes": {
+                "lx": _clamp(lx), "ly": _clamp(ly), "rx": _clamp(rx), "ry": _clamp(ry),
+            },
+            "keys": _keys(keys),
             "results": results,
         }
 
-    async def _frame(self, robot_id: str, *, lx: float, ly: float, rx: float) -> bool:
+    async def _frame(
+        self,
+        robot_id: str,
+        *,
+        lx: float,
+        ly: float,
+        rx: float,
+        ry: float = 0.0,
+        keys: int = 0,
+    ) -> bool:
+        """Publish one wireless-controller frame.
+
+        All five fields the robot accepts are passed through. Dropping `ry`
+        and `keys` would silently disable the body-rotation axis and every
+        button on a physical controller — a gamepad that appears to work
+        except that half of it does nothing.
+        """
+        await self._autoconnect(robot_id)
         delivered = await self.fleet.get(robot_id).session.joystick(
-            lx=_clamp(lx), ly=_clamp(ly), rx=_clamp(rx)
+            lx=_clamp(lx), ly=_clamp(ly), rx=_clamp(rx), ry=_clamp(ry), keys=_keys(keys)
         )
         return bool(delivered)
 
@@ -629,6 +690,35 @@ class ConsoleService:
             await asyncio.sleep(max(0.0, interval - (time.monotonic() - started)))
 
     # ── internals ────────────────────────────────────────────────────
+
+    async def _autoconnect(self, robot_id: str) -> None:
+        """Start connecting a robot the operator is trying to drive.
+
+        Without this, grabbing the sticks for a dog that happens to be
+        disconnected does *nothing*: every frame returns ``delivered=false``
+        and the only clue is a pill that says 离线. "Point at the dog and
+        drive" is the whole point of a console.
+
+        Non-blocking on purpose — a handshake takes seconds and this is called
+        from a 20 Hz loop, so the first frames are simply dropped while the
+        link comes up. Attempts are de-duplicated so a held key cannot start a
+        connect storm, and the failure is left to the session's own reporting
+        rather than raised into the teleop path.
+        """
+        runtime = self.fleet.get(robot_id)
+        if runtime.session.is_connected or robot_id in self._connecting:
+            return
+        self._connecting.add(robot_id)
+
+        async def _run() -> None:
+            try:
+                await runtime.session.ensure_connected()
+            except Exception as exc:  # noqa: BLE001 - the link pill shows it
+                logger.info("teleop auto-connect for %s failed: %r", robot_id, exc)
+            finally:
+                self._connecting.discard(robot_id)
+
+        asyncio.create_task(_run())
 
     async def _zero(self, robot_id: str) -> None:
         """Best-effort zero of one robot's sticks."""

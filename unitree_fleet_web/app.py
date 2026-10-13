@@ -286,6 +286,8 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
                     lx=body.get("lx", 0.0),
                     ly=body.get("ly", 0.0),
                     rx=body.get("rx", 0.0),
+                    ry=body.get("ry", 0.0),
+                    keys=body.get("keys", 0),
                     source=str(body.get("source") or ""),
                 )
             )
@@ -302,6 +304,8 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
                     lx=body.get("lx", 0.0),
                     ly=body.get("ly", 0.0),
                     rx=body.get("rx", 0.0),
+                    ry=body.get("ry", 0.0),
+                    keys=body.get("keys", 0),
                 )
             )
         except Exception as exc:  # noqa: BLE001

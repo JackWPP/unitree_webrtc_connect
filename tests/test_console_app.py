@@ -516,3 +516,16 @@ def test_the_javascript_parses(open_client, tmp_path):
         [node, "--check", str(source)], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_the_console_js_loads_the_gamepad_module_and_uses_it(open_client):
+    """`gamepad.js` is dual-target: the browser loads it as a script and the
+    tests `require()` it. Both halves have to stay wired."""
+    page = open_client.get("/").text
+    assert "/static/gamepad.js" in page
+    assert page.index("/static/gamepad.js") < page.index("/static/console.js")
+
+    assert open_client.get("/static/gamepad.js").status_code == 200
+    source = open_client.get("/static/console.js").text
+    for used in ("UnitreeGamepad", "gamepad:0", "getGamepads", "frameFor"):
+        assert used in source, f"console.js no longer uses {used}"

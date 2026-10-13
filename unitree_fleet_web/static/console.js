@@ -261,8 +261,9 @@ function renderStatus(payload) {
     const connected = !!robot.connected;
     if (connected) online += 1;
 
-    entry.link.textContent = connected ? '在线' : '离线';
-    entry.link.className = 'pill ' + (connected ? 'up' : 'down');
+    const connecting = (state.connecting || []).includes(robot.robot_id);
+    entry.link.textContent = connected ? '在线' : (connecting ? '连接中…' : '离线');
+    entry.link.className = 'pill ' + (connected ? 'up' : (connecting ? 'warn' : 'down'));
     if (entry.linkToggle) {
       // Connecting is how you take the link back after the official app held
       // it; disconnecting hands it back deliberately.
@@ -284,10 +285,19 @@ function renderStatus(payload) {
     renderFaults(robot.robot_id, robot);
   }
 
+  state.connecting = payload.connecting || [];
   document.getElementById('fleet-summary').textContent =
     `${online}/${payload.robots.length} 在线`;
   document.getElementById('watching').textContent =
     payload.watching ? `${payload.watching} 个浏览器在观看` : '';
+  const gp = document.getElementById('gamepad');
+  if (gp) {
+    const pads = state.pads || [];
+    gp.textContent = pads.length
+      ? `手柄 ${pads.join(',')}${state.padWarning ? ' ⚠ ' + state.padWarning : ''}`
+      : '';
+    gp.className = state.padWarning ? 'muted warn' : 'muted';
+  }
   document.getElementById('link-state').textContent =
     payload.state && payload.state.driving && payload.state.driving.length
       ? '正在驱动: ' + payload.state.driving.join(', ')
@@ -520,8 +530,67 @@ function isIdle(axes) {
 /* In split mode each key group is its own source, so the server can route the
  * two halves independently. In the other modes both groups collapse into one
  * logical operator source. */
+/* Send one already-resolved frame for a named source. */
+async function sendFrame(source, frame) {
+  state.wasDriving = state.wasDriving || {};
+  state.wasDriving[source] = true;
+  try {
+    await api('/api/fleet/teleop', {
+      method: 'POST',
+      body: JSON.stringify({
+        source,
+        lx: frame.lx, ly: frame.ly, rx: frame.rx,
+        ry: frame.ry || 0, keys: frame.keys || 0,
+      }),
+    });
+  } catch (err) {
+    if (err.payload && err.payload.code === 'motion_blocked') {
+      toast('急停锁存中，指令已拒绝', 'bad');
+      state.held.clear();
+    }
+  }
+}
+
+/* Give up one source. Scoped on purpose: releasing everything here would zero
+ * the other hand's dog in split mode. */
+async function releaseSource(source) {
+  if (!state.wasDriving || !state.wasDriving[source]) return;
+  state.wasDriving[source] = false;
+  try {
+    await api('/api/fleet/release', {
+      method: 'POST',
+      body: JSON.stringify({ source }),
+    });
+  } catch (_) { /* the dead-man will catch it */ }
+}
+
+/* The gamepad is a source like any other, so all four arbitration modes apply
+ * to it for free. While it is being used it takes precedence over the
+ * keyboard — a pad at rest is not a request to drive, and a stick nudged by
+ * accident should not fight the keys. */
+function readGamepad() {
+  const GP = window.UnitreeGamepad;
+  if (!GP || !navigator.getGamepads) return null;
+  const pads = GP.connectedPads(navigator.getGamepads());
+  state.pads = pads;
+  if (!pads.length) return null;
+  const pad = navigator.getGamepads()[pads[0]];
+  if (!pad) return null;
+  state.padWarning = GP.mappingWarning(pad);
+  return GP.frameFor(pad);
+}
+
 async function tick() {
   if (!state.fleet) return;
+
+  const GP = window.UnitreeGamepad;
+  const padFrame = readGamepad();
+  if (GP && padFrame && !GP.isIdle(padFrame)) {
+    await sendFrame('gamepad:0', padFrame);
+    return;
+  }
+  await releaseSource('gamepad:0');
+
   const sources = state.mode === 'split' ? ['wasd', 'ijkl'] : ['keyboard'];
 
   for (const source of sources) {
@@ -548,33 +617,10 @@ async function tick() {
     // Only the split groups have on-screen pads of their own; the pad drives
     // its own robot directly, so skip here.
     if (isIdle(axes)) {
-      if (state.wasDriving && state.wasDriving[source]) {
-        state.wasDriving[source] = false;
-        try {
-          // Scoped to this source. Releasing everything here would zero the
-          // other hand's dog in split mode.
-          await api('/api/fleet/release', {
-            method: 'POST',
-            body: JSON.stringify({ source }),
-          });
-        } catch (_) { /* the dead-man will catch it */ }
-      }
+      await releaseSource(source);
       continue;
     }
-
-    state.wasDriving = state.wasDriving || {};
-    state.wasDriving[source] = true;
-    try {
-      await api('/api/fleet/teleop', {
-        method: 'POST',
-        body: JSON.stringify({ source, lx: axes.lx, ly: axes.ly, rx: axes.rx }),
-      });
-    } catch (err) {
-      if (err.payload && err.payload.code === 'motion_blocked') {
-        toast('急停锁存中，指令已拒绝', 'bad');
-        state.held.clear();
-      }
-    }
+    await sendFrame(source, axes);
   }
 }
 

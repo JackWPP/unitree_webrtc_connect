@@ -361,7 +361,7 @@ async def test_teleop_clamps_hostile_axis_values(service):
     and does clamp to full ahead.
     """
     result = await service.teleop("dog1", lx=99.0, ly=float("nan"), rx=float("-inf"))
-    assert result["axes"] == {"lx": 1.0, "ly": 0.0, "rx": 0.0}
+    assert result["axes"] == {"lx": 1.0, "ly": 0.0, "rx": 0.0, "ry": 0.0}
 
 
 async def test_teleop_accepts_an_out_of_range_negative_axis(service):
@@ -538,3 +538,113 @@ async def test_connect_reports_why_it_failed_rather_than_raising(service):
 async def test_connect_rejects_an_unknown_robot(service):
     with pytest.raises(UnknownRobot):
         await service.connect("dog9")
+
+
+# ─── the full wireless-controller frame ───────────────────────────────
+
+
+async def test_teleop_carries_all_five_fields_the_robot_accepts(service):
+    """A gamepad that only steers is a gamepad that half-works.
+
+    The robot's `rt/wirelesscontroller` frame has lx/ly/rx/ry/keys. Dropping
+    `ry` and `keys` — which the console used to do — silently disables the
+    body-rotation axis and every button on a physical controller.
+    """
+    result = await service.teleop("dog1", lx=0.5, ly=0.0, rx=0.0, ry=-0.25, keys=0x0102)
+
+    assert result["axes"] == {"lx": 0.5, "ly": 0.0, "rx": 0.0, "ry": -0.25}
+    assert result["keys"] == 0x0102
+
+
+async def test_the_button_mask_is_a_mask_not_an_axis(service):
+    """Running it through float clamping would mangle it."""
+    result = await service.teleop("dog1", keys=0xFFFF)
+    assert result["keys"] == 0xFFFF
+
+    # Out-of-range values are clamped to the field, not to [-1, 1].
+    assert (await service.teleop("dog1", keys=999999))["keys"] == 0xFFFF
+    assert (await service.teleop("dog1", keys=-5))["keys"] == 0
+    assert (await service.teleop("dog1", keys="junk"))["keys"] == 0
+
+
+async def test_a_fleet_frame_carries_the_mask_to_every_target(service):
+    await service.set_input_mode("both")
+    result = await service.teleop_source(source="gamepad:0", ly=0.4, keys=0x0004)
+
+    assert sorted(result["targets"]) == ["dog1", "dog2"]
+    assert result["keys"] == 0x0004
+    assert len(result["results"]) == 2
+
+
+# ─── driving a disconnected robot ─────────────────────────────────────
+
+
+async def test_teleop_starts_connecting_a_robot_that_is_not_up_yet(service):
+    """Grabbing the sticks for a disconnected dog must do something.
+
+    Before this, every frame returned `delivered=false` and the only clue was
+    a pill that said 离线 — the operator would conclude the console was broken.
+    """
+    assert service.fleet.get("dog1").session.is_connected is False
+
+    await service.teleop("dog1", ly=1.0)
+    # The handshake is deliberately not awaited inside the 20 Hz loop, so let
+    # the background task run.
+    for _ in range(40):
+        await asyncio.sleep(0.02)
+        if service.fleet.get("dog1").session.is_connected:
+            break
+
+    assert service.fleet.get("dog1").session.is_connected is True
+    # A later frame is actually delivered.
+    assert (await service.teleop("dog1", ly=1.0))["delivered"] is True
+
+
+async def test_teleop_does_not_start_a_connect_storm(service):
+    """A held key calls this 20 times a second."""
+    spawned = []
+    original = asyncio.create_task
+
+    def counting(coro, **kwargs):
+        spawned.append(coro)
+        return original(coro, **kwargs)
+
+    service.fleet.get("dog1").session.ensure_connected = _slow_connect()  # type: ignore[assignment]
+    asyncio.create_task = counting  # type: ignore[assignment]
+    try:
+        for _ in range(10):
+            await service.teleop("dog1", ly=1.0)
+    finally:
+        asyncio.create_task = original  # type: ignore[assignment]
+        for coro in spawned:
+            coro.close()
+
+    assert len(spawned) == 1, f"expected one connect attempt, got {len(spawned)}"
+
+
+async def test_status_reports_a_robot_whose_link_is_coming_up(service):
+    service.fleet.get("dog1").session.ensure_connected = _slow_connect(0.5)  # type: ignore[assignment]
+    await service.teleop("dog1", ly=1.0)
+
+    assert "dog1" in service._connecting  # noqa: SLF001 - deliberate white-box
+    payload = await service.status()
+    assert payload["connecting"] == ["dog1"]
+
+
+async def test_autoconnect_never_blocks_the_frame(service):
+    """A handshake takes seconds; the teleop loop runs at 20 Hz."""
+    service.fleet.get("dog1").session.ensure_connected = _slow_connect(5.0)  # type: ignore[assignment]
+
+    started = time.monotonic()
+    for _ in range(5):
+        await service.teleop("dog1", ly=1.0)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.5, f"teleop waited {elapsed:.2f}s on a handshake"
+    await service.aclose()
+
+
+def _slow_connect(delay: float = 10.0):
+    async def _connect():
+        await asyncio.sleep(delay)
+    return _connect
