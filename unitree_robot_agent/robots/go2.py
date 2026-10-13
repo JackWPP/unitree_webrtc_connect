@@ -40,6 +40,32 @@ from .base import (
     TransitionCheck,
 )
 
+#: Actions that need a payload, and why they are believed to.
+#:
+#: The library's own examples split cleanly: `Scrape`, `FrontJump`, `FrontPounce`
+#: and `Heart` are sent bare, while `Pose`, `FrontFlip`, `LeftFlip` and
+#: `BackFlip` are all sent `{"data": True}` —
+#: ``examples/go2/data_channel/sportmode_mcf/sportmode_mcf.py:193``,
+#: ``:229``, and the commented-out `BackFlip` in the non-MCF example at
+#: ``examples/go2/data_channel/sportmode/sportmode.py:125``.
+#:
+#: **The honest caveat**: that example drives the MCF api_id space, where
+#: `BackFlip` is 2043 rather than 1044, so this is strong evidence and not
+#: proof for the ids sent here. It is worth acting on anyway because the
+#: failure mode is silent — a flip that does nothing looks exactly like a flip
+#: that is not supported — and because sending a parameter to a command that
+#: ignores it is not dangerous.
+#:
+#: To settle it on hardware: press 前空翻 with this in place, and if the dog
+#: flips, it was needed; if it refuses with `code != 0`, drop the entry and the
+#: command goes back to being bare.
+_ACTION_PARAMETERS = {
+    "pose": {"data": True},
+    "front_flip": {"data": True},
+    "left_flip": {"data": True},
+    "back_flip": {"data": True},
+}
+
 #: Curated sport actions. ``(name, SPORT_CMD key, dangerous, description)``
 _ACTIONS = [
     ("hello", "Hello", False, "Wave hello (1016)."),
@@ -168,6 +194,7 @@ class Go2Profile(RobotProfile):
                 requires_lock=False,
                 description=description,
                 aliases=_ALIASES.get(name, ()),
+                parameter=_ACTION_PARAMETERS.get(name),
                 topic_key=RTC_TOPIC["SPORT_MOD"],
             )
         return out

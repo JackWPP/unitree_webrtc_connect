@@ -83,6 +83,16 @@ class ActionInfo:
     requires_lock: bool = False
     description: str = ""
     aliases: Tuple[str, ...] = ()
+    #: Extra payload the command needs, or None when it takes none.
+    #:
+    #: Most sport commands are bare — `Scrape`, `FrontJump` and `FrontPounce`
+    #: are all sent with no parameter in the library's own examples. A few are
+    #: not: the examples pass `{"data": True}` for `Pose`, `FrontFlip`,
+    #: `LeftFlip` and `BackFlip`. Sending nothing to one of those is not an
+    #: error the firmware reports, it is simply *nothing happening*, which is
+    #: the worst possible failure mode on a robot and one nobody can debug from
+    #: a web page.
+    parameter: Optional[Dict[str, Any]] = None
     #: Topics the command is sent to; filled by the profile.
     topic_key: str = ""
 

@@ -79,8 +79,12 @@ def register(server, ctx: ToolContext) -> None:
                     response, action=action.name, kind=action.kind, state=transition
                 )
 
-            # Go2 sport command.
-            response = await ctx.session.call(action.topic_key, action.value, None)
+            # Go2 sport command. Most take no payload; a few do, and sending
+            # nothing to one of those is not an error the firmware reports —
+            # it is nothing happening at all.
+            response = await ctx.session.call(
+                action.topic_key, action.value, action.parameter
+            )
             if not response.ok:
                 raise ctx.session.refusal(
                     response, api_id=action.value, topic=action.topic_key, action=action.name
