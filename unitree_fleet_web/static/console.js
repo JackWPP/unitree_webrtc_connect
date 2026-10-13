@@ -137,10 +137,72 @@ function buildPens(fleet) {
       faultCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="fault-count"]`),
       posture: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="posture"]`),
       linkToggle: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="link-toggle"]`),
+      auditWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-wrap"]`),
+      audit: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit"]`),
+      auditCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-count"]`),
     };
     updateVideo(robot.robot_id, true);
+    loadAuditOnOpen(robot.robot_id);
   }
   updateKeysHint();
+}
+
+/* The trail is fetched when the operator opens the panel, not on every status
+ * tick: it is history, it changes only when something is done, and polling a
+ * file read per dog per second would be work nobody asked for. */
+function loadAuditOnOpen(robotId) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.auditWrap || !entry.audit) return;
+  entry.auditWrap.addEventListener('toggle', () => {
+    if (entry.auditWrap.open) refreshAudit(robotId);
+  });
+}
+
+async function refreshAudit(robotId) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.audit) return;
+  let payload;
+  try {
+    payload = await api(`/api/robot/${encodeURIComponent(robotId)}/audit?limit=40`);
+  } catch (err) {
+    entry.audit.textContent = '';
+    const item = document.createElement('li');
+    item.className = 'what bad';
+    item.textContent = '读取失败: ' + err.message;
+    entry.audit.appendChild(item);
+    return;
+  }
+
+  entry.audit.textContent = '';
+  const records = (payload.records || []).slice().reverse();  // newest first
+  entry.auditCount.textContent = records.length ? `(${records.length})` : '';
+
+  if (!records.length) {
+    const empty = document.createElement('li');
+    empty.className = 'what muted';
+    empty.textContent = '暂无记录';
+    entry.audit.appendChild(empty);
+    return;
+  }
+
+  for (const record of records) {
+    const item = document.createElement('li');
+
+    const what = document.createElement('span');
+    what.className = 'what' + (record.ok === false ? ' bad' : '');
+    // Every value here is operator- or robot-supplied and goes in as text.
+    const label = record.tool || '?';
+    const why = record.error ? ` — ${record.error}` : '';
+    what.textContent = label + why;
+
+    const when = document.createElement('span');
+    when.className = 'when';
+    when.textContent = (record.iso || '').slice(11) || '';
+
+    item.appendChild(when);
+    item.appendChild(what);
+    entry.audit.appendChild(item);
+  }
 }
 
 /* Faults are rendered from the server's reconciled active set, never from the
@@ -357,6 +419,8 @@ async function robotStop(robotId) {
   try {
     const res = await api(`/api/robot/${encodeURIComponent(robotId)}/stop`, { method: 'POST' });
     if (!res.delivered) toast(`${robotId} 未确认停止（${res.link}）`, 'bad');
+    const entry = state.focusMap[robotId];
+    if (entry && entry.auditWrap && entry.auditWrap.open) refreshAudit(robotId);
   } catch (err) { toast('停止失败: ' + err.message, 'bad'); }
 }
 
@@ -425,6 +489,8 @@ async function callTool(robotId, tool, args) {
     } else {
       toast(`${robotId} ${tool} ok`, 'ok');
     }
+    const entry = state.focusMap[robotId];
+    if (entry && entry.auditWrap && entry.auditWrap.open) refreshAudit(robotId);
     return result;
   } catch (err) {
     toast(`${robotId} ${tool}: ${err.message}`, 'bad');

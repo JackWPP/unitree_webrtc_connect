@@ -529,3 +529,50 @@ def test_the_console_js_loads_the_gamepad_module_and_uses_it(open_client):
     source = open_client.get("/static/console.js").text
     for used in ("UnitreeGamepad", "gamepad:0", "getGamepads", "frameFor"):
         assert used in source, f"console.js no longer uses {used}"
+
+
+# ─── the audit trail ──────────────────────────────────────────────────
+
+
+def test_the_audit_endpoint_returns_this_robots_records(open_client):
+    """Only dog1 is exercised, so only dog1's trail may show anything."""
+    # Drive through the console's own tool route — the same path the UI takes.
+    open_client.post("/api/robot/dog1/tool", json={"tool": "robot_status", "args": {}})
+
+    payload = open_client.get("/api/robot/dog1/audit?limit=10").json()
+    assert payload["robot_id"] == "dog1"
+    assert payload["count"] >= 1
+    assert any(r["tool"] == "robot_status" for r in payload["records"])
+
+    other = open_client.get("/api/robot/dog2/audit?limit=10").json()
+    assert other["robot_id"] == "dog2"
+    assert not any(r["tool"] == "robot_status" for r in other["records"])
+
+
+def test_the_audit_endpoint_never_returns_key_material(open_client):
+    """`AuditLog` redacts on write; this is the end-to-end check that it still
+    does, because "already redacted" is a claim that quietly stops being true."""
+    service = _service_of(open_client)
+    service.fleet.get("dog1").audit.record(
+        "robot_fetch_key",
+        args={"aes_128_key": "deadbeef" * 4, "password": "hunter2"},
+        ok=True,
+    )
+
+    body = open_client.get("/api/robot/dog1/audit?limit=20").text
+    assert "deadbeef" not in body
+    assert "hunter2" not in body
+
+
+def test_the_audit_limit_is_clamped_and_an_unknown_robot_is_a_404(open_client):
+    open_client.post("/api/robot/dog1/tool", json={"tool": "robot_status", "args": {}})
+
+    # Nonsense and negative limits fall back rather than erroring.
+    for query in ("limit=0", "limit=-5", "limit=junk"):
+        assert open_client.get(f"/api/robot/dog1/audit?{query}").status_code == 200
+
+    assert open_client.get("/api/robot/dog9/audit").status_code == 404
+
+
+def test_the_audit_endpoint_is_authenticated(locked_client):
+    assert locked_client.get("/api/robot/dog1/audit").status_code == 401

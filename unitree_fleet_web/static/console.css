@@ -235,3 +235,26 @@ select {
 
 .muted.warn { color: var(--warn); }
 .pill.warn { color: var(--warn); border-color: #6b4a12; }
+
+/* ── audit trail ──────────────────────────────────────────────────── */
+
+.audit { border-top: 1px solid var(--line); padding-top: 8px; font-size: 12px; }
+.audit summary { cursor: pointer; color: var(--muted); }
+.audit-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.audit-list li {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  font-variant-numeric: tabular-nums;
+}
+.audit-list .when { color: var(--muted); white-space: nowrap; }
+.audit-list .what { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-list .what.bad { color: #ffb4b4; }

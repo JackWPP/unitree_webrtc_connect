@@ -602,6 +602,31 @@ class ConsoleService:
             "estop": self.state.estop.as_dict(),
         }
 
+    async def audit(self, robot_id: str, *, limit: int = 30) -> Dict[str, Any]:
+        """What this robot has been asked to do recently.
+
+        The trail is already redacted when written (`AuditLog.record` replaces
+        anything matching a secret marker), so this is safe to serve — and
+        there is a test asserting no key material comes out, because "already
+        redacted" is the kind of claim that quietly stops being true.
+
+        Note the asymmetry with the MCP tool allowlist, which deliberately
+        excludes `robot_audit_tail`. That boundary is about what an *LLM*
+        should be able to reach through a generic tool passthrough. This is
+        the operator's own console, on loopback unless a token says otherwise,
+        reading the operator's own log.
+        """
+        runtime = self.fleet.get(robot_id)
+        limit = max(1, min(int(limit), 200))
+        # Read off the loop: `tail` touches the filesystem, and the console
+        # polls this.
+        records = await asyncio.to_thread(runtime.audit.tail, limit)
+        return {
+            "robot_id": robot_id,
+            "count": len(records),
+            "records": records,
+        }
+
     # ── operator settings ────────────────────────────────────────────
 
     async def set_input_mode(self, mode: str) -> Dict[str, Any]:

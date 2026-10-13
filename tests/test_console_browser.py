@@ -259,3 +259,15 @@ def test_the_template_was_not_rendered_as_a_pen(rendered):
     assert len(all_sections) == 3, "expected two pens plus the inert template"
     assert sorted(s for s in all_sections if s) == ["dog1", "dog2"]
     assert all_sections.count("") == 1, "exactly one un-named section: the template"
+
+
+def test_each_pen_has_an_audit_panel(rendered):
+    """The panel is collapsed by default, so the dump shows its shell rather
+    than records — the records themselves are covered by the API tests. What
+    this proves is that the markup and the element map agree, which the plain
+    contract test cannot: it has never executed the page."""
+    for robot_id in ("dog1", "dog2"):
+        block = pen_block(rendered, robot_id)
+        assert 'data-role="audit-wrap"' in block
+        assert 'data-role="audit"' in block
+        assert "最近操作" in block

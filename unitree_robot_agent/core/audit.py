@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -217,14 +218,18 @@ class AuditLog:
     def tail(self, limit: int = 50) -> List[dict]:
         """Return the last ``limit`` records, newest last.
 
-        Reads from the file when available, otherwise falls back to the
-        in-memory buffer (which is what a stdio deployment without a
-        writable state dir will use)."""
+        Reads backwards from the end of the file rather than reading all of it
+        and slicing: the handler rotates at 5 MB, so `readlines()[-50:]` was
+        parsing tens of thousands of lines to show fifty. It runs on every
+        console poll and every `robot_audit_tail`.
+
+        Falls back to the in-memory buffer when there is no file — what a
+        stdio deployment without a writable state dir uses.
+        """
         limit = max(1, min(int(limit), 500))
         if self.path is not None:
             try:
-                with open(self.path, "r", encoding="utf-8") as handle:
-                    lines = handle.readlines()[-limit:]
+                lines = _read_last_lines(self.path, limit)
                 records = []
                 for line in lines:
                     line = line.strip()
@@ -239,3 +244,28 @@ class AuditLog:
             except OSError:
                 pass
         return list(self._buffer[-limit:])
+
+
+def _read_last_lines(path: Path, limit: int, *, block: int = 8192) -> List[str]:
+    """The last ``limit`` lines of a file, without reading the whole thing.
+
+    Reads fixed-size blocks backwards until enough newlines have been seen.
+    Splitting bytes on ``b"\\n"`` is safe for UTF-8, so no decoding happens
+    until the end.
+    """
+    with open(path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        chunks: List[bytes] = []
+        newlines = 0
+        while position > 0 and newlines <= limit:
+            size = min(block, position)
+            position -= size
+            handle.seek(position)
+            chunk = handle.read(size)
+            chunks.append(chunk)
+            newlines += chunk.count(b"\n")
+        data = b"".join(reversed(chunks))
+    return [
+        raw.decode("utf-8", "replace") for raw in data.splitlines()[-limit:]
+    ]

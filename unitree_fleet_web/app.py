@@ -367,6 +367,17 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 
+    async def get_robot_audit(request) -> Response:
+        robot_id = request.path_params["robot_id"]
+        try:
+            limit = int(request.query_params.get("limit", 30))
+        except ValueError:
+            limit = 30
+        try:
+            return JSONResponse(await service.audit(robot_id, limit=limit))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
     async def get_robot_stream(request) -> Response:
         robot_id = request.path_params["robot_id"]
         try:
@@ -438,6 +449,7 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/robot/{robot_id}/connect", post_robot_connect, methods=["POST"]),
         Route("/api/robot/{robot_id}/disconnect", post_robot_disconnect, methods=["POST"]),
         Route("/api/robot/{robot_id}/tool", post_robot_tool, methods=["POST"]),
+        Route("/api/robot/{robot_id}/audit", get_robot_audit),
         Route("/api/robot/{robot_id}/teleop", post_robot_teleop, methods=["POST"]),
         Route("/api/robot/{robot_id}/move", post_robot_move, methods=["POST"]),
         Route("/api/robot/{robot_id}/stop", post_robot_stop, methods=["POST"]),
