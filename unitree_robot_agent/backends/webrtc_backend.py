@@ -32,6 +32,7 @@ from ..errors import (
     UnsupportedConnection,
     classify_exception,
 )
+from ..fleet.connect import exclusive_connect, resolve_target
 from .base import ApiResponse
 
 logger = logging.getLogger("unitree_robot_agent.backend.webrtc")
@@ -104,7 +105,18 @@ class WebRTCBackend:
             if self.config.ip:
                 kwargs["ip"] = self.config.ip
             else:
-                kwargs["serialNumber"] = self.config.serial_number
+                # Resolve SN -> address here, off the loop. Doing it inside
+                # the driver would block the shared loop for a full discovery
+                # timeout, freezing every other robot's control loop; and two
+                # concurrent discoveries cross-talk on port 10134 because the
+                # scanner does not correlate replies with requests.
+                resolved = await resolve_target(self.config)
+                if resolved:
+                    kwargs["ip"] = resolved
+                else:
+                    # Fall back to the driver's own scan. A miss here is not
+                    # proof the robot is absent, just that this scan was quiet.
+                    kwargs["serialNumber"] = self.config.serial_number
         else:  # sta-t
             kwargs.update(
                 serialNumber=self.config.serial_number,
@@ -119,7 +131,10 @@ class WebRTCBackend:
         conn = await asyncio.to_thread(_build)
 
         try:
-            await conn.connect()
+            # One handshake at a time, process-wide. Two robots connecting at
+            # once would contend for the multicast socket and for the loop.
+            async with exclusive_connect(self.config.robot_id):
+                await conn.connect()
         except BaseException as exc:
             with contextlib.suppress(Exception):
                 await conn.disconnect()
