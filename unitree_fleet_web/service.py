@@ -114,6 +114,9 @@ class ConsoleService:
             rid: asyncio.Lock() for rid in fleet.ids
         }
         self._deadman: Optional[asyncio.Task] = None
+        self._lease: Optional[asyncio.Task] = None
+        #: Browsers currently watching. The lease exists only while > 0.
+        self._clients = 0
         if not self.state.focused and fleet.ids:
             self.state.focused = fleet.roster.default_id or fleet.ids[0]
         for rid in fleet.ids:
@@ -177,20 +180,102 @@ class ConsoleService:
     # ── lifecycle ────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Start the dead-man watchdog."""
+        """Start the dead-man watchdog and the operator lease."""
         if self._deadman is None or self._deadman.done():
-            self._deadman = asyncio.create_task(self._deadman_loop())
+            self._deadman = asyncio.create_task(
+                self._deadman_loop(), name="console-deadman"
+            )
+        if self.config.lease_s > 0 and (
+            self._lease is None or self._lease.done()
+        ):
+            self._lease = asyncio.create_task(self._lease_loop(), name="console-lease")
 
     async def aclose(self) -> None:
-        if self._deadman is not None:
-            self._deadman.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._deadman
-            self._deadman = None
+        for task in (self._deadman, self._lease):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._deadman = None
+        self._lease = None
         # Never leave a robot walking because the console went away.
         with contextlib.suppress(Exception):
             await self._zero_driver()
         await self.fleet.aclose_all()
+
+    # ── operator lease ───────────────────────────────────────────────
+
+    def client_connected(self) -> int:
+        """A browser is watching. Returns the number of watchers."""
+        self._clients += 1
+        logger.info("console client connected (%d watching)", self._clients)
+        return self._clients
+
+    def client_disconnected(self) -> int:
+        """A browser went away. Returns the number still watching."""
+        self._clients = max(0, self._clients - 1)
+        logger.info("console client disconnected (%d watching)", self._clients)
+        return self._clients
+
+    @property
+    def watching(self) -> bool:
+        return self._clients > 0
+
+    async def _lease_loop(self) -> None:
+        """Keep connected robots from releasing themselves while watched.
+
+        A robot session disconnects after ``idle_disconnect_s`` precisely so
+        the owner can take over with the official app. That is right for an
+        agent asking a question; it is wrong for an operator with the console
+        open, where the link dropping mid-session kills the video stream and
+        makes the next command reconnect.
+
+        The lease only *prevents release*. It never connects anything: a robot
+        nobody asked for stays disconnected, and when the last browser goes
+        away the sessions release on their own.
+        """
+        interval = max(1.0, self.config.lease_s)
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                if not self.watching:
+                    continue
+                for robot_id in self.fleet.ids:
+                    runtime = self.fleet.get(robot_id)
+                    if runtime.session.is_connected:
+                        runtime.session.touch()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - a lease must not crash
+                logger.warning("lease loop error: %r", exc)
+
+    # ── explicit connection control ──────────────────────────────────
+
+    async def connect(self, robot_id: str) -> Dict[str, Any]:
+        """Bring one robot up on demand."""
+        runtime = self.fleet.get(robot_id)
+        try:
+            await runtime.session.ensure_connected()
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "robot_id": robot_id,
+                "connected": False,
+                "error": getattr(exc, "code", type(exc).__name__),
+                "message": str(exc),
+                "hint": getattr(exc, "hint", ""),
+            }
+        return {"robot_id": robot_id, "connected": runtime.session.is_connected}
+
+    async def disconnect(self, robot_id: str, *, reason: str = "operator") -> Dict[str, Any]:
+        """Release one robot deliberately.
+
+        ``stop_first`` is the session's default and is what we want: a robot
+        must not be left walking because the operator closed the lid.
+        """
+        runtime = self.fleet.get(robot_id)
+        self.state.release_robot(robot_id)
+        await runtime.session.disconnect(reason=reason, stop_first=True)
+        return {"robot_id": robot_id, "connected": runtime.session.is_connected}
 
     async def _deadman_loop(self) -> None:
         """Zero whatever is driving once frames stop arriving.
@@ -227,7 +312,10 @@ class ConsoleService:
                 "deadman_s": self.config.deadman_s,
                 "stream_fps": self.config.stream_fps,
                 "axis_limit": AXIS_LIMIT,
+                "lease_s": self.config.lease_s,
             },
+            "watching": self._clients,
+            "tools": self.tools_available,
         }
 
     async def status(self, *, live: bool = False) -> Dict[str, Any]:

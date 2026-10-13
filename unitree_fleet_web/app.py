@@ -248,6 +248,24 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 
+    async def post_robot_connect(request) -> Response:
+        robot_id = request.path_params["robot_id"]
+        try:
+            payload = await service.connect(robot_id)
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+        # A failed connect is a 200 with connected=false and the reason, not a
+        # 5xx: the console wants to show *why* (busy, no key, unreachable)
+        # rather than treat it as a server fault.
+        return JSONResponse(payload)
+
+    async def post_robot_disconnect(request) -> Response:
+        robot_id = request.path_params["robot_id"]
+        try:
+            return JSONResponse(await service.disconnect(robot_id))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
     async def get_robot_status(request) -> Response:
         robot_id = request.path_params["robot_id"]
         try:
@@ -361,6 +379,9 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
 
     async def websocket_status(websocket: WebSocket) -> None:
         await websocket.accept()
+        # Counting watchers is what arms the operator lease: while a browser is
+        # here, connected robots must not release themselves mid-session.
+        service.client_connected()
         interval = 1.0 / max(0.25, config.status_hz)
         try:
             while True:
@@ -374,6 +395,8 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
             return
         except asyncio.CancelledError:
             raise
+        finally:
+            service.client_disconnected()
 
     # ── UI ───────────────────────────────────────────────────────────
 
@@ -408,6 +431,8 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/fleet/release", post_fleet_release, methods=["POST"]),
         Route("/api/console/tools", get_console_tools),
         Route("/api/robot/{robot_id}/status", get_robot_status),
+        Route("/api/robot/{robot_id}/connect", post_robot_connect, methods=["POST"]),
+        Route("/api/robot/{robot_id}/disconnect", post_robot_disconnect, methods=["POST"]),
         Route("/api/robot/{robot_id}/tool", post_robot_tool, methods=["POST"]),
         Route("/api/robot/{robot_id}/teleop", post_robot_teleop, methods=["POST"]),
         Route("/api/robot/{robot_id}/move", post_robot_move, methods=["POST"]),

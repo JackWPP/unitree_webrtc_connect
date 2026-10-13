@@ -32,6 +32,14 @@ DEFAULT_STATUS_HZ = 4.0
 #: MJPEG frame rate ceiling per robot. Two live streams share one uplink.
 DEFAULT_STREAM_FPS = 10.0
 
+#: How often to re-assert the console's claim on a connected robot while a
+#: browser is watching. Robot sessions release themselves after
+#: `idle_disconnect_s` so the official app can take over; a console with the
+#: page open is *not* idle, and having the link drop under the operator every
+#: 45 seconds would make the video stream and the next command both fail.
+#: 0 disables the lease.
+DEFAULT_LEASE_S = 5.0
+
 
 def _env(name: str) -> Optional[str]:
     raw = os.environ.get(name)
@@ -52,6 +60,10 @@ class ConsoleConfig:
     deadman_s: float = DEFAULT_DEADMAN_S
     status_hz: float = DEFAULT_STATUS_HZ
     stream_fps: float = DEFAULT_STREAM_FPS
+    #: Re-assert the console's claim on connected robots this often, while at
+    #: least one browser is watching. Zero disables the lease, so links
+    #: release themselves when idle.
+    lease_s: float = DEFAULT_LEASE_S
     #: Serve the built-in single-page console.
     serve_ui: bool = True
     static_dir: Optional[Path] = None

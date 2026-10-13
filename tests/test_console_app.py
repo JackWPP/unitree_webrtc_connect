@@ -9,6 +9,7 @@ bound to ``0.0.0.0``. These tests exist so that cannot come back quietly.
 from __future__ import annotations
 
 import re
+import time
 
 import pytest
 from starlette.testclient import TestClient
@@ -35,7 +36,9 @@ def make_app(tmp_path, *, token: str = ""):
     fleet = FleetManager(roster, backend="mock", audit_to_stderr=False)
     config = ConsoleConfig(host="127.0.0.1", token=token, deadman_s=0.2)
     service = ConsoleService(fleet, config=config)
-    return create_app(service, config)
+    app = create_app(service, config)
+    app._console_service = service
+    return app
 
 
 @pytest.fixture
@@ -49,6 +52,16 @@ def open_client(tmp_path):
 def locked_client(tmp_path):
     with TestClient(make_app(tmp_path, token=TOKEN)) as client:
         yield client
+
+
+
+def _service_of(client):
+    """Reach the ConsoleService behind a TestClient.
+
+    The routes close over it; walking the app's middleware stack is brittle,
+    so the fixture stashes it on the app instead.
+    """
+    return getattr(client.app, "_console_service", None)
 
 
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -389,3 +402,74 @@ def test_the_js_offers_only_the_tools_the_server_advertises(open_client):
     source = open_client.get("/static/console.js").text
     assert "/api/console/tools" in source
     assert "/api/robot/" in source and "/tool" in source
+
+
+# ─── connection control ───────────────────────────────────────────────
+
+
+def test_connect_and_disconnect_are_explicit_operations(open_client):
+    """Taking the link back after the official app held it, or handing it
+    back deliberately, must not require issuing a movement command."""
+    up = open_client.post("/api/robot/dog1/connect").json()
+    assert up == {"robot_id": "dog1", "connected": True}
+
+    down = open_client.post("/api/robot/dog1/disconnect").json()
+    assert down["connected"] is False
+
+
+def test_a_failed_connect_is_a_normal_answer_not_a_server_error(open_client):
+    """The console needs to *show why* (busy, no key, unreachable)."""
+    from unitree_robot_agent.errors import RobotBusy
+
+    svc = _service_of(open_client)
+    assert svc is not None, "the fixture should stash the service on the app"
+
+    async def busy():
+        raise RobotBusy("another client holds the slot")
+
+    svc.fleet.get("dog2").session.ensure_connected = busy  # type: ignore[assignment]
+    response = open_client.post("/api/robot/dog2/connect")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["connected"] is False
+    assert body["error"] == "robot_busy"
+    assert body["hint"]
+
+
+def test_connect_an_unknown_robot_is_a_404(open_client):
+    assert open_client.post("/api/robot/dog9/connect").status_code == 404
+
+
+def test_the_snapshot_tells_the_ui_what_it_may_offer(open_client):
+    """`tools` and `watching` drive the UI, so they are part of the contract."""
+    payload = open_client.get("/api/fleet").json()
+    assert payload["watching"] == 0
+    assert "robot_stand" in payload["tools"]
+    assert payload["limits"]["lease_s"] > 0
+
+
+def test_an_open_websocket_arms_the_operator_lease(open_client):
+    """The lease is armed by a *watching browser*, not by the process being up.
+
+    Counting watchers is what stops connected robots releasing themselves
+    mid-session; if this counter never moved, the console would drop every
+    link after `idle_disconnect_s` and the operator would see the video die
+    and the next command reconnect.
+    """
+    service = _service_of(open_client)
+    assert service.watching is False
+
+    with open_client.websocket_connect("/ws") as socket:
+        first = socket.receive_json()
+        assert first["type"] == "status"
+        assert service.watching is True
+        assert open_client.get("/api/fleet").json()["watching"] == 1
+
+    # Closing the socket must release the claim, or the lease would pin the
+    # robot forever after a browser tab was closed.
+    for _ in range(20):
+        if not service.watching:
+            break
+        time.sleep(0.05)
+    assert service.watching is False

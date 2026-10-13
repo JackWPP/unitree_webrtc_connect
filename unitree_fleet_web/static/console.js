@@ -106,6 +106,7 @@ function buildPens(fleet) {
     pen.querySelector('[data-role="stop"]').addEventListener('click', () => robotStop(robot.robot_id));
     pen.querySelector('[data-role="estop"]').addEventListener('click', () => estop(robot.robot_id));
     pen.querySelector('[data-role="video-toggle"]').addEventListener('click', toggleVideo);
+    pen.querySelector('[data-role="link-toggle"]').addEventListener('click', () => toggleLink(robot.robot_id));
 
     // On-screen pad: pointer down drives that axis for as long as it is held.
     pen.querySelectorAll('.pad-key').forEach((key) => {
@@ -135,6 +136,7 @@ function buildPens(fleet) {
       faults: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="faults"]`),
       faultCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="fault-count"]`),
       posture: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="posture"]`),
+      linkToggle: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="link-toggle"]`),
     };
     updateVideo(robot.robot_id, true);
   }
@@ -261,6 +263,12 @@ function renderStatus(payload) {
 
     entry.link.textContent = connected ? '在线' : '离线';
     entry.link.className = 'pill ' + (connected ? 'up' : 'down');
+    if (entry.linkToggle) {
+      // Connecting is how you take the link back after the official app held
+      // it; disconnecting hands it back deliberately.
+      entry.linkToggle.textContent = connected ? '断开' : '连接';
+      entry.linkToggle.classList.toggle('btn-estop-sm', !connected);
+    }
 
     const session = robot.session || {};
     entry.state.textContent = session.state !== undefined && session.state !== null
@@ -278,6 +286,8 @@ function renderStatus(payload) {
 
   document.getElementById('fleet-summary').textContent =
     `${online}/${payload.robots.length} 在线`;
+  document.getElementById('watching').textContent =
+    payload.watching ? `${payload.watching} 个浏览器在观看` : '';
   document.getElementById('link-state').textContent =
     payload.state && payload.state.driving && payload.state.driving.length
       ? '正在驱动: ' + payload.state.driving.join(', ')
@@ -313,6 +323,23 @@ async function setVideo(robotId, enabled) {
     btn.textContent = enabled ? '关闭画面' : '开启画面';
   } catch (err) {
     toast('切换画面失败: ' + err.message, 'bad');
+  }
+}
+
+async function toggleLink(robotId) {
+  const entry = state.focusMap[robotId];
+  const connected = entry && entry.link.textContent === '在线';
+  const endpoint = connected ? 'disconnect' : 'connect';
+  try {
+    const result = await api(
+      `/api/robot/${encodeURIComponent(robotId)}/${endpoint}`, { method: 'POST' });
+    if (endpoint === 'connect' && result.connected === false) {
+      // A failed connect is a normal answer, not a server error: show why.
+      toast(`${robotId} 连接失败: ${result.message || result.error || 'unknown'}` +
+            (result.hint ? ' — ' + result.hint : ''), 'bad');
+    }
+  } catch (err) {
+    toast(`${robotId} ${endpoint} 失败: ${err.message}`, 'bad');
   }
 }
 

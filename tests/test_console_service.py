@@ -414,3 +414,127 @@ async def test_aclose_never_leaves_a_robot_driving(service):
     await service.teleop("dog1", ly=1.0)
     await service.aclose()
     assert service.state.driven_robots() == set()
+
+
+# ─── operator lease ───────────────────────────────────────────────────
+
+
+def test_the_lease_is_only_armed_while_a_browser_is_watching(service):
+    assert service.watching is False
+    assert service.client_connected() == 1
+    assert service.watching is True
+    assert service.client_connected() == 2
+    assert service.client_disconnected() == 1
+    assert service.watching is True
+    assert service.client_disconnected() == 0
+    assert service.watching is False
+
+
+def test_disconnecting_more_clients_than_connected_does_not_go_negative(service):
+    service.client_disconnected()
+    service.client_disconnected()
+    assert service._clients == 0  # noqa: SLF001 - deliberate white-box
+
+
+async def test_the_lease_keeps_a_watched_robot_from_being_released(service):
+    """A console session must not drop every 45 s under the operator.
+
+    The idle release exists so the owner can take over with the official app.
+    That is right for an agent asking one question and wrong for a console with
+    the page open, where the link dropping kills the video and makes the next
+    command reconnect.
+    """
+    runtime = service.fleet.get("dog1")
+    await runtime.session.ensure_connected()
+    # Pretend the robot has been idle far longer than the release window.
+    runtime.session._last_activity -= 600  # noqa: SLF001
+
+    service.client_connected()
+    service.config.lease_s = 0.05
+    await service.start()
+    try:
+        for _ in range(20):
+            await asyncio.sleep(0.05)
+            if runtime.session.idle_seconds < 60:
+                break
+    finally:
+        for task in (service._lease, service._deadman):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    assert runtime.session.idle_seconds < 60, "lease did not re-assert the claim"
+    assert runtime.session.is_connected is True
+
+
+async def test_the_lease_never_connects_anything_by_itself(service):
+    """Only release is prevented. A robot nobody asked for stays offline."""
+    service.client_connected()
+    service.config.lease_s = 0.05
+    await service.start()
+    try:
+        await asyncio.sleep(0.15)
+    finally:
+        for task in (service._lease, service._deadman):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    assert all(
+        not service.fleet.get(rid).session.is_connected for rid in service.fleet.ids
+    )
+
+
+# ─── explicit connection control ──────────────────────────────────────
+
+
+async def test_connect_brings_one_robot_up(service):
+    result = await service.connect("dog2")
+    assert result == {"robot_id": "dog2", "connected": True}
+    assert service.fleet.get("dog2").session.is_connected is True
+    assert service.fleet.get("dog1").session.is_connected is False
+
+
+async def test_disconnect_releases_one_robot_only(service):
+    await service.connect("dog1")
+    await service.connect("dog2")
+
+    result = await service.disconnect("dog1")
+
+    assert result["connected"] is False
+    assert service.fleet.get("dog1").session.is_connected is False
+    assert service.fleet.get("dog2").session.is_connected is True
+
+
+async def test_disconnect_clears_the_drive_claim(service):
+    """Releasing the robot must also give up the sticks, or a later frame
+    would be sent to a link we no longer hold."""
+    await service.connect("dog1")
+    await service.teleop("dog1", ly=1.0)
+    assert service.state.driven_robots() == {"dog1"}
+
+    await service.disconnect("dog1")
+    assert service.state.driven_robots() == set()
+
+
+async def test_connect_reports_why_it_failed_rather_than_raising(service):
+    """A busy robot is a normal answer the console should display."""
+    from unitree_robot_agent.errors import RobotBusy
+
+    async def busy():
+        raise RobotBusy("another client holds the slot")
+
+    service.fleet.get("dog1").session.ensure_connected = busy  # type: ignore[assignment]
+    result = await service.connect("dog1")
+
+    assert result["connected"] is False
+    assert result["error"] == "robot_busy"
+    assert "another client holds the slot" in result["message"]
+    assert result["hint"]
+
+
+async def test_connect_rejects_an_unknown_robot(service):
+    with pytest.raises(UnknownRobot):
+        await service.connect("dog9")
