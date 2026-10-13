@@ -46,7 +46,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=STOP,
     )
-    async def robot_stop() -> Dict[str, Any]:
+    async def robot_stop(robot_id: str = "") -> Dict[str, Any]:
         async def _impl():
             stopped = await ctx.session.safe_stop(reason="tool:robot_stop")
             if not stopped:
@@ -74,7 +74,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=MOTION,
     )
-    async def robot_emergency_stop(confirm: bool = False) -> Dict[str, Any]:
+    async def robot_emergency_stop(confirm: bool = False, robot_id: str = "") -> Dict[str, Any]:
         args = {"confirm": confirm}
 
         async def _impl():
@@ -102,7 +102,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=MOTION,
     )
-    async def robot_stand(confirm: bool = False) -> Dict[str, Any]:
+    async def robot_stand(confirm: bool = False, robot_id: str = "") -> Dict[str, Any]:
         args = {"confirm": confirm}
 
         async def _impl():
@@ -144,7 +144,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=MOTION,
     )
-    async def robot_lie_down(confirm: bool = False) -> Dict[str, Any]:
+    async def robot_lie_down(confirm: bool = False, robot_id: str = "") -> Dict[str, Any]:
         args = {"confirm": confirm}
 
         async def _impl():
@@ -201,6 +201,7 @@ def register(server, ctx: ToolContext) -> None:
         omega: float = 0.0,
         duration_s: float = 1.0,
         confirm: bool = False,
+        robot_id: str = "",
     ) -> Dict[str, Any]:
         args = {"vx": vx, "vy": vy, "omega": omega, "duration_s": duration_s, "confirm": confirm}
 
@@ -245,6 +246,7 @@ def register(server, ctx: ToolContext) -> None:
         rx: float = 0.0,
         duration_s: float = 1.0,
         confirm: bool = False,
+        robot_id: str = "",
     ) -> Dict[str, Any]:
         args = {"lx": lx, "ly": ly, "rx": rx, "duration_s": duration_s, "confirm": confirm}
 
@@ -294,6 +296,7 @@ def register(server, ctx: ToolContext) -> None:
         degrees: float,
         speed: float = 0.0,
         confirm: bool = False,
+        robot_id: str = "",
     ) -> Dict[str, Any]:
         args = {"degrees": degrees, "speed": speed, "confirm": confirm}
 
@@ -368,7 +371,7 @@ def register(server, ctx: ToolContext) -> None:
             ),
             annotations=MOTION,
         )
-        async def robot_switch_state(state: str, confirm: bool = False) -> Dict[str, Any]:
+        async def robot_switch_state(state: str, confirm: bool = False, robot_id: str = "") -> Dict[str, Any]:
             args = {"state": state, "confirm": confirm}
 
             async def _impl():

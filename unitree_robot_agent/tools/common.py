@@ -29,7 +29,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def robot_status() -> Dict[str, Any]:
+    async def robot_status(robot_id: str = "") -> Dict[str, Any]:
         async def _impl():
             status = ctx.session.status()
             state = await ctx.session.state_view()
@@ -53,7 +53,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def robot_get_posture() -> Dict[str, Any]:
+    async def robot_get_posture(robot_id: str = "") -> Dict[str, Any]:
         async def _impl():
             state = await ctx.session.state_view()
             return ctx.ok(posture=state)
@@ -69,7 +69,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def robot_list_actions(include_dangerous: bool = True) -> Dict[str, Any]:
+    async def robot_list_actions(include_dangerous: bool = True, robot_id: str = "") -> Dict[str, Any]:
         args = {"include_dangerous": include_dangerous}
 
         async def _impl():
@@ -99,7 +99,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def robot_lowstate(include_motors: bool = True) -> Dict[str, Any]:
+    async def robot_lowstate(include_motors: bool = True, robot_id: str = "") -> Dict[str, Any]:
         args = {"include_motors": include_motors}
 
         async def _impl():
@@ -120,7 +120,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def robot_errors(limit: int = 20) -> Dict[str, Any]:
+    async def robot_errors(limit: int = 20, robot_id: str = "") -> Dict[str, Any]:
         args = {"limit": limit}
 
         async def _impl():
@@ -153,7 +153,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def robot_auth_status() -> Dict[str, Any]:
+    async def robot_auth_status(robot_id: str = "") -> Dict[str, Any]:
         async def _impl():
             payload = ctx.runtime.auth.describe()
             payload["aes_key_cached"] = bool(ctx.config.load_cached_aes_key())
@@ -176,7 +176,7 @@ def register(server, ctx: ToolContext) -> None:
             "Safe to call repeatedly — it is a lookup, not a robot command."
         ),
     )
-    async def robot_fetch_key(serial_number: str = "") -> Dict[str, Any]:
+    async def robot_fetch_key(serial_number: str = "", robot_id: str = "") -> Dict[str, Any]:
         args = {"serial_number": serial_number}
 
         async def _impl():
@@ -214,6 +214,7 @@ def register(server, ctx: ToolContext) -> None:
         serial_number: str = "",
         device_type: str = "",
         timeout_s: float = 3.0,
+        robot_id: str = "",
     ) -> Dict[str, Any]:
         args = {
             "serial_number": serial_number,
@@ -248,7 +249,7 @@ def register(server, ctx: ToolContext) -> None:
         description="The last N audited operations (time, tool, arguments, outcome, robot code).",
         annotations=READ_ONLY,
     )
-    async def robot_audit_tail(limit: int = 50) -> Dict[str, Any]:
+    async def robot_audit_tail(limit: int = 50, robot_id: str = "") -> Dict[str, Any]:
         args = {"limit": limit}
 
         async def _impl():
@@ -268,7 +269,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def robot_doctor() -> Dict[str, Any]:
+    async def robot_doctor(robot_id: str = "") -> Dict[str, Any]:
         async def _impl():
             report: Dict[str, Any] = {
                 "config": ctx.config.redacted(),

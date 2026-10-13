@@ -42,6 +42,7 @@ def register(server, ctx: ToolContext) -> None:
         timeout_s: float = 6.0,
         save: bool = True,
         max_width: int = 0,
+        robot_id: str = "",
     ) -> Any:
         args = {"source": source, "timeout_s": timeout_s, "save": save, "max_width": max_width}
 
@@ -86,7 +87,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def robot_vision_probe(timeout_s: float = 5.0) -> Dict[str, Any]:
+    async def robot_vision_probe(timeout_s: float = 5.0, robot_id: str = "") -> Dict[str, Any]:
         args = {"timeout_s": timeout_s}
 
         async def _impl():
@@ -117,7 +118,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def robot_snapshot_history(limit: int = 10) -> Dict[str, Any]:
+    async def robot_snapshot_history(limit: int = 10, robot_id: str = "") -> Dict[str, Any]:
         args = {"limit": limit}
 
         async def _impl():

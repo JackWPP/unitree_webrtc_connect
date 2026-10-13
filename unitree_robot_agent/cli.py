@@ -337,14 +337,23 @@ async def _selftest(args) -> int:
     # key/session caches or the snapshot archive.
     scratch = Path(tempfile.mkdtemp(prefix="unitree-selftest-"))
     config = config_from_env(
-        **(args.robot and {"robot": args.robot} or {}),
+        # `--robot` is declared with `default=argparse.SUPPRESS` (see
+        # `_common_options`), so the attribute does not exist when the flag is
+        # omitted. Reading `args.robot` directly made the documented
+        # `unitree-robot-mcp selftest` — no flags — die with an
+        # AttributeError; only the installer's `--robot R1` form worked.
+        **({"robot": args.robot} if getattr(args, "robot", None) else {}),
         backend="mock",
         idle_disconnect_s=2.0,
         audit_enabled=False,
         state_dir=scratch,
     )
     runtime = create_runtime(config)
-    bundle = build_server(runtime)
+    # `fleet_from_env=False`: a self test must not depend on the operator's
+    # environment. With a roster set, the fleet layer would otherwise become
+    # the tool context's default robot and the "offline" self test would start
+    # driving real hardware — it dropped to 9/20 checks before this.
+    bundle = build_server(runtime, fleet_from_env=False)
     checks: List[Tuple[str, bool, str]] = []
     robot = config.robot
 

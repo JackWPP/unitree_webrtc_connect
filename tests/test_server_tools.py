@@ -78,6 +78,11 @@ def test_tool_counts_are_stable():
 
     These numbers are meant to be bumped *deliberately* when a tool is added;
     seeing them fail without having added one means something stopped being
-    registered."""
-    assert len(bundle_for("R1").tool_names) == 23
-    assert len(bundle_for("Go2").tool_names) == 29
+    registered.
+
+    Bumped 23/29 -> 27/33 for the four fleet tools (``robot_roster``,
+    ``robot_fleet_status``, ``robot_stop_all``, ``robot_emergency_stop_all``),
+    which register unconditionally so the model can always ask what it is
+    driving."""
+    assert len(bundle_for("R1").tool_names) == 27
+    assert len(bundle_for("Go2").tool_names) == 33

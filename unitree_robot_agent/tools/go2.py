@@ -44,7 +44,7 @@ def register(server, ctx: ToolContext) -> None:
             ),
             annotations=MOTION,
         )
-        async def go2_motion_mode(mode: str = "", confirm: bool = False) -> Dict[str, Any]:
+        async def go2_motion_mode(mode: str = "", confirm: bool = False, robot_id: str = "") -> Dict[str, Any]:
             args = {"mode": mode, "confirm": confirm}
 
             async def _impl():
@@ -93,7 +93,7 @@ def register(server, ctx: ToolContext) -> None:
             description="Set the Go2 speaker volume (0-10). Harmless, no confirmation needed.",
             annotations=GENTLE,
         )
-        async def go2_set_volume(volume: int) -> Dict[str, Any]:
+        async def go2_set_volume(volume: int, robot_id: str = "") -> Dict[str, Any]:
             args = {"volume": volume}
 
             async def _impl():
@@ -114,7 +114,7 @@ def register(server, ctx: ToolContext) -> None:
             description="Set the Go2 head-light brightness (0-10).",
             annotations=GENTLE,
         )
-        async def go2_set_brightness(level: int) -> Dict[str, Any]:
+        async def go2_set_brightness(level: int, robot_id: str = "") -> Dict[str, Any]:
             args = {"level": level}
 
             async def _impl():
@@ -140,7 +140,8 @@ def register(server, ctx: ToolContext) -> None:
             annotations=GENTLE,
         )
         async def go2_set_led(
-            color: str = "white", seconds: int = 5, flash_cycle_ms: int = 0
+            color: str = "white", seconds: int = 5, flash_cycle_ms: int = 0,
+            robot_id: str = "",
         ) -> Dict[str, Any]:
             args = {"color": color, "seconds": seconds, "flash_cycle_ms": flash_cycle_ms}
 
@@ -174,7 +175,7 @@ def register(server, ctx: ToolContext) -> None:
             description="Read the current Go2 volume and head-light brightness.",
             annotations=READ_ONLY,
         )
-        async def go2_get_vui() -> Dict[str, Any]:
+        async def go2_get_vui(robot_id: str = "") -> Dict[str, Any]:
             async def _impl():
                 from unitree_webrtc_connect.constants import RTC_TOPIC
 
@@ -203,7 +204,7 @@ def register(server, ctx: ToolContext) -> None:
             ),
             annotations=GENTLE,
         )
-        async def go2_obstacle_avoid(enable: Optional[bool] = None) -> Dict[str, Any]:
+        async def go2_obstacle_avoid(enable: Optional[bool] = None, robot_id: str = "") -> Dict[str, Any]:
             args = {"enable": enable}
 
             async def _impl():
@@ -248,7 +249,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=READ_ONLY,
     )
-    async def go2_get_state() -> Dict[str, Any]:
+    async def go2_get_state(robot_id: str = "") -> Dict[str, Any]:
         async def _impl():
             from unitree_webrtc_connect.constants import RTC_TOPIC
 
@@ -279,7 +280,7 @@ def register(server, ctx: ToolContext) -> None:
             ),
             annotations=GENTLE,
         )
-        async def go2_lidar(enable: Optional[bool] = None) -> Dict[str, Any]:
+        async def go2_lidar(enable: Optional[bool] = None, robot_id: str = "") -> Dict[str, Any]:
             args = {"enable": enable}
 
             async def _impl():

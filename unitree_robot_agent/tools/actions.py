@@ -32,7 +32,7 @@ def register(server, ctx: ToolContext) -> None:
         ),
         annotations=MOTION,
     )
-    async def robot_play_action(name: str, confirm: bool = False) -> Dict[str, Any]:
+    async def robot_play_action(name: str, confirm: bool = False, robot_id: str = "") -> Dict[str, Any]:
         args = {"name": name, "confirm": confirm}
 
         async def _impl():
@@ -101,7 +101,7 @@ def register(server, ctx: ToolContext) -> None:
             ),
             annotations=GENTLE,
         )
-        async def robot_arm_gesture(gesture: str) -> Dict[str, Any]:
+        async def robot_arm_gesture(gesture: str, robot_id: str = "") -> Dict[str, Any]:
             args = {"gesture": gesture}
 
             async def _impl():

@@ -13,47 +13,112 @@ Two conventions every tool follows:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterator, Optional
 
-from ..errors import AgentError
+from ..errors import AgentError, UnknownRobot
 from ..runtime import Runtime
 
 logger = logging.getLogger("unitree_robot_agent.tools")
 
+#: The robot the current tool body is acting on.
+#:
+#: A context variable rather than a field, so the 31 existing tool bodies can
+#: keep writing ``ctx.session`` unchanged while still being addressable per
+#: robot. It is task-local, so two concurrent tool calls aimed at different
+#: robots cannot see each other's binding.
+_ACTIVE: ContextVar[Optional[Runtime]] = ContextVar("unitree_active_runtime", default=None)
+
 
 @dataclass
 class ToolContext:
-    """Everything a tool needs: the runtime plus small helpers."""
+    """Everything a tool needs: the runtime(s) plus small helpers.
+
+    Two shapes are supported by the same object. A single-robot run passes one
+    :class:`Runtime` and nothing else, exactly as before. A fleet passes the
+    default robot's runtime *and* a :class:`FleetManager`; tools then reach a
+    specific robot by declaring a ``robot_id`` argument, which the registration
+    wrapper turns into the active binding.
+    """
 
     runtime: Runtime
+    #: Present only when more than one robot is configured.
+    fleet: Optional[Any] = None
+    default_robot_id: str = ""
+
+    # ── robot resolution ─────────────────────────────────────────────
+
+    @property
+    def active(self) -> Runtime:
+        """The runtime the current tool body is bound to."""
+        return _ACTIVE.get() or self.runtime
+
+    @property
+    def is_fleet(self) -> bool:
+        return self.fleet is not None and len(self.fleet) > 1
+
+    def robot(self, robot_id: str = "") -> Runtime:
+        """Resolve an optional ``robot_id`` to a runtime.
+
+        Without a fleet, only this robot exists — naming it, or naming
+        nothing, both work; naming a *different* robot is an error rather than
+        a silent fallback to the wrong dog.
+        """
+        if self.fleet is None:
+            if robot_id and robot_id not in ("", self.default_robot_id,
+                                             self.runtime.config.robot_id):
+                raise UnknownRobot(
+                    f"No robot {robot_id!r}: this server drives "
+                    f"{self.runtime.config.robot_id!r} only.",
+                    detail={"robot_id": robot_id},
+                )
+            return self.runtime
+        return self.fleet.resolve(robot_id)
+
+    @contextlib.contextmanager
+    def scoped(self, robot_id: str = "") -> Iterator[Runtime]:
+        """Bind the tool body to one robot for the duration of the block."""
+        runtime = self.robot(robot_id)
+        token = _ACTIVE.set(runtime)
+        try:
+            yield runtime
+        finally:
+            _ACTIVE.reset(token)
+
+    # ── delegates (all follow the active binding) ────────────────────
 
     @property
     def config(self):
-        return self.runtime.config
+        return self.active.config
 
     @property
     def profile(self):
-        return self.runtime.profile
+        return self.active.profile
 
     @property
     def session(self):
-        return self.runtime.session
+        return self.active.session
 
     @property
     def audit(self):
-        return self.runtime.audit
+        return self.active.audit
 
     @property
     def backend(self):
-        return self.runtime.backend
+        return self.active.backend
 
     # ── response helpers ─────────────────────────────────────────────
 
     def ok(self, **payload) -> Dict[str, Any]:
-        out: Dict[str, Any] = {"ok": True, "robot": self.profile.name}
+        out: Dict[str, Any] = {
+            "ok": True,
+            "robot": self.profile.name,
+            "robot_id": self.config.robot_id,
+        }
         out.update(payload)
         return out
 
