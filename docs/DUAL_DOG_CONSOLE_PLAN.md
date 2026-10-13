@@ -23,13 +23,16 @@
 | # | 事项 | 状态 | 证据 |
 |---|---|---|---|
 | C1 | `master` fast-forward 到 `feat/unitree-robot-mcp` | ✅ | 纯 fast-forward（master 是祖先），非重写历史 |
-| C2 | 建工作分支 `feat/dual-dog-console` | ✅ | `13da848` 起 |
+| C2 | 建工作分支 `feat/dual-dog-console` | ✅ | `4806f3e` |
 | C3 | 吸收 upstream PR **#63**（`%Z`→`%z` 时区） | ✅ | 干净落盘，无冲突 |
 | C4 | 吸收 upstream PR **#66**（WAF 可诊断 + TLS 指纹可切换） | ✅ | 3 文件干净落盘；README 手工合并 |
-| P0.1 | **可运行环境 + 测试全绿** | ✅ | Python 3.14.8 + aiortc 1.15.0；**158 passed**（此前 collection 阶段即挂） |
+| P0.1 | **可运行环境 + 测试全绿** | ✅ | Python 3.14.8 + aiortc 1.15.0；**195 passed**（接手时 collection 阶段即挂） |
 | P0.4a | **离线 ICE 并发探针**（全案最大未知） | ✅ | 3 连接：transport 独立、端口零冲突、关一个不影响其余 |
+| P1.1 | 身份层：`RobotSpec` + `Roster` | ✅ | `f4679fe`；重复 id / 同 SN / 同 IP 均被拒；每狗派生独立 `state_dir` |
+| P1.2 | **per-device key store —— 修掉静默错配 bug** | ✅ | `f4679fe`；37 个新测试（含回归 + 旧 `keys.json` 格式迁移） |
 | P0.3 | 真机固件/`data2` 探测 | ⏸ **等硬件** | 局域网扫描 Go2/G1/R1 组均无应答，狗不在线 |
 | P0.4b | 真机并发连接 + 阻塞验证 | ⏸ **等硬件** | 同上 |
+| P0.5 | `pyproject.toml`：aiortc 加上界、Python 提到 ≥3.10 | 待做 | 依赖不再漂移 |
 
 **P0.4a 的实测结论（最重要的一条）**：`unitree_webrtc_connect/__init__.py:1-17` 把 ICE 凭据钉在**类属性**上，进程内所有 peer connection 共享同一组 ufrag/pwd（实测 3 条连接只有 1 个 ufrag）——**但这不构成阻塞**：3 条连接拿到 3 个独立 transport，36 个 host candidate **端口两两不同**，关掉第 0 条另两条存活。
 
@@ -37,9 +40,10 @@
 
 ### 立刻可做的下一步
 
-1. **P1 身份层**（不需要机器人）：`robot_id` + roster + 每狗 `state_dir` + audit 修复 + **per-device key 缓存修 bug**。这是所有下游工作的前提。
-2. **P1 连接隔离 + FleetManager**（不需要机器人，mock backend 可全离线验证）。
-3. **P0.3/P0.4b**（狗上线时）：`scripts/probe_dual_connection.py --ips <dog1>,<dog2>` + 固件探测。
+1. **P1 剩余身份项**（不需要机器人）：`robot_id` 进 audit / `ToolContext` / 工具结果；`FutureResolver` 去 topic-only 兜底 key；`config` 从 spec 构造。
+2. **P1.7 `FleetManager` + P1.8 连接隔离**（不需要机器人，mock backend 可全离线验证）。
+3. **P1.11–P1.13 Web 控制台骨架**（FastAPI + 原生 asyncio，先跑通 mock 双狗）。
+4. **P0.3/P0.4b**（狗上线时）：`scripts/probe_dual_connection.py --ips <dog1>,<dog2>` + 固件探测。
 
 ---
 
