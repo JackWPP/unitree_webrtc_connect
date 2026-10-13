@@ -1627,29 +1627,43 @@ class ConsoleService:
         from unitree_robot_agent.vision import ArenaCamera, Calibration
 
         if not self.config.arena_calibration:
-            # A camera with no calibration gives a bearing and no distance, and
-            # a map with no scale is a picture rather than a measurement.
-            self._arena_error = "camera configured but no calibration"
+            # Without a path there is nowhere to *save* a calibration either, so
+            # the panel could not fix this. That one is worth refusing.
+            self._arena_error = "没有指定标定文件路径"
             return {"started": False, "reason": self._arena_error}
 
-        try:
-            raw = json.loads(Path(self.config.arena_calibration).read_text(encoding="utf-8"))
-            self._calibration = Calibration.from_dict(raw)
-        except Exception as exc:  # noqa: BLE001
-            self._arena_error = f"calibration unreadable: {type(exc).__name__}: {exc}"
-            logger.warning("arena calibration: %s", self._arena_error)
-            return {"started": False, "reason": self._arena_error}
+        path = Path(self.config.arena_calibration)
+        if not path.exists():
+            # **Not an error.** The file is written by the console's own
+            # calibration panel, so its absence is the state every arena starts
+            # in — and refusing to start because it is missing would mean the
+            # panel could never run to create it. The camera still opens, so the
+            # page has a frame to click four corners on.
+            self._arena_error = "还没有标定 —— 在场地视图里点「标定场地」"
+            logger.info("arena: no calibration at %s yet", path)
+        else:
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                self._calibration = Calibration.from_dict(raw)
+            except Exception as exc:  # noqa: BLE001
+                # A file that exists and cannot be read is a different thing: it
+                # is a calibration somebody made, and quietly ignoring it would
+                # leave them wondering why the map is blank.
+                self._arena_error = f"标定文件读不了：{type(exc).__name__}: {exc}"
+                logger.warning("arena calibration: %s", self._arena_error)
 
         self._camera = ArenaCamera(self.config.arena_camera)
         self._camera.start()
-        self._arena_error = ""
-        logger.info(
-            "arena camera %s opened; calibration residual %.2f m",
-            self.config.arena_camera, self._calibration.residual_m,
-        )
+        # "starting", not "opened": `start()` only spawns the thread, and the
+        # device is opened on it. A log that says a camera opened a line before
+        # it fails to is a log somebody reads under pressure and mis-trusts.
+        logger.info("arena camera %s starting", self.config.arena_camera)
+        if self._calibration is None:
+            return {"started": True, "reason": self._arena_error, "calibrated": False}
         return {
             "started": True,
             "reason": "",
+            "calibrated": True,
             "residual_m": round(self._calibration.residual_m, 3),
             "scale_factor": round(self._calibration.scale_factor, 3),
         }
@@ -1670,7 +1684,15 @@ class ConsoleService:
             try:
                 await asyncio.sleep(interval)
                 camera = self._camera
-                if camera is None or self._calibration is None:
+                if camera is None:
+                    continue
+                if self._calibration is None:
+                    # Frames still arrive, so the calibration page has something
+                    # to click on — which is the only way it stops being None.
+                    self._arena = {
+                        "state": "uncalibrated",
+                        "detail": self._arena_error or "还没有标定",
+                    }
                     continue
                 if not self.robots_with_markers():
                     self._arena = {
@@ -1741,6 +1763,14 @@ class ConsoleService:
                 if self._calibration is not None else None
             ),
         }
+        if self._calibration is None:
+            # Answered here rather than left to the detection loop, so the state
+            # is right the instant the console asks — a page that has to wait
+            # for a frame to learn there is no calibration shows a blank map and
+            # no reason for as long as the camera takes to produce one.
+            return {**out, "state": "uncalibrated",
+                    "detail": self._arena_error or "还没有标定",
+                    "poses": {}, "missing": list(self.fleet.ids)}
         if status["state"] == "failed":
             return {**out, "state": "camera_failed", "detail": status["error"],
                     "poses": {}, "missing": []}

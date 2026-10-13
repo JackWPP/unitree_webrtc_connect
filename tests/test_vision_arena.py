@@ -284,8 +284,11 @@ def test_a_broken_calibration_file_is_reported_not_raised(tmp_path):
         config=ConsoleConfig(arena_camera="0", arena_calibration=str(bad)),
     )
     result = service.start_arena()
-    assert result["started"] is False
-    assert "unreadable" in result["reason"]
+    # The camera still opens, because the panel needs a frame to recalibrate
+    # against — refusing would leave a corrupt file unfixable from the page.
+    assert result["started"] is True
+    assert result["calibrated"] is False
+    assert "读不了" in result["reason"]
 
 
 # ─── the collision this feature could cause ───────────────────────────
@@ -538,3 +541,87 @@ def test_the_console_js_converts_clicks_back_to_frame_pixels(open_client):
     # The order is named, not inferred: four correct points in the wrong order
     # produce a mirrored arena.
     assert "CALIB_ORDER" in source
+
+
+def test_a_missing_calibration_is_a_starting_state_not_a_refusal(tmp_path):
+    """The chicken-and-egg this flow would otherwise have.
+
+    The calibration file is written by the console's own panel, so its absence
+    is the state every arena starts in — refusing to open the camera because it
+    is missing would mean the panel could never run to create it.
+    """
+    import json as _json
+
+    from unitree_robot_agent.fleet import FleetManager, Roster
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    path = tmp_path / "not-yet.json"
+    assert not path.exists()
+    roster = Roster.from_mapping(
+        {"state_dir": str(tmp_path / "state"), "robots": [
+            {"id": "dog1", "model": "Go2", "ip": "192.168.1.1", "sn": "A"}]}
+    )
+    service = ConsoleService(
+        FleetManager(roster, backend="mock", audit_to_stderr=False),
+        config=ConsoleConfig(arena_camera="0", arena_calibration=str(path)),
+    )
+
+    result = service.start_arena()
+
+    assert result["started"] is True, "the camera must open so the page has a frame"
+    assert result["calibrated"] is False
+    assert "标定" in result["reason"]
+    service._camera.close()
+
+    # ...and saving one from the page fills the gap.
+    saved = service.calibrate_arena({
+        "image_points": [[80, 80], [720, 80], [720, 720], [80, 720]],
+        "world_points": [[0, 4], [4, 4], [4, 0], [0, 0]],
+    })
+    assert saved["saved"] is True
+    assert _json.loads(path.read_text())["world_points"][1] == [4, 4]
+
+
+def test_a_corrupt_calibration_is_reported_not_ignored(tmp_path):
+    """A file that exists and cannot be read is a different thing: it is a
+    calibration somebody made, and silently ignoring it leaves them wondering
+    why the map is blank."""
+    from unitree_robot_agent.fleet import FleetManager, Roster
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    path = tmp_path / "broken.json"
+    path.write_text('{"image_points": [[0,0],[1,0],[1,1]], "world_points": []}', encoding="utf-8")
+    roster = Roster.from_mapping(
+        {"state_dir": str(tmp_path / "state"), "robots": [
+            {"id": "dog1", "model": "Go2", "ip": "192.168.1.1", "sn": "A"}]}
+    )
+    service = ConsoleService(
+        FleetManager(roster, backend="mock", audit_to_stderr=False),
+        config=ConsoleConfig(arena_camera="0", arena_calibration=str(path)),
+    )
+    service.start_arena()
+    try:
+        state = service.arena_state()
+        assert state["calibration"] is None
+        assert "读不了" in state["detail"]
+    finally:
+        if service._camera is not None:
+            service._camera.close()
+
+
+def test_without_a_calibration_path_there_is_nowhere_to_save(tmp_path):
+    """The one case worth refusing: the panel could not fix it either."""
+    from unitree_robot_agent.fleet import FleetManager, Roster
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    roster = Roster.from_mapping(
+        {"state_dir": str(tmp_path), "robots": [
+            {"id": "dog1", "model": "Go2", "ip": "192.168.1.1", "sn": "A"}]}
+    )
+    service = ConsoleService(
+        FleetManager(roster, backend="mock", audit_to_stderr=False),
+        config=ConsoleConfig(arena_camera="0", arena_calibration=""),
+    )
+    result = service.start_arena()
+    assert result["started"] is False
+    assert "路径" in result["reason"]

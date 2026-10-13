@@ -1933,6 +1933,7 @@ const ARENA_STATES = {
   camera_failed: ['相机打不开', 'bad'],
   camera_stale: ['画面停更', 'bad'],
   no_markers: ['没有登记标记', 'warn'],
+  uncalibrated: ['未标定', 'warn'],
   error: ['检测出错', 'bad'],
 };
 
@@ -1973,6 +1974,7 @@ function renderArena(arena) {
       camera_failed: arena.detail || '相机打不开',
       camera_stale: '超过两秒没有新画面',
       no_markers: arena.detail || '还没有登记标记',
+      uncalibrated: arena.detail || '点「标定场地」对着一帧画面点四个角',
       error: arena.detail || '检测出错',
     }[arena.state] || arena.detail || '';
     detail.textContent = why;

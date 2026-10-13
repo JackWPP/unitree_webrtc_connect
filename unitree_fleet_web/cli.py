@@ -44,6 +44,12 @@ def _parse_args(argv) -> argparse.Namespace:
                              "with no robot attached")
     parser.add_argument("--state-dir", default=None,
                         help="override the roster's per-robot state directory")
+    parser.add_argument("--arena-camera", default=None, metavar="SOURCE",
+                        help="camera watching the arena: a device index ('0'), a "
+                             "device path, or a video file. Needs --arena-calibration")
+    parser.add_argument("--arena-calibration", default=None, metavar="PATH",
+                        help="JSON with the four calibration points. Written by the "
+                             "console's own calibration panel")
     parser.add_argument("--no-video-autoconnect", action="store_true",
                         help="do not let fetching a video frame connect a "
                              "robot. The console becomes a pure observer "
@@ -78,6 +84,10 @@ def _config_from_args(args) -> ConsoleConfig:
         overrides["port"] = args.port
     if args.token is not None:
         overrides["token"] = args.token
+    if getattr(args, "arena_camera", None) is not None:
+        overrides["arena_camera"] = args.arena_camera
+    if getattr(args, "arena_calibration", None) is not None:
+        overrides["arena_calibration"] = args.arena_calibration
     config = ConsoleConfig.from_env(**overrides)
     config.serve_ui = not args.no_ui
     if args.no_video_autoconnect:
