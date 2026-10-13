@@ -591,18 +591,28 @@ def test_the_audit_endpoint_is_authenticated(locked_client):
     assert locked_client.get("/api/robot/dog1/audit").status_code == 401
 
 
-def test_the_status_payload_carries_telemetry(open_client):
-    """The UI reads `telemetry[robot_id].battery` and `.sport_state`; if the
-    key vanishes the panels silently go back to showing "—"."""
+def test_the_status_payload_does_not_ship_the_raw_snapshot(open_client):
+    """It used to, and it was a quarter of a 7 KB payload pushed four times a
+    second — for numbers the page already had derived into `body`, `flags`,
+    `where` and `sources`. Battery lives in `body` now, where it belongs."""
     payload = open_client.get("/api/fleet/status").json()
-    assert "telemetry" in payload
-    assert isinstance(payload["telemetry"], dict)
+    assert "telemetry" not in payload, "the raw snapshot crept back in"
+    assert "battery" in payload["body"]["dog1"] or payload["body"]["dog1"] == {}
 
 
-def test_the_console_js_reads_the_telemetry_it_is_given(open_client):
+def test_the_console_js_reads_the_body_it_is_given(open_client):
+    """The page reads `state.body`, not a raw snapshot: the payload no longer
+    carries one, and the panels would silently go back to "—" if this drifted."""
     source = open_client.get("/static/console.js").text
-    for field in ("state.telemetry", "soc_percent", "gait_type", "posture"):
+    import re
+
+    for field in ("state.body", "soc_percent", "telemetry.gait", "telemetry.fsm"):
         assert field in source, f"console.js no longer reads {field}"
+    # An assignment, matched precisely: a bare substring check for
+    # "state.telemetry" is satisfied by `state.telemetryHealth`, which is a
+    # different field that still belongs in the payload.
+    assert not re.search(r"state\.telemetry\s*=", source), "the raw snapshot is read again"
+    assert "state.telemetryHealth" in source, "telemetry health was removed too"
 
 
 def test_the_status_payload_carries_video_health(open_client):
@@ -1164,16 +1174,42 @@ def test_the_stall_indicator_is_sustained_before_it_flags(open_client):
     assert "1500" in source, "no sustain window"
 
 
-def test_the_status_payload_carries_the_source_inventory(open_client):
+def test_the_status_payload_carries_only_source_statuses(open_client):
+    """The strings — labels, topic names, the reason a source is unread — are
+    static and arrive once with the control descriptors. Only the statuses ride
+    the 4 Hz push."""
     payload = open_client.get("/api/fleet/status").json()
-    assert "sources" in payload
     for robot_id, spec in payload["sources"].items():
-        assert {"read", "not_attempted", "connected"} <= set(spec)
-        # The two lists must never overlap: "we asked and it was silent" is not
-        # the same claim as "we never asked".
-        read_ids = {s["id"] for s in spec["read"]}
-        untried_ids = {s["id"] for s in spec["not_attempted"]}
-        assert not (read_ids & untried_ids)
+        assert set(spec) == {"connected", "status"}
+        assert set(spec["status"]) == {"lowstate", "multiplestate", "state", "video"}
+        for status in spec["status"].values():
+            assert isinstance(status, str)
+
+    catalogue = open_client.get("/api/console/controls?robot_id=dog1").json()["sources"]
+    # "we asked and it was silent" is not the same claim as "we never asked",
+    # and the two lists can never overlap.
+    read_ids = {s["id"] for s in catalogue["read"]}
+    untried_ids = {s["id"] for s in catalogue["not_attempted"]}
+    assert read_ids == {"lowstate", "multiplestate", "state", "video"}
+    assert untried_ids == {"pose", "lidar", "map"}
+    assert not (read_ids & untried_ids)
+    for source in catalogue["not_attempted"]:
+        assert source["why"], "an unread source has to say why it is unread"
+
+
+def test_the_status_payload_stays_within_its_budget(open_client):
+    """A regression guard, because this payload is pushed four times a second
+    to every open browser and it had crept to 7 KB — a quarter of it the raw
+    telemetry snapshot, a fifth of it static strings.
+
+    The budget is generous: the point is to fail loudly if a future field is
+    added without thinking about that, not to defend the current number.
+    """
+    raw = open_client.get("/api/fleet/status").text
+    assert len(raw.encode("utf-8")) < 6000, (
+        f"the status payload is {len(raw)} bytes and is sent 4x/second; "
+        f"derive it instead of shipping the source, or move it out of the push"
+    )
 
 
 def test_the_console_js_renders_the_source_inventory(open_client):

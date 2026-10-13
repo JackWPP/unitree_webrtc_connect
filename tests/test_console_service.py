@@ -701,14 +701,15 @@ async def test_telemetry_reports_battery_and_gait(service):
     assert snapshot["posture"]["connected"] is True
 
 
-async def test_telemetry_caches_into_the_status_payload(service):
+async def test_telemetry_reaches_the_page_through_body_not_raw(service):
     await service.connect("dog1")
     await service.refresh_telemetry("dog1")
 
     payload = await service.status()
-    assert payload["telemetry"]["dog1"]["battery"]["soc_percent"] is not None
-    # dog2 was never connected, so it has no telemetry rather than zeros.
-    assert "dog2" not in payload["telemetry"]
+    assert "telemetry" not in payload
+    assert payload["body"]["dog1"]["battery"]["soc_percent"] is not None
+    # dog2 was never connected, so it has nothing rather than zeros.
+    assert payload["body"]["dog2"] == {}
 
 
 async def test_telemetry_is_dropped_when_a_robot_goes_away(service):

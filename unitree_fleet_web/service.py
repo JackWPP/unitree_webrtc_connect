@@ -1296,6 +1296,22 @@ class ConsoleService:
         if isinstance(aggregate.get("speedLevel"), (int, float)):
             out["speed_level"] = int(aggregate["speedLevel"])
 
+        battery = snapshot.get("battery") or {}
+        if battery:
+            # Moved here from the raw snapshot: battery *is* body state, and
+            # having the page read it out of a second structure is what made
+            # the whole 1.7 KB snapshot part of a 4 Hz payload.
+            out["battery"] = {
+                key: value for key, value in battery.items() if value is not None
+            }
+
+        # The FSM classification, which is what a humanoid shows as "what it is
+        # doing". Named `fsm` rather than `posture`: `posture` in this payload
+        # already means what the console *believes* it told the robot.
+        fsm = snapshot.get("posture")
+        if isinstance(fsm, dict) and fsm:
+            out["fsm"] = fsm
+
         return out
 
     #: What the console reads, and what it deliberately does not.
@@ -1374,6 +1390,34 @@ class ConsoleService:
             ],
         }
 
+    def source_status(self, robot_id: str) -> Dict[str, Any]:
+        """Just the statuses, for the 4 Hz push.
+
+        The labels, topic names and reasons are static strings — around 1.5 KB
+        of them — and sending that four times a second was 21% of the status
+        payload for text that changes when a topic starts or stops answering
+        and at no other time. The catalogue lives in `/api/console/controls`,
+        which the page fetches once.
+        """
+        spec = self.sources(robot_id)
+        return {
+            "connected": spec["connected"],
+            "status": {item["id"]: item["status"] for item in spec["read"]},
+        }
+
+    def source_catalogue(self) -> Dict[str, Any]:
+        """The static half of the source list."""
+        return {
+            "read": [
+                {"id": source_id, "label": label, "topic": topic}
+                for source_id, label, topic in self.READ_SOURCES
+            ],
+            "not_attempted": [
+                {"id": source_id, "label": label, "topic": topic, "why": why}
+                for source_id, label, topic, why in self.NOT_ATTEMPTED
+            ],
+        }
+
     def controls_payload(self, robot_id: str) -> Dict[str, Any]:
         """The control descriptors this robot can actually honour.
 
@@ -1411,6 +1455,7 @@ class ConsoleService:
             "groups": groups,
             "controls": controls,
             "flags": self.flags(robot_id),
+            "sources": self.source_catalogue(),
             "safe_mode": safe,
         }
 
@@ -1543,7 +1588,11 @@ class ConsoleService:
         self.note_watch()
         return {
             "robots": await self.fleet.status_all(live=live),
-            "telemetry": dict(self._telemetry),
+            # `telemetry` is deliberately absent. It is the raw snapshot —
+            # 1.7 KB, a quarter of what this used to weigh — and everything the
+            # page shows from it is already derived into `body`, `flags`,
+            # `where` and `sources`. Pushing it four times a second was paying
+            # for the same numbers twice.
             "flags": {rid: self.flags(rid) for rid in self.fleet.ids},
             "telemetry_health": {
                 rid: self.telemetry_health(rid) for rid in self.fleet.ids
@@ -1554,7 +1603,7 @@ class ConsoleService:
             "where": {rid: self.where(rid) for rid in self.fleet.ids},
             "posture": {rid: self.posture(rid).as_dict() for rid in self.fleet.ids},
             "body": {rid: self.body(rid) for rid in self.fleet.ids},
-            "sources": {rid: self.sources(rid) for rid in self.fleet.ids},
+            "sources": {rid: self.source_status(rid) for rid in self.fleet.ids},
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a

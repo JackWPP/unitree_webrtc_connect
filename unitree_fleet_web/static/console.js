@@ -418,7 +418,9 @@ function renderStatus(payload) {
     // slower than this push. Reading them off the session (as this used to)
     // meant both fields sat on "—" forever: `session` carries connection
     // counters, not robot state.
-    const telemetry = (state.telemetry && state.telemetry[robot.robot_id]) || {};
+    // `body` rather than a raw `telemetry` blob: the payload no longer ships
+    // the whole snapshot, and everything the page shows from it is derived.
+    const telemetry = (state.body && state.body[robot.robot_id]) || {};
     const battery = telemetry.battery || {};
     const percent = battery.soc_percent;
     entry.battery.textContent = (percent === undefined || percent === null)
@@ -439,18 +441,17 @@ function renderStatus(payload) {
     // When the panels have nothing, say why. An empty panel and a robot that
     // reports nothing look identical, and they want different reactions.
     const health = (state.telemetryHealth && state.telemetryHealth[robot.robot_id]) || {};
-    if (!telemetry.battery && health.error) {
+    if (!battery.soc_percent && health.error) {
       entry.battery.title = health.error;
       entry.state.title = health.error;
     }
 
-    const posture = telemetry.posture || {};
-    const sport = telemetry.sport_state || {};
+    const posture = telemetry.fsm || {};
     const parts = [];
     if (posture.state && posture.state !== 'n/a' && posture.state !== 'unknown') {
       parts.push(posture.state);
     }
-    if (sport.gait_type) parts.push(sport.gait_type);
+    if (telemetry.gait) parts.push(telemetry.gait);
     if (posture.reporting === 'frozen') parts.push('状态停更');
     entry.state.textContent = parts.length
       ? parts.join(' · ')
@@ -469,7 +470,7 @@ function renderStatus(payload) {
   }
 
   state.connecting = payload.connecting || [];
-  state.telemetry = payload.telemetry || {};
+
   // Named `videoHealth` rather than `video`: `focusMap[id].video` is the
   // <img> element, and two things called video would invite a mix-up.
   state.videoHealth = payload.video || {};
@@ -952,18 +953,27 @@ function renderSources(robotId) {
   const entry = state.focusMap[robotId];
   const host = entry && entry.sources;
   if (!host) return;
-  const spec = (state.sources && state.sources[robotId]) || null;
-  if (!spec) { host.textContent = ''; return; }
+
+  // Two halves, fetched at different rates on purpose: the *catalogue* (labels,
+  // topic names, the reason a source is unread) is static and arrives once with
+  // the control descriptors; the *statuses* change and ride the 4 Hz push as a
+  // bare `{id: status}` map. Sending the strings four times a second was 21% of
+  // the payload for text that changes when a topic starts answering and never
+  // otherwise.
+  const catalogue = (state.sourceCatalogue) || null;
+  const statuses = (state.sources && state.sources[robotId]) || null;
+  if (!catalogue || !statuses) { host.textContent = ''; return; }
 
   host.textContent = '';
-  for (const source of spec.read || []) {
+  for (const source of catalogue.read || []) {
+    const status = statuses.status[source.id] || 'offline';
     const chip = document.createElement('span');
-    chip.className = 'source ' + source.status;
-    chip.textContent = `${source.label} · ${SOURCE_LABELS[source.status] || source.status}`;
-    chip.title = `${source.topic} —— ${SOURCE_LABELS[source.status] || source.status}`;
+    chip.className = 'source ' + status;
+    chip.textContent = `${source.label} · ${SOURCE_LABELS[status] || status}`;
+    chip.title = `${source.topic} —— ${SOURCE_LABELS[status] || status}`;
     host.appendChild(chip);
   }
-  for (const source of spec.not_attempted || []) {
+  for (const source of catalogue.not_attempted || []) {
     const chip = document.createElement('span');
     chip.className = 'source untried';
     chip.textContent = `${source.label} · 未读取`;
@@ -1054,12 +1064,14 @@ async function loadControls(robotId) {
     const spec = await api(`/api/console/controls?robot_id=${encodeURIComponent(robotId)}`);
     state.controls[robotId] = spec || { groups: [], controls: [] };
     if (spec && spec.flags) state.flags[robotId] = spec.flags;
+    if (spec && spec.sources) state.sourceCatalogue = spec.sources;
   } catch (_) {
     // A console with no tool bridge still shows video and telemetry.
     state.controls[robotId] = { groups: [], controls: [] };
   }
   renderControls(robotId);
   renderFlags(robotId);
+  renderSources(robotId);
 }
 
 /* ── live flags ────────────────────────────────────────────────────── */
