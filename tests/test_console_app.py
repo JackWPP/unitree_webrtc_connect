@@ -1162,3 +1162,21 @@ def test_the_stall_indicator_is_sustained_before_it_flags(open_client):
     source = open_client.get("/static/console.js").text
     assert "stallSince" in source
     assert "1500" in source, "no sustain window"
+
+
+def test_the_status_payload_carries_the_source_inventory(open_client):
+    payload = open_client.get("/api/fleet/status").json()
+    assert "sources" in payload
+    for robot_id, spec in payload["sources"].items():
+        assert {"read", "not_attempted", "connected"} <= set(spec)
+        # The two lists must never overlap: "we asked and it was silent" is not
+        # the same claim as "we never asked".
+        read_ids = {s["id"] for s in spec["read"]}
+        untried_ids = {s["id"] for s in spec["not_attempted"]}
+        assert not (read_ids & untried_ids)
+
+
+def test_the_console_js_renders_the_source_inventory(open_client):
+    source = open_client.get("/static/console.js").text
+    for marker in ("renderSources", "SOURCE_LABELS", "not_attempted", "untried"):
+        assert marker in source, f"console.js lost {marker}"

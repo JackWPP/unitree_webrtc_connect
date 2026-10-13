@@ -909,3 +909,28 @@ select, input[type="range"] { accent-color: var(--accent); }
 /* Commanded far ahead of actual is a stall, and the colour says so. */
 .speed.stalled, .speed.stalled b { color: var(--warn); }
 .gait { margin-left: auto; }
+
+/* ── data sources ─────────────────────────────────────────────────── */
+
+.sources { display: flex; flex-wrap: wrap; gap: 5px; padding: 2px 0 6px; }
+.sources:empty { display: none; }
+
+.source {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+.source.live { color: var(--ok); border-color: #1f5c43; }
+.source.silent, .source.stalled { color: var(--warn); border-color: #6b4a12; }
+/* Not a failure and not a capability gap — nobody has asked. Drawn as a
+   dotted outline so it never reads as "the robot cannot do this". */
+.source.untried {
+  color: var(--muted);
+  border-style: dashed;
+  background: transparent;
+  opacity: 0.75;
+}

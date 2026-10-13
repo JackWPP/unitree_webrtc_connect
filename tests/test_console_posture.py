@@ -362,3 +362,54 @@ async def test_the_status_payload_carries_the_body(service):
     await service.connect("dog1")
     payload = await service.status()
     assert set(payload["body"]) == set(service.fleet.ids)
+
+
+# ─── what the robot is reporting ──────────────────────────────────────
+
+
+async def test_an_unconnected_robot_reports_every_source_offline(service):
+    for source in service.sources("dog1")["read"]:
+        assert source["status"] == "offline"
+
+
+async def test_a_connected_robot_reports_which_topics_answered(service):
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    statuses = {s["id"]: s["status"] for s in service.sources("dog1")["read"]}
+    assert statuses["lowstate"] == "live"
+    assert statuses["multiplestate"] == "live"
+    assert statuses["state"] == "live"
+
+
+async def test_a_silent_topic_is_distinguished_from_an_unread_one(service):
+    """The distinction that matters most.
+
+    `rt/utlidar/robot_pose` is not read by anything here, so an empty map would
+    otherwise look like "the robot cannot do this" when the truth is "nobody
+    has checked". Conflating the two answers the operator's question wrongly.
+    """
+    await service.connect("dog1")
+    service._telemetry["dog1"] = {}  # noqa: SLF001 - a silent link
+
+    spec = service.sources("dog1")
+    by_id = {s["id"]: s["status"] for s in spec["read"]}
+    for topic_source in ("lowstate", "multiplestate", "state"):
+        assert by_id[topic_source] == "silent", topic_source
+    # Video is the exception on purpose: it has richer states of its own
+    # (starting / stalled / disabled) and flattening them into "silent" would
+    # lose the distinction the video panel exists to make.
+    assert by_id["video"] in ("starting", "stalled", "silent")
+
+    untried = {s["id"] for s in spec["not_attempted"]}
+    assert untried == {"pose", "lidar", "map"}
+    for source in spec["not_attempted"]:
+        assert source["why"], "an unread source has to say why it is unread"
+        # ...and it is a separate list, never a status.
+        assert all(s["id"] != source["id"] for s in spec["read"])
+
+
+async def test_the_status_payload_carries_the_sources(service):
+    await service.connect("dog1")
+    payload = await service.status()
+    assert set(payload["sources"]) == set(service.fleet.ids)

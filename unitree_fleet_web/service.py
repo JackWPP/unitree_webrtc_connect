@@ -1298,6 +1298,82 @@ class ConsoleService:
 
         return out
 
+    #: What the console reads, and what it deliberately does not.
+    #:
+    #: Three different absences, kept apart because conflating them tells the
+    #: operator something untrue:
+    #:
+    #:   live          — data arrived on this link this session
+    #:   silent        — the console asked and the topic did not answer
+    #:   not attempted — the console does not read it at all
+    #:
+    #: The third is the one that matters most. `rt/utlidar/robot_pose` is not
+    #: read by anything here, so an empty map would otherwise look like "the
+    #: robot cannot do this" when the truth is "nobody has checked".
+    READ_SOURCES = (
+        ("lowstate", "电量 / IMU / 足端", "rt/lf/lowstate"),
+        ("multiplestate", "音量 / 亮度 / 避障开关", "rt/multiplestate"),
+        ("state", "步态 / 模式 / 速度 / 位置",
+         "rt/lf/sportmodestate 或 rt/sportmodestate"),
+        ("video", "视频", "videohub (MJPEG)"),
+    )
+
+    NOT_ATTEMPTED = (
+        ("pose", "绝对位姿", "rt/utlidar/robot_pose",
+         "这条 topic 是否在 WebRTC 上发布，尚未在真机确认"),
+        ("lidar", "激光雷达点云", "rt/utlidar/voxel_map_compressed",
+         "未确认；`robot_lidar` 工具能读摘要，控制台没有接"),
+        ("map", "占用栅格地图", "rt/mapping/grid_map", "未确认"),
+    )
+
+    def sources(self, robot_id: str) -> Dict[str, Any]:
+        """What this robot is reporting right now, and what nobody has asked it.
+
+        Derived from the telemetry snapshot rather than from a separate probe:
+        each field below comes from exactly one topic, so its presence *is* the
+        evidence that the topic answered. That keeps it free — no extra reads —
+        and keeps it honest, because it reports what actually arrived rather
+        than what a config file claims should.
+        """
+        snapshot = self._telemetry.get(robot_id) or {}
+        video = self.video_status(robot_id)
+        connected = bool(self.fleet.get(robot_id).session.is_connected)
+
+        live_map = {
+            "lowstate": bool(
+                snapshot.get("battery") or snapshot.get("imu") or snapshot.get("foot_force")
+            ),
+            "multiplestate": bool(snapshot.get("aggregate_state")),
+            "state": bool(snapshot.get("sport_state")),
+            "video": video.get("state") == "ok",
+        }
+
+        read = []
+        for source_id, label, topic in self.READ_SOURCES:
+            is_live = live_map[source_id]
+            if not connected:
+                status = "offline"
+            elif is_live:
+                status = "live"
+            elif source_id == "video":
+                # Video has its own richer states; mirror them rather than
+                # flattening "starting" and "stalled" into one word.
+                status = video.get("state") or "silent"
+            else:
+                status = "silent"
+            read.append({
+                "id": source_id, "label": label, "topic": topic, "status": status,
+            })
+
+        return {
+            "connected": connected,
+            "read": read,
+            "not_attempted": [
+                {"id": source_id, "label": label, "topic": topic, "why": why}
+                for source_id, label, topic, why in self.NOT_ATTEMPTED
+            ],
+        }
+
     def controls_payload(self, robot_id: str) -> Dict[str, Any]:
         """The control descriptors this robot can actually honour.
 
@@ -1478,6 +1554,7 @@ class ConsoleService:
             "where": {rid: self.where(rid) for rid in self.fleet.ids},
             "posture": {rid: self.posture(rid).as_dict() for rid in self.fleet.ids},
             "body": {rid: self.body(rid) for rid in self.fleet.ids},
+            "sources": {rid: self.sources(rid) for rid in self.fleet.ids},
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a

@@ -208,6 +208,12 @@
       <div><dt>状态</dt><dd data-role="state">—</dd></div>
     </dl>
 
+    <!-- Lives here rather than being created by the JS: an element the script
+         reaches for should exist in the page, or its absence depends on which
+         function happened to run first. `renderControls` moves it into 感知,
+         which is the tab an operator opens when something is not showing. -->
+    <div class="sources" data-role="sources"></div>
+
     <nav class="tabs" data-role="tabs"></nav>
     <div class="panels" data-role="panels"></div>
 

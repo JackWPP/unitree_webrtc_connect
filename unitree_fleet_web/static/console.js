@@ -154,6 +154,7 @@ function buildPens(fleet) {
       feet: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="feet"]`),
       speed: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="speed"]`),
       gait: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="gait"]`),
+      sources: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="sources"]`),
       auditWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-wrap"]`),
       audit: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit"]`),
       auditCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-count"]`),
@@ -463,6 +464,7 @@ function renderStatus(payload) {
     renderDrive(robot.robot_id);
     renderWhere(robot.robot_id);
     renderBody(robot.robot_id);
+    renderSources(robot.robot_id);
     renderFaults(robot.robot_id, robot);
   }
 
@@ -475,6 +477,7 @@ function renderStatus(payload) {
   state.motion = payload.motion || {};
   state.where = payload.where || {};
   state.body = payload.body || {};
+  state.sources = payload.sources || {};
   renderFleetTargets();
   renderRoutine(payload.routine);
   state.flags = payload.flags || state.flags || {};
@@ -932,6 +935,43 @@ function buildTabBar(robotId, tabs) {
   }
 }
 
+/* What the robot is reporting, and what nobody has asked it.
+ *
+ * Three different absences, kept apart: `silent` means the console asked and
+ * the topic did not answer; `not attempted` means the console does not read it
+ * at all. Conflating them would answer "why is there no gait showing?" with
+ * "this robot cannot report its gait" — which is a different claim and may be
+ * false.
+ */
+const SOURCE_LABELS = {
+  live: '有数据', silent: '未应答', offline: '未连接',
+  starting: '启动中', stalled: '无画面', disabled: '已关闭',
+};
+
+function renderSources(robotId) {
+  const entry = state.focusMap[robotId];
+  const host = entry && entry.sources;
+  if (!host) return;
+  const spec = (state.sources && state.sources[robotId]) || null;
+  if (!spec) { host.textContent = ''; return; }
+
+  host.textContent = '';
+  for (const source of spec.read || []) {
+    const chip = document.createElement('span');
+    chip.className = 'source ' + source.status;
+    chip.textContent = `${source.label} · ${SOURCE_LABELS[source.status] || source.status}`;
+    chip.title = `${source.topic} —— ${SOURCE_LABELS[source.status] || source.status}`;
+    host.appendChild(chip);
+  }
+  for (const source of spec.not_attempted || []) {
+    const chip = document.createElement('span');
+    chip.className = 'source untried';
+    chip.textContent = `${source.label} · 未读取`;
+    chip.title = `${source.topic} —— ${source.why}`;
+    host.appendChild(chip);
+  }
+}
+
 function renderControls(robotId) {
   const entry = state.focusMap[robotId];
   if (!entry || !entry.controls || !entry.tabs || !entry.panels) return;
@@ -940,6 +980,14 @@ function renderControls(robotId) {
   entry.controls.textContent = '';
   entry.panels.textContent = '';
   entry.tabs.textContent = '';
+  // The data-source list goes in 感知: it is what an operator wants when
+  // something is not showing up, and that is the tab they will open. The
+  // element itself comes from the template — see the comment there.
+  if (entry.sources) {
+    const senseHost = panelFor(robotId, 'sense');
+    senseHost.textContent = '';
+    senseHost.appendChild(entry.sources);
+  }
   entry.controls.classList.add('hidden');
 
   const controls = (spec && spec.controls) || [];
