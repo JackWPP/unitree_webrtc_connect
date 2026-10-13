@@ -190,6 +190,20 @@
       <span class="strip-target muted" data-role="target" title="连接目标"></span>
     </div>
 
+    <!-- The live body. Everything here rides on the three topics measured
+         arriving on real hardware, so it is populated on the dog and not only
+         under the mock: attitude (is it tipping?), foot contact (which feet are
+         down?), and actual speed against what was commanded (is a stick held at
+         full doing nothing?). -->
+    <div class="body-strip" data-role="body-strip">
+      <span class="bubble" data-role="bubble" title="姿态">
+        <i data-role="bubble-dot"></i>
+      </span>
+      <span class="feet" data-role="feet" title="足端受力"></span>
+      <span class="speed" data-role="speed"></span>
+      <span class="muted gait" data-role="gait"></span>
+    </div>
+
     <dl class="facts hidden">
       <div><dt>状态</dt><dd data-role="state">—</dd></div>
     </dl>

@@ -842,3 +842,70 @@ select, input[type="range"] { accent-color: var(--accent); }
   width: 190px;
 }
 .editor-opt { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 3px; }
+
+/* ── live body ────────────────────────────────────────────────────── */
+
+.body-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--muted);
+  min-height: 30px;
+}
+.body-strip:empty, .body-strip.hidden { display: none; }
+
+/* A bubble level. Pitch is the number that says a quadruped is about to go
+   over, and a dot that is off-centre says it before the number does. */
+.bubble {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: radial-gradient(circle at 50% 50%, #12161c, var(--panel));
+  flex: none;
+}
+.bubble::before, .bubble::after {
+  content: '';
+  position: absolute;
+  background: var(--line);
+  opacity: 0.6;
+}
+.bubble::before { left: 50%; top: 4px; bottom: 4px; width: 1px; }
+.bubble::after { top: 50%; left: 4px; right: 4px; height: 1px; }
+.bubble > i {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 8px; height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: var(--ok);
+  transition: transform 0.12s linear, background 0.12s linear;
+}
+.bubble.tilted > i { background: var(--warn); }
+.bubble.falling > i { background: var(--danger); }
+
+/* Foot contact: four bars, one per foot, height follows the force. */
+.feet { display: flex; align-items: flex-end; gap: 3px; height: 22px; flex: none; }
+.feet > i {
+  display: block;
+  width: 6px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  opacity: 0.85;
+  transition: height 0.12s linear, opacity 0.12s linear;
+  align-self: flex-end;
+}
+.feet > i.airborne { background: var(--line); opacity: 0.5; }
+
+.speed { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.speed b { color: var(--fg); font-weight: 600; }
+/* Commanded far ahead of actual is a stall, and the colour says so. */
+.speed.stalled, .speed.stalled b { color: var(--warn); }
+.gait { margin-left: auto; }

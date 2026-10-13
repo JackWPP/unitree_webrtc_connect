@@ -1138,3 +1138,27 @@ def test_the_palette_is_loaded_after_the_pens_exist(open_client):
     build = boot.index("buildPens(snapshot.fleet)")
     palette = boot.index("await loadPalette()", build)
     assert palette > build, "the palette is loaded before the pens exist"
+
+
+def test_the_status_payload_carries_the_live_body(open_client):
+    payload = open_client.get("/api/fleet/status").json()
+    assert "body" in payload
+    assert set(payload["body"]) == {"dog1", "dog2"}
+
+
+def test_the_console_js_renders_the_body(open_client):
+    source = open_client.get("/static/console.js").text
+    for marker in ("renderBody", "bubbleDot", "TILT_WARN_DEG", "airborne"):
+        assert marker in source, f"console.js lost {marker}"
+    html = open_client.get("/").text
+    for marker in ("body-strip", "bubble-dot", "data-role=\"feet\"", "data-role=\"speed\""):
+        assert marker in html, f"the template lost {marker}"
+
+
+def test_the_stall_indicator_is_sustained_before_it_flags(open_client):
+    """A robot that has just been told to move has not moved *yet*. An
+    indicator that fires every time somebody presses W is one an operator
+    learns to ignore, which is worse than not having it."""
+    source = open_client.get("/static/console.js").text
+    assert "stallSince" in source
+    assert "1500" in source, "no sustain window"

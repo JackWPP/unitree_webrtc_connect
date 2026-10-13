@@ -239,18 +239,35 @@ async def test_the_gate_gives_up_and_says_why(service):
     than the console quietly asking a robot to stand forever."""
     await service.connect("dog1")
     service.config.stand_timeout_s = 0.2
+
+    # The robot never gets up. Re-asserting the belief from the test raced the
+    # background auto-stand: whichever landed last won, so the test passed
+    # alone and failed under load. Making the ask a no-op tests the gate's
+    # timeout instead of the scheduler's mood.
+    async def never_stands(robot_id):
+        return None
+
+    service._ask_stand = never_stands  # type: ignore[assignment]
     await service.start()
     try:
         await service.call_tool("dog1", "robot_lie_down", {"confirm": True})
-        # Keep it lying: re-assert the belief after every auto-stand.
         service.set_focus("dog1")
-        for _ in range(20):
-            await service.teleop_source(source="keyboard", ly=1.0)
-            service.posture("dog1").note("robot_lie_down")
-            await asyncio.sleep(0.05)
 
-        assert service.motion("dog1").state == "stand_timeout"
-        assert service.motion("dog1").target == (0.0, 0.0, 0.0)
+        # The state alternates while the operator keeps holding the key: the
+        # gate times out and drops the target, the next frame sets it again,
+        # and a fresh gate starts. So the assertion is on what it *reports*,
+        # not on which of the two states happens to be current when the loop
+        # stops.
+        seen = set()
+        for _ in range(24):
+            await service.teleop_source(source="keyboard", ly=1.0)
+            await asyncio.sleep(0.05)
+            seen.add(service.motion("dog1").state)
+
+        assert "stand_timeout" in seen, f"the gate never gave up; saw {seen}"
+        assert "driving" not in seen, (
+            "a robot that never stood up should never have been driven"
+        )
     finally:
         for task in (service._motion_task, service._deadman, service._lease):  # noqa: SLF001
             if task is not None:
@@ -284,3 +301,64 @@ async def test_the_status_payload_carries_the_posture(service):
     assert payload["posture"]["dog1"]["posture"] in (
         UNKNOWN, STANDING, LYING, SITTING, DAMPING, "moving"
     )
+
+
+# ─── the live body ────────────────────────────────────────────────────
+
+
+async def test_the_body_reports_attitude_feet_and_speed(service):
+    """Everything here rides on the topics measured arriving on real hardware
+    — lowstate, multiplestate and the state topics — so the panel is populated
+    on the dog and not only under the mock."""
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    body = service.body("dog1")
+
+    assert "roll_deg" in body["attitude"] and "pitch_deg" in body["attitude"]
+    assert len(body["feet"]) == 4
+    assert all(isinstance(value, int) for value in body["feet"])
+    assert "speed" in body
+    assert body["gait"] == "trot"
+
+
+async def test_attitude_carries_degrees_because_radians_are_not_readable(service):
+    """The topic carries radians and a person reads degrees. Doing the
+    conversion here rather than in the UI keeps the frontend free of unit
+    knowledge, and means the tooltip and any future consumer agree."""
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    attitude = service.body("dog1")["attitude"]
+    assert attitude["roll_deg"] == pytest.approx(attitude["roll_rad"] * 57.2958, abs=0.1)
+
+
+async def test_a_silent_robot_yields_an_empty_body_not_zeros(service):
+    """"It is level" and "it has not told me" are different claims, and a zero
+    makes the first out of the second."""
+    await service.connect("dog1")
+    service._telemetry["dog1"] = {}  # noqa: SLF001
+
+    body = service.body("dog1")
+    assert "attitude" not in body
+    assert "feet" not in body
+    assert "speed" not in body
+
+
+async def test_a_malformed_payload_does_not_raise(service):
+    await service.connect("dog1")
+    for bad in (
+        {"imu": {"roll_rad": "x"}},
+        {"foot_force": [1, 2]},
+        {"foot_force": ["a", "b", "c", "d"]},
+        {"sport_state": {"velocity": [1]}},
+        {"sport_state": {"velocity": "fast"}},
+    ):
+        service._telemetry["dog1"] = bad  # noqa: SLF001
+        service.body("dog1")  # must not raise
+
+
+async def test_the_status_payload_carries_the_body(service):
+    await service.connect("dog1")
+    payload = await service.status()
+    assert set(payload["body"]) == set(service.fleet.ids)

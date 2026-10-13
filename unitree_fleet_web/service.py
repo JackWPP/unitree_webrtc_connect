@@ -1234,6 +1234,70 @@ class ConsoleService:
                 pass
         return out
 
+    def body(self, robot_id: str) -> Dict[str, Any]:
+        """The robot's live physical state, from the topics we know work.
+
+        Everything here rides on `rt/lf/lowstate`, `rt/multiplestate` and the
+        state topics — the three that were measured arriving on real hardware.
+        Nothing speculative, so this panel is populated on the dog rather than
+        only under the mock.
+
+        Three things an operator cannot otherwise see, all of which answer a
+        question they will actually ask:
+
+        * **attitude** — is it level, and is it tipping? Pitch is the number
+          that says a quadruped is about to go over.
+        * **feet** — which feet are on the ground. A foot force that has gone
+          to zero mid-walk is the earliest sign of a stumble.
+        * **speed, against what was commanded** — a stick held at full with the
+          robot at zero is a stall, and it is invisible if only one of the two
+          numbers is on screen.
+        """
+        snapshot = self._telemetry.get(robot_id) or {}
+        out: Dict[str, Any] = {}
+
+        imu = snapshot.get("imu") or {}
+        attitude = {
+            key: round(float(imu[key]), 4)
+            for key in ("roll_rad", "pitch_rad", "yaw_rad")
+            if isinstance(imu.get(key), (int, float))
+        }
+        if attitude:
+            # Degrees too: radians are what the topic carries, degrees are what
+            # a person reads. Both, rather than making the UI convert.
+            attitude["roll_deg"] = round(attitude.get("roll_rad", 0.0) * 57.2958, 1)
+            attitude["pitch_deg"] = round(attitude.get("pitch_rad", 0.0) * 57.2958, 1)
+            out["attitude"] = attitude
+
+        feet = snapshot.get("foot_force")
+        if isinstance(feet, (list, tuple)) and len(feet) >= 4:
+            try:
+                out["feet"] = [int(value) for value in feet[:4]]
+            except (TypeError, ValueError):
+                pass
+
+        sport = snapshot.get("sport_state") or {}
+        for source, name in ((sport, "sport"), ):
+            velocity = source.get("velocity")
+            if isinstance(velocity, (list, tuple)) and len(velocity) >= 3:
+                try:
+                    vx, vy = float(velocity[0]), float(velocity[1])
+                    out["speed"] = round((vx * vx + vy * vy) ** 0.5, 3)
+                    out["velocity"] = [round(float(v), 3) for v in velocity[:3]]
+                except (TypeError, ValueError):
+                    pass
+        if sport.get("gait_type"):
+            out["gait"] = str(sport["gait_type"])
+        for key in ("body_height", "foot_raise_height"):
+            if isinstance(sport.get(key), (int, float)):
+                out[key] = round(float(sport[key]), 3)
+
+        aggregate = snapshot.get("aggregate_state") or {}
+        if isinstance(aggregate.get("speedLevel"), (int, float)):
+            out["speed_level"] = int(aggregate["speedLevel"])
+
+        return out
+
     def controls_payload(self, robot_id: str) -> Dict[str, Any]:
         """The control descriptors this robot can actually honour.
 
@@ -1413,6 +1477,7 @@ class ConsoleService:
             "motion": {rid: self.motion(rid).snapshot() for rid in self.fleet.ids},
             "where": {rid: self.where(rid) for rid in self.fleet.ids},
             "posture": {rid: self.posture(rid).as_dict() for rid in self.fleet.ids},
+            "body": {rid: self.body(rid) for rid in self.fleet.ids},
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a

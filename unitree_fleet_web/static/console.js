@@ -148,6 +148,12 @@ function buildPens(fleet) {
       knobTurn: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="knob-turn"]`),
       drive: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="drive"]`),
       where: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="where"]`),
+      bodyStrip: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="body-strip"]`),
+      bubble: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="bubble"]`),
+      bubbleDot: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="bubble-dot"]`),
+      feet: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="feet"]`),
+      speed: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="speed"]`),
+      gait: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="gait"]`),
       auditWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-wrap"]`),
       audit: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit"]`),
       auditCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-count"]`),
@@ -456,6 +462,7 @@ function renderStatus(payload) {
     renderFlags(robot.robot_id);
     renderDrive(robot.robot_id);
     renderWhere(robot.robot_id);
+    renderBody(robot.robot_id);
     renderFaults(robot.robot_id, robot);
   }
 
@@ -467,6 +474,7 @@ function renderStatus(payload) {
   state.lastStatus = payload;
   state.motion = payload.motion || {};
   state.where = payload.where || {};
+  state.body = payload.body || {};
   renderFleetTargets();
   renderRoutine(payload.routine);
   state.flags = payload.flags || state.flags || {};
@@ -1085,6 +1093,113 @@ function renderWhere(robotId) {
   entry.where.classList.remove('hidden');
   entry.where.textContent = `位移 ${spot.distance}m ${arrow}`;
   entry.where.title = `相对本机里程计原点：x=${spot.x} y=${spot.y} 朝向=${(spot.yaw * 57.3).toFixed(0)}°`;
+}
+
+/* The live body: attitude, foot contact, and actual speed beside commanded.
+ *
+ * All three ride on the topics measured arriving on real hardware, so this is
+ * populated on the dog rather than only under the mock. Each answers a question
+ * an operator actually asks and cannot otherwise see:
+ *
+ *   is it tipping?          the bubble
+ *   which feet are down?    the four bars
+ *   is the stick doing
+ *   anything?               actual against commanded
+ */
+const TILT_WARN_DEG = 12;
+const TILT_BAD_DEG = 25;
+
+function renderBody(robotId) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.bodyStrip) return;
+  const body = (state.body && state.body[robotId]) || {};
+  const motion = (state.motion && state.motion[robotId]) || {};
+
+  const hasAnything = body.attitude || body.feet || body.speed !== undefined
+    || body.gait;
+  entry.bodyStrip.classList.toggle('hidden', !hasAnything);
+  if (!hasAnything) return;
+
+  // ── attitude ──
+  const attitude = body.attitude;
+  if (attitude && entry.bubbleDot) {
+    const roll = attitude.roll_deg || 0;
+    const pitch = attitude.pitch_deg || 0;
+    const worst = Math.max(Math.abs(roll), Math.abs(pitch));
+    // 30 degrees fills the bubble; beyond that it is pinned at the rim, which
+    // is the right reading anyway.
+    const radius = 9;
+    const x = Math.max(-radius, Math.min(radius, (roll / 30) * radius));
+    const y = Math.max(-radius, Math.min(radius, (pitch / 30) * radius));
+    entry.bubbleDot.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+    entry.bubble.classList.toggle('tilted', worst >= TILT_WARN_DEG && worst < TILT_BAD_DEG);
+    entry.bubble.classList.toggle('falling', worst >= TILT_BAD_DEG);
+    entry.bubble.title = `横滚 ${roll}°　俯仰 ${pitch}°`;
+    entry.bubble.classList.remove('hidden');
+  } else if (entry.bubble) {
+    entry.bubble.classList.add('hidden');
+  }
+
+  // ── feet ──
+  if (Array.isArray(body.feet) && entry.feet) {
+    const peak = Math.max(1, ...body.feet);
+    entry.feet.textContent = '';
+    body.feet.forEach((force, index) => {
+      const bar = document.createElement('i');
+      bar.style.height = `${Math.max(2, Math.round((force / peak) * 20))}px`;
+      // A foot carrying almost nothing is in the air, which is normal in a
+      // trot — but it is also what a stumble looks like, so it is drawn.
+      bar.classList.toggle('airborne', force < peak * 0.15);
+      bar.title = `足 ${index + 1}：${force}`;
+      entry.feet.appendChild(bar);
+    });
+    entry.feet.title = `足端受力 ${body.feet.join(' / ')}`;
+  }
+
+  // ── actual against commanded ──
+  if (entry.speed) {
+    const actual = typeof body.speed === 'number' ? body.speed : null;
+    const asked = Math.hypot((motion.commanded || [0, 0])[0], (motion.commanded || [0, 0])[1]);
+    if (actual === null && asked < 0.01) {
+      entry.speed.textContent = '';
+    } else {
+      // The two numbers are different units — the topic reports metres per
+      // second, the ramp works in normalised stick units — so they are shown
+      // side by side and labelled rather than subtracted from each other.
+      //
+      // Sustained before it is flagged. A robot that has just been told to
+      // move has not moved *yet*, and an indicator that cries wolf every time
+      // somebody presses W is one an operator learns to ignore — which is
+      // worse than not having it.
+      const looksStuck = asked > 0.25 && (actual === null || actual < 0.02)
+        && motion.state === 'driving';
+      state.stallSince = state.stallSince || {};
+      const now = Date.now();
+      if (!looksStuck) {
+        delete state.stallSince[robotId];
+      } else if (!state.stallSince[robotId]) {
+        state.stallSince[robotId] = now;
+      }
+      const stalled = looksStuck
+        && (now - state.stallSince[robotId]) > 1500;
+      entry.speed.textContent = '';
+      const label = document.createElement('span');
+      label.textContent = '速度 ';
+      const actualEl = document.createElement('b');
+      actualEl.textContent = actual === null ? '—' : actual.toFixed(2);
+      const tail = document.createElement('span');
+      tail.textContent = ` m/s　指令 ${asked.toFixed(2)}`;
+      entry.speed.appendChild(label);
+      entry.speed.appendChild(actualEl);
+      entry.speed.appendChild(tail);
+      entry.speed.className = 'speed' + (stalled ? ' stalled' : '');
+      entry.speed.title = stalled
+        ? '摇杆推着但机器人没动 —— 可能没站好，或避障拦住了'
+        : '本体速度与斜坡指令';
+    }
+  }
+
+  if (entry.gait) entry.gait.textContent = body.gait || '';
 }
 
 function renderFlags(robotId) {
