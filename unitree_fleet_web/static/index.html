@@ -43,6 +43,37 @@
        operator has taken their hands off the keyboard, so its progress and its
        stop button are always on screen while it runs. -->
   <div class="fleet-row routines" id="fleet-routines"></div>
+
+  <!-- The editor. A routine is a document, so it should be authorable from the
+       page rather than only by editing Python — which is exactly why the
+       branch this idea came from never had anyone author one. -->
+  <details class="editor" id="editor">
+    <summary>编排编辑器 <span class="muted" data-role="editor-count"></span></summary>
+    <div class="editor-body">
+      <div class="palette-wrap">
+        <div class="editor-label">点一下加进序列</div>
+        <div class="palette" id="editor-palette"></div>
+      </div>
+      <div class="steps-wrap">
+        <div class="editor-label">
+          序列
+          <span class="muted" id="editor-empty">（空 —— 从左边点几个动作）</span>
+        </div>
+        <ol class="editor-steps" id="editor-steps"></ol>
+      </div>
+    </div>
+    <div class="editor-foot">
+      <input id="editor-name" class="editor-name" placeholder="编排名称，例如 一起鞠躬" maxlength="48">
+      <label class="editor-opt">
+        <input type="checkbox" id="editor-loop"> 循环
+      </label>
+      <span class="spacer"></span>
+      <span id="editor-status" class="muted"></span>
+      <button id="editor-clear" class="btn">清空</button>
+      <button id="editor-save" class="btn">保存</button>
+      <button id="editor-run" class="btn">保存并运行</button>
+    </div>
+  </details>
   <div id="routine-run" class="routine-run hidden">
     <div class="routine-head">
       <span class="routine-bar"><i data-role="routine-progress"></i></span>

@@ -764,3 +764,81 @@ select, input[type="range"] { accent-color: var(--accent); }
 .step-card.failed { border-left-color: var(--danger); }
 .step-card.cancelled { border-left-color: var(--warn); opacity: 0.6; }
 .step-card.pending { opacity: 0.62; }
+
+/* ── routine editor ───────────────────────────────────────────────── */
+
+.editor { border-top: 1px solid var(--line-soft); padding-top: 7px; font-size: 12px; }
+.editor > summary { cursor: pointer; color: var(--muted); }
+.editor > summary:hover { color: var(--fg); }
+
+.editor-body { display: flex; gap: 14px; padding: 9px 0 4px; align-items: flex-start; }
+.palette-wrap { flex: 0 0 auto; max-width: 46%; }
+.steps-wrap { flex: 1 1 auto; min-width: 0; }
+.editor-label { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+
+.palette { display: flex; flex-wrap: wrap; gap: 5px; max-height: 190px; overflow-y: auto; }
+.palette .btn { padding: 4px 9px; font-size: 12px; }
+
+.editor-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 190px;
+  overflow-y: auto;
+}
+.editor-steps:empty { display: none; }
+
+/* One row per step: order, what it does, and the two things that are not
+   implied by the action — how long to wait and how many dogs must succeed. */
+.step-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+}
+.step-row .order {
+  color: var(--muted);
+  font-size: 10px;
+  min-width: 14px;
+  text-align: right;
+}
+.step-row .what { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-row select, .step-row input {
+  background: var(--panel-3);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 11px;
+}
+.step-row input { width: 46px; text-align: right; }
+.step-row .icon {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 3px;
+}
+.step-row .icon:hover { color: var(--fg); }
+.step-row .icon.danger:hover { color: #ffb4b4; }
+
+.editor-foot { display: flex; align-items: center; gap: 8px; padding-top: 6px; flex-wrap: wrap; }
+.editor-name {
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  width: 190px;
+}
+.editor-opt { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 3px; }

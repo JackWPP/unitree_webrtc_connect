@@ -1437,6 +1437,256 @@ function wireSocket() {
 /* "Make them both do X" is one intent, so it is one click. The calls go out
  * concurrently server-side; doing it by clicking two per-dog buttons a second
  * apart is not the same thing as doing it together. */
+/* ── the routine editor ────────────────────────────────────────────── */
+
+/* A routine is a document, so it should be authorable from the page. The
+ * branch this idea came from kept its sequences as Python lists, and the
+ * consequence is on record: nobody but its author ever wrote one.
+ *
+ * Reordering is up/down buttons rather than drag-and-drop. Dragging is nicer
+ * with a mouse and unusable with a keyboard or a touch screen, and a console
+ * that two people share should not require one specific input device.
+ */
+const EDITOR_POLICIES = [
+  { value: 'all', label: '全部做到' },
+  { value: 'any', label: '任一做到' },
+  { value: 'best_effort', label: '尽力而为' },
+];
+
+function editorSteps() {
+  state.editor = state.editor || { steps: [], name: '', loop: false };
+  return state.editor.steps;
+}
+
+function renderEditorCount() {
+  const count = document.querySelector('[data-role="editor-count"]');
+  if (count) count.textContent = editorSteps().length ? `（${editorSteps().length} 步）` : '';
+}
+
+async function loadPalette() {
+  const host = document.getElementById('editor-palette');
+  if (!host) return;
+  host.textContent = '';
+
+  const entries = [];
+  // Fleet actions first: they are already the right shape, and they are the
+  // ones an operator reaches for when writing "both dogs do X".
+  try {
+    const fleet = await api('/api/fleet/actions');
+    for (const action of [...(fleet.posture || []), ...(fleet.named || [])]) {
+      entries.push({ label: action.label, tool: action.tool, args: action.args || {},
+                     title: action.title || '' });
+    }
+  } catch (_) { /* a console with no bridge still gets the per-dog controls */ }
+
+  // Then the per-dog controls that are one-shot actions rather than readers.
+  const first = Object.keys(state.focusMap)[0];
+  if (first) {
+    try {
+      const spec = await api(`/api/console/controls?robot_id=${encodeURIComponent(first)}`);
+      for (const control of spec.controls || []) {
+        if (control.read || control.kind === 'range') continue;
+        if (control.kind === 'select' || control.kind === 'toggle') continue;
+        entries.push({ label: control.label, tool: control.tool,
+                       args: control.args || {}, title: control.title || '' });
+      }
+    } catch (_) { /* nothing to add */ }
+  }
+
+  for (const entry of entries) {
+    const button = document.createElement('button');
+    button.className = 'btn';
+    button.textContent = entry.label;
+    button.title = entry.title || `加入 ${entry.label}`;
+    button.addEventListener('click', () => {
+      editorSteps().push({
+        label: entry.label, tool: entry.tool, args: { ...entry.args },
+        policy: 'all', seconds: 3,
+      });
+      renderEditor();
+    });
+    host.appendChild(button);
+  }
+}
+
+function renderEditor() {
+  const host = document.getElementById('editor-steps');
+  const empty = document.getElementById('editor-empty');
+  if (!host) return;
+  host.textContent = '';
+  const steps = editorSteps();
+  if (empty) empty.classList.toggle('hidden', steps.length > 0);
+  renderEditorCount();
+
+  steps.forEach((step, index) => {
+    const row = document.createElement('li');
+    row.className = 'step-row';
+
+    const order = document.createElement('span');
+    order.className = 'order';
+    order.textContent = String(index + 1);
+
+    const what = document.createElement('span');
+    what.className = 'what';
+    what.textContent = step.label;
+    what.title = `${step.tool} ${JSON.stringify(step.args)}`;
+
+    const seconds = document.createElement('input');
+    seconds.type = 'number';
+    seconds.min = '0.2';
+    seconds.max = '60';
+    seconds.step = '0.5';
+    seconds.value = String(step.seconds);
+    seconds.title = '这一步之后等多久（秒）';
+    seconds.addEventListener('change', () => {
+      const value = Number(seconds.value);
+      step.seconds = Number.isFinite(value) ? Math.max(0.2, Math.min(60, value)) : 3;
+      seconds.value = String(step.seconds);
+    });
+
+    const policy = document.createElement('select');
+    policy.title = '这一步要几只狗做到才算成功';
+    for (const option of EDITOR_POLICIES) {
+      const element = document.createElement('option');
+      element.value = option.value;
+      element.textContent = option.label;
+      policy.appendChild(element);
+    }
+    policy.value = step.policy;
+    policy.addEventListener('change', () => { step.policy = policy.value; });
+
+    const up = document.createElement('button');
+    up.className = 'icon';
+    up.textContent = '↑';
+    up.title = '上移';
+    up.disabled = index === 0;
+    up.addEventListener('click', () => {
+      [steps[index - 1], steps[index]] = [steps[index], steps[index - 1]];
+      renderEditor();
+    });
+
+    const down = document.createElement('button');
+    down.className = 'icon';
+    down.textContent = '↓';
+    down.title = '下移';
+    down.disabled = index === steps.length - 1;
+    down.addEventListener('click', () => {
+      [steps[index + 1], steps[index]] = [steps[index], steps[index + 1]];
+      renderEditor();
+    });
+
+    const remove = document.createElement('button');
+    remove.className = 'icon danger';
+    remove.textContent = '✕';
+    remove.title = '移除';
+    remove.addEventListener('click', () => {
+      steps.splice(index, 1);
+      renderEditor();
+    });
+
+    row.appendChild(order);
+    row.appendChild(what);
+    row.appendChild(seconds);
+    row.appendChild(policy);
+    row.appendChild(up);
+    row.appendChild(down);
+    row.appendChild(remove);
+    host.appendChild(row);
+  });
+}
+
+function editorStatus(message, kind) {
+  const status = document.getElementById('editor-status');
+  if (!status) return;
+  status.textContent = message || '';
+  status.className = kind === 'bad' ? 'muted warn' : 'muted';
+}
+
+/* A stable id from the name, so saving the same name twice updates rather than
+ * accumulating near-duplicates. */
+function editorRoutineId(name) {
+  const ascii = (name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+  if (ascii) return ascii.slice(0, 40);
+  // A Chinese name has no ASCII to derive from; fall back to a hash so the id
+  // is still stable across saves of the same name.
+  let hash = 0;
+  for (const char of name || '') hash = (hash * 31 + char.codePointAt(0)) >>> 0;
+  return `routine_${hash.toString(36)}`;
+}
+
+function editorDocument() {
+  const name = (document.getElementById('editor-name').value || '').trim();
+  const steps = editorSteps();
+  if (!name) throw new Error('先给它起个名字');
+  if (!steps.length) throw new Error('序列是空的');
+  return {
+    id: editorRoutineId(name),
+    label: name,
+    loop: Boolean(document.getElementById('editor-loop').checked),
+    steps: steps.map((step) => ({
+      label: step.label, tool: step.tool, args: step.args,
+      policy: step.policy, seconds: step.seconds,
+    })),
+  };
+}
+
+async function saveEditor() {
+  try {
+    const saved = await api('/api/fleet/routines/save', {
+      method: 'POST',
+      body: JSON.stringify(editorDocument()),
+    });
+    editorStatus(`已保存「${saved.label}」`, 'ok');
+    await loadRoutines();
+    return saved;
+  } catch (err) {
+    editorStatus(err.message, 'bad');
+    return null;
+  }
+}
+
+async function runEditor() {
+  const saved = await saveEditor();
+  if (!saved) return;
+  try {
+    await api('/api/fleet/routine', {
+      method: 'POST',
+      body: JSON.stringify({ id: saved.id }),
+    });
+    editorStatus(`正在运行「${saved.label}」`, 'ok');
+  } catch (err) {
+    editorStatus(err.message, 'bad');
+  }
+}
+
+function wireEditor() {
+  const panel = document.getElementById('editor');
+  // Same deep-link affordance as the tabs: `#editor` opens it, so the editor
+  // can be bookmarked and so a screenshot of it is possible at all.
+  if (panel && /(?:^|[#&])editor\b/.test(location.hash || '')) panel.open = true;
+
+  const save = document.getElementById('editor-save');
+  const run = document.getElementById('editor-run');
+  const clear = document.getElementById('editor-clear');
+  if (save) save.addEventListener('click', saveEditor);
+  if (run) run.addEventListener('click', runEditor);
+  if (clear) clear.addEventListener('click', () => {
+    state.editor = { steps: [], name: '', loop: false };
+    document.getElementById('editor-name').value = '';
+    document.getElementById('editor-loop').checked = false;
+    editorStatus('');
+    renderEditor();
+  });
+  const restored = localStorage.getItem('unitree.editor.name');
+  if (restored) document.getElementById('editor-name').value = restored;
+  const nameInput = document.getElementById('editor-name');
+  if (nameInput) {
+    nameInput.addEventListener('change', () => {
+      localStorage.setItem('unitree.editor.name', nameInput.value);
+    });
+  }
+}
+
 /* ── routines ──────────────────────────────────────────────────────── */
 
 /* A sequence keeps sending commands after the operator has taken their hands
@@ -1691,6 +1941,7 @@ async function boot() {
   wireButtons();
   wireInput();
   wireFleetBar();
+  wireEditor();
   loadFleetActions();
   loadRoutines();
   try {
@@ -1708,6 +1959,11 @@ async function boot() {
     } catch (_) { /* read-only console */ }
     await Promise.all(snapshot.fleet.robots.map((robot) => loadControls(robot.robot_id)));
     renderFleetTargets();
+    // Only now: the palette reads `focusMap` for the per-dog controls, and
+    // until the pens exist that map is empty. Called earlier it appeared to
+    // work — an `await` inside let the pens be built first — which is a race,
+    // not a design.
+    await loadPalette();
   } catch (err) {
     toast('无法读取机队信息: ' + err.message, 'bad');
     return;

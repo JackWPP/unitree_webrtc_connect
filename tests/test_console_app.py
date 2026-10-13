@@ -1059,3 +1059,82 @@ def test_the_console_js_hides_an_absent_position(open_client):
     source = open_client.get("/static/console.js").text
     assert "renderWhere" in source
     assert "relativ" in source.lower() or "相对" in source
+
+
+# ─── the editor ───────────────────────────────────────────────────────
+
+
+def test_the_editor_markup_is_present(open_client):
+    """A routine is a document, so it has to be authorable from the page. The
+    branch this idea came from kept sequences as Python lists, and the
+    documented consequence is that nobody but its author ever wrote one."""
+    html = open_client.get("/").text
+    for marker in ("editor-palette", "editor-steps", "editor-name",
+                   "editor-save", "editor-run", "editor-loop"):
+        assert marker in html, f"the editor lost {marker}"
+
+
+def test_the_editor_contract_in_the_source(open_client):
+    source = open_client.get("/static/console.js").text
+    for marker in ("loadPalette", "renderEditor", "saveEditor", "runEditor",
+                   "editorRoutineId", "EDITOR_POLICIES"):
+        assert marker in source, f"console.js lost {marker}"
+
+
+def test_a_document_named_by_the_editor_is_accepted(open_client):
+    """The editor derives an id from the name. A Chinese name has no ASCII to
+    derive from, so it falls back to a hash — and the server has to accept
+    whatever the editor produces, or the save button silently never works for
+    anybody writing in Chinese."""
+    import re
+
+    # Mirrors `editorRoutineId` for a non-ASCII name.
+    name = "一起鞠躬"
+    digest = 0
+    for char in name:
+        digest = (digest * 31 + ord(char)) & 0xFFFFFFFF
+    routine_id = f"routine_{digest:x}" if digest else "routine"
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", routine_id), routine_id
+
+    response = open_client.post(
+        "/api/fleet/routines/save",
+        json={
+            "id": routine_id,
+            "label": name,
+            "steps": [{"tool": "robot_stand", "args": {"confirm": True}, "seconds": 1}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["id"] == routine_id
+
+
+def test_the_same_name_saves_one_routine_not_two(open_client):
+    """The id is derived from the name, so saving twice updates in place.
+    Otherwise the list accumulates near-duplicates nobody can tell apart."""
+    document = {
+        "id": "my_sequence",
+        "label": "我的序列",
+        "steps": [{"tool": "robot_stand", "args": {"confirm": True}}],
+    }
+    open_client.post("/api/fleet/routines/save", json=document)
+    document["steps"].append({"tool": "robot_play_action", "args": {"name": "hello"}})
+    open_client.post("/api/fleet/routines/save", json=document)
+
+    ids = [r["id"] for r in open_client.get("/api/fleet/routines").json()["routines"]]
+    assert ids.count("my_sequence") == 1
+    saved = next(r for r in open_client.get("/api/fleet/routines").json()["routines"]
+                 if r["id"] == "my_sequence")
+    assert len(saved["steps"]) == 2
+
+
+def test_the_palette_is_loaded_after_the_pens_exist(open_client):
+    """`loadPalette` reads `focusMap` for the per-dog controls, and that map is
+    empty until the pens are built. It used to be called before `buildPens` and
+    appeared to work anyway — an `await` inside it let the pens be created
+    first. That is a race, not a design, and it would fail the day the fetch
+    resolved faster."""
+    source = open_client.get("/static/console.js").text
+    boot = source[source.index("async function boot()"):]
+    build = boot.index("buildPens(snapshot.fleet)")
+    palette = boot.index("await loadPalette()", build)
+    assert palette > build, "the palette is loaded before the pens exist"
