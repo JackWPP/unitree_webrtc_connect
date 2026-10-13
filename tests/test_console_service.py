@@ -880,3 +880,125 @@ async def test_the_status_payload_reports_video_health_per_robot(service):
     payload = await service.status()
     assert set(payload["video"]) == set(service.fleet.ids)
     assert payload["video"]["dog1"]["state"] == "offline"
+
+
+# ─── the velocity ramp ────────────────────────────────────────────────
+
+
+async def test_a_full_stick_does_not_reach_full_speed_in_one_frame(service):
+    """The lurch this exists to remove: previously the stick position was
+    published verbatim, so full deflection meant full speed immediately."""
+    service.config.motion_hz = 200.0
+    await service.connect("dog1")
+    await service.start()
+    try:
+        first = None
+        for _ in range(3):
+            result = await service.teleop("dog1", ly=1.0)
+            first = first if first is not None else result
+            await asyncio.sleep(0.02)
+
+        # Asked for full...
+        assert first["axes"]["ly"] == 1.0
+        # ...and the commanded value is still climbing toward it.
+        commanded = first["motion"]["commanded"][0]
+        assert 0.0 <= commanded < 1.0, "it went straight to full speed"
+    finally:
+        for task in (service._motion_task, service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+
+async def test_releasing_the_stick_leaves_the_ramp_to_bring_it_down(service):
+    """A soft release decelerates. Cutting is what the e-stop is for.
+
+    Driven through `teleop` on purpose: that is what registers the robot as
+    being driven, and `release_drive` resolves *who to release* from that
+    registry. Setting the controller directly would test a path no operator
+    can take.
+    """
+    service.client_connected()
+    await service.connect("dog1")
+    await service.teleop("dog1", ly=1.0)
+    controller = service.motion("dog1")
+    for _ in range(40):
+        controller.tick(0.05)
+    assert controller.moving is True
+
+    await service.release_drive()
+
+    assert controller.target == (0.0, 0.0, 0.0)
+    assert controller.moving is True, "the release cut the velocity instead of ramping"
+
+
+async def test_a_latched_stop_cuts_rather_than_ramping(service):
+    """`robot_stop` and the e-stop are the paths where the operator wants it
+    over now, so they bypass the ramp."""
+    await service.connect("dog1")
+    await service.teleop("dog1", ly=1.0)
+    controller = service.motion("dog1")
+    for _ in range(40):
+        controller.tick(0.05)
+    assert controller.moving is True
+
+    await service.stop_all()
+
+    assert controller.moving is False
+    assert controller.commanded == (0.0, 0.0, 0.0)
+
+
+async def test_the_estop_cuts_the_ramp_too(service):
+    await service.connect("dog1")
+    await service.teleop("dog1", ly=1.0)
+    controller = service.motion("dog1")
+    for _ in range(40):
+        controller.tick(0.05)
+
+    await service.estop(reason="test")
+
+    assert controller.commanded == (0.0, 0.0, 0.0)
+    assert controller.state == "estopped"
+    service.release_estop()
+    assert service.routine_state()["running"] is False
+
+
+async def test_the_status_payload_reports_the_drive_state_per_robot(service):
+    await service.connect("dog1")
+    payload = await service.status()
+
+    assert set(payload["motion"]) == set(service.fleet.ids)
+    assert payload["motion"]["dog1"]["state"] == "idle"
+    assert "commanded" in payload["motion"]["dog1"]
+
+
+async def test_the_stick_mapping_matches_the_one_robot_joystick_documents(service):
+    """`[ly, -lx, -rx] -> [vx, vy, vyaw]`, inverted. Getting it backwards would
+    make the robot accelerate when the operator brakes, so it is pinned here."""
+    service.config.motion_hz = 500.0
+    await service.connect("dog1")
+
+    frames = []
+    original = service._frame  # noqa: SLF001
+
+    async def capture(robot_id, *, lx, ly, rx, ry=0.0, keys=0):
+        frames.append((lx, ly, rx))
+        return True
+
+    service._frame = capture  # type: ignore[assignment]
+    try:
+        # Push forward and turn left: ly = +1, rx = +1.
+        await service.teleop("dog1", ly=1.0, rx=1.0)
+        controller = service.motion("dog1")
+        for _ in range(40):
+            controller.tick(0.05)
+        await service._publish_commanded("dog1", controller, *controller.commanded)  # noqa: SLF001
+    finally:
+        service._frame = original  # type: ignore[assignment]
+
+    assert frames, "nothing was published"
+    lx, ly, rx = frames[-1]
+    # Forward is +ly, and a left turn is +rx.
+    assert ly > 0, f"forward mapped to ly={ly}"
+    assert rx > 0, f"left turn mapped to rx={rx}"

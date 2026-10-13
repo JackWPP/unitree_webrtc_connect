@@ -48,6 +48,9 @@ DEFAULT_LEASE_S = 5.0
 #: the connection state alone.
 DEFAULT_TELEMETRY_HZ = 1.0
 
+#: Velocity re-send rate while driving. See DEFAULT_MOTION_HZ in service.py.
+DEFAULT_MOTION_HZ = 50.0
+
 #: How long after the last browser goes away the console hands its links back.
 #:
 #: Without this the links wait out the session's own `idle_disconnect_s` (45 s)
@@ -86,6 +89,10 @@ class ConsoleConfig:
     lease_s: float = DEFAULT_LEASE_S
     #: Battery/IMU/gait refresh rate. See DEFAULT_TELEMETRY_HZ.
     telemetry_hz: float = DEFAULT_TELEMETRY_HZ
+    #: Ramped-velocity re-send rate. `0` disables the ramp entirely and returns
+    #: to publishing the stick position directly — not recommended, but it is
+    #: the escape hatch if the ramp ever misbehaves on new firmware.
+    motion_hz: float = DEFAULT_MOTION_HZ
     #: Hand the links back this long after the last browser leaves. See
     #: DEFAULT_UNWATCHED_RELEASE_S.
     unwatched_release_s: float = DEFAULT_UNWATCHED_RELEASE_S

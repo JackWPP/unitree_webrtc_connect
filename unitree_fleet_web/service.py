@@ -23,6 +23,7 @@ from unitree_robot_agent.fleet import FleetManager
 from unitree_robot_agent.server import build_server
 
 from .config import ConsoleConfig
+from .motion import MotionController, MotionLimits
 from .state import ConsoleState, EStopScope, InputMode, MotionBlocked
 
 logger = logging.getLogger("unitree_fleet_web.service")
@@ -54,6 +55,14 @@ MOTION_GATED_TOOLS = frozenset(
 #: Tools that call ``Guard.require_dangerous_allowed`` and so refuse unless
 #: ``UNITREE_AGENT_ALLOW_DANGEROUS`` is set.
 DANGEROUS_GATED_TOOLS = frozenset({"robot_lie_down"})
+
+#: How often the ramped velocity is re-sent while a robot is being driven.
+#:
+#: 50 Hz is what the official SDK's own examples use and what a physical
+#: remote does. The robot is a best-effort channel with no retransmit, so a
+#: single dropped frame must not be a visible stutter — it is re-sent anyway,
+#: which is why this is a fixed rate and not send-on-change.
+DEFAULT_MOTION_HZ = 50.0
 
 #: Ceiling on one robot's telemetry refresh.
 #:
@@ -227,6 +236,15 @@ class ConsoleService:
         #: report progress without reaching into the runner.
         self._routine: Optional[Dict[str, Any]] = None
         self._routine_task: Optional[asyncio.Task] = None
+        #: One velocity ramp per robot. Sharing one would couple the dogs'
+        #: accelerations to each other.
+        self._motion: Dict[str, MotionController] = {}
+        self._motion_task: Optional[asyncio.Task] = None
+        self._motion_limits = MotionLimits(
+            accel=float(getattr(self.config, "motion_accel", MotionLimits.accel)),
+            decel=float(getattr(self.config, "motion_decel", MotionLimits.decel)),
+            watchdog_s=self.config.deadman_s,
+        )
         #: Per-robot video health, so a stream that never produces frames can
         #: say so instead of showing an empty box.
         self._video: Dict[str, Dict[str, Any]] = {}
@@ -320,6 +338,12 @@ class ConsoleService:
             self._telemetry_task = asyncio.create_task(
                 self._telemetry_loop(), name="console-telemetry"
             )
+        if self.config.motion_hz > 0 and (
+            self._motion_task is None or self._motion_task.done()
+        ):
+            self._motion_task = asyncio.create_task(
+                self._motion_loop(), name="console-motion"
+            )
 
     async def aclose(self) -> None:
         # A routine keeps issuing commands, so it goes before anything else —
@@ -343,7 +367,7 @@ class ConsoleService:
         self._connect_tasks.clear()
         self._connecting.clear()
 
-        for task in (self._deadman, self._lease, self._telemetry_task):
+        for task in (self._deadman, self._lease, self._telemetry_task, self._motion_task):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -351,6 +375,7 @@ class ConsoleService:
         self._deadman = None
         self._lease = None
         self._telemetry_task = None
+        self._motion_task = None
         # Never leave a robot walking because the console went away.
         with contextlib.suppress(Exception):
             await self._zero_driver()
@@ -760,6 +785,63 @@ class ConsoleService:
             "named": named,
         }
 
+    # ── the velocity ramp ────────────────────────────────────────────
+
+    def motion(self, robot_id: str) -> MotionController:
+        """The ramp for one robot, created on first use."""
+        controller = self._motion.get(robot_id)
+        if controller is None:
+            controller = MotionController(self._motion_limits)
+            self._motion[robot_id] = controller
+        return controller
+
+    async def _motion_loop(self) -> None:
+        """Advance every robot's ramp and publish what it commands.
+
+        The browser sets a target; the server owns what is actually sent. That
+        is the whole point of doing the ramp here rather than in the page: a
+        dropped link, a stalled tab or a second operator cannot produce a
+        velocity the ramp did not authorise.
+        """
+        interval = 1.0 / max(5.0, self.config.motion_hz)
+        last = time.monotonic()
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                now = time.monotonic()
+                dt = now - last
+                last = now
+
+                for robot_id, controller in list(self._motion.items()):
+                    before = controller.commanded
+                    vx, vy, vyaw = controller.tick(dt, now=now)
+                    if not controller.moving and before == (0.0, 0.0, 0.0):
+                        continue  # nothing to say; do not spend a frame on it
+                    if controller.moving or before != (0.0, 0.0, 0.0):
+                        await self._publish_commanded(robot_id, controller, vx, vy, vyaw)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - a mover must survive
+                logger.warning("motion loop error: %r", exc)
+
+    async def _publish_commanded(
+        self, robot_id: str, controller: MotionController, vx: float, vy: float, vyaw: float
+    ) -> None:
+        """Send the ramped value as a wireless-controller frame.
+
+        The stick mapping is the inverse of the one `robot_joystick` documents:
+        `[ly, -lx, -rx] -> [vx, vy, vyaw]`. Getting it backwards would make the
+        robot accelerate when the operator brakes, so it is written once, here,
+        and covered by a test.
+        """
+        try:
+            await self._frame(
+                robot_id,
+                lx=-vy, ly=vx, rx=-vyaw, ry=0.0, keys=controller.keys,
+            )
+        except Exception as exc:  # noqa: BLE001 - a dropped frame is not fatal
+            logger.debug("motion publish(%s) failed: %r", robot_id, exc)
+
     # ── telemetry ────────────────────────────────────────────────────
 
     async def refresh_telemetry(self, robot_id: str) -> Optional[dict]:
@@ -999,6 +1081,7 @@ class ConsoleService:
             },
             "video": {rid: self.video_status(rid) for rid in self.fleet.ids},
             "routine": self.routine_state(),
+            "motion": {rid: self.motion(rid).snapshot() for rid in self.fleet.ids},
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a
@@ -1032,14 +1115,34 @@ class ConsoleService:
         if zeroed:
             await self._zero_many(zeroed)
 
-        delivered = await self._frame(robot_id, lx=lx, ly=ly, rx=rx, ry=ry, keys=keys)
+        # Pressing a key at a robot that is not up yet brings it up. Without
+        # this the ramp would be set on a robot with no link and the operator
+        # would see nothing happen at all.
+        await self._autoconnect(robot_id)
+
+        # Set the target; the motion loop ramps toward it and publishes. The
+        # operator's stick position is an *intent*, not a velocity — that is
+        # what makes "start gently, stop firmly" possible at all.
+        controller = self.motion(robot_id)
+        controller.set_target(
+            vx=_clamp(ly), vy=-_clamp(lx), vyaw=-_clamp(rx), keys=_keys(keys)
+        )
+        # `delivered` means the intent reached a live link, not that the ramp
+        # has finished getting there. A robot that is not up must report false:
+        # telling the operator "delivered" for a dog with no link is the kind
+        # of lie this console has been careful not to tell.
+        connected = bool(self.fleet.get(robot_id).session.is_connected)
         return {
             "robot_id": robot_id,
-            "delivered": delivered,
+            "delivered": connected,
             "zeroed": zeroed,
+            # What was asked for and what is being sent differ while the ramp
+            # is moving. Publishing both is what makes a stall visible: a stick
+            # at full with `commanded` near zero is not "driving".
             "axes": {
                 "lx": _clamp(lx), "ly": _clamp(ly), "rx": _clamp(rx), "ry": _clamp(ry),
             },
+            "motion": controller.snapshot(),
             "keys": _keys(keys),
         }
 
@@ -1122,7 +1225,14 @@ class ConsoleService:
         window blur or a mode change wants.
         """
         previous = self.state.stop_driving(source or None)
-        await self._zero_many(previous)
+        # Decelerate rather than cut: drop the target and let the motion loop
+        # bring it down. `robot_stop` and the e-stop still cut, because those
+        # are the paths where the operator wants it over now.
+        for robot_id in previous:
+            controller = self._motion.get(robot_id)
+            if controller is not None:
+                controller.stop()
+        await self._zero_many(previous, ramp=True)
         return {"zeroed": sorted(previous)}
 
     async def move(
@@ -1192,6 +1302,11 @@ class ConsoleService:
                 self._routine["aborted"] = reason
                 self._routine["step_label"] = "已停止"
         self.state.stop_driving()
+        # Cut every ramp first. The motion loop re-publishes whatever the ramp
+        # commands 50 times a second, so a stop that only tells the fleet to
+        # stop would be overwritten on the next tick — the operator would press
+        # STOP ALL and watch the dogs keep going.
+        await self._zero_many(list(self.fleet.ids), ramp=False)
         outcomes = [o.as_dict() for o in await self.fleet.stop_all(reason=reason)]
         stopped = [o["robot_id"] for o in outcomes if o["ok"]]
         not_stopped = [o["robot_id"] for o in outcomes if not o["ok"]]
@@ -1232,6 +1347,9 @@ class ConsoleService:
                 self._routine["step_label"] = "已中止"
 
         self.state.stop_driving()
+        # Same reasoning as STOP ALL, and more urgent: an e-stop whose velocity
+        # is re-published on the next tick is not an emergency stop.
+        await self._zero_many(targets, ramp=False)
         results = await asyncio.gather(
             *(self._damp(rid) for rid in targets), return_exceptions=True
         )
@@ -1508,10 +1626,26 @@ class ConsoleService:
         with contextlib.suppress(Exception):
             await runtime.session.zero_joystick()
 
-    async def _zero_many(self, robot_ids: Any) -> None:
-        """Zero several robots concurrently; never let one failure stop another."""
+    async def _zero_many(self, robot_ids: Any, *, ramp: bool = False) -> None:
+        """Zero several robots concurrently; never let one failure stop another.
+
+        `ramp=True` drops the motion target and leaves the deceleration to the
+        ramp. `ramp=False` (the default) also publishes an immediate zero,
+        which is what every safety path wants: an e-stop that decelerates over
+        a second is not an e-stop.
+        """
         targets = [r for r in robot_ids if r]
         if not targets:
+            return
+        for robot_id in targets:
+            controller = self._motion.get(robot_id)
+            if controller is None:
+                continue
+            if ramp:
+                controller.stop()
+            else:
+                controller.hard_stop()
+        if ramp:
             return
         await asyncio.gather(
             *(self._zero(robot_id) for robot_id in targets), return_exceptions=True
