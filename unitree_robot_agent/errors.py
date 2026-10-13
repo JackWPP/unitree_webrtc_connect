@@ -78,6 +78,34 @@ class RobotBusy(AgentError):
     )
 
 
+class FleetConfigError(AgentError):
+    """The robot roster is missing, malformed, or ambiguous.
+
+    Distinct from :class:`RobotNotConfigured`, which is about a *single*
+    robot's settings. This one is about the fleet as a whole: two entries
+    claiming the same id, two entries pointing at the same physical robot,
+    or a call that names a robot that is not on the roster.
+    """
+
+    code = "fleet_config_error"
+    hint = (
+        "Fix the roster file pointed at by UNITREE_AGENT_ROSTER: every robot "
+        "needs a unique `id` and a unique target (serial number or IP). Two "
+        "entries aimed at the same robot would fight over its single WebRTC "
+        "client slot."
+    )
+
+
+class UnknownRobot(AgentError):
+    """A call named a ``robot_id`` that is not on the roster."""
+
+    code = "unknown_robot"
+    hint = (
+        "Call `robot_roster` to list the configured robots, or omit the "
+        "robot_id when exactly one robot is configured."
+    )
+
+
 class AesKeyMissing(AgentError):
     code = "aes_key_missing"
     hint = (

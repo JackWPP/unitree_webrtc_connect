@@ -11,11 +11,14 @@ Precedence: explicit constructor values > process env > .env file > defaults.
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
+
+from .errors import FleetConfigError
+from .fleet.keys import KeyStore
+from .fleet.spec import RobotSpec
 
 DEFAULT_STATE_DIR = "~/.unitree-agent"
 
@@ -288,60 +291,47 @@ class AgentConfig:
                 )
 
     # ── key cache ────────────────────────────────────────────────────
+    #
+    # The lookup itself lives in `fleet.keys.KeyStore` so the single-robot and
+    # fleet paths share one implementation. The previous inline version fell
+    # back to "the only entry for this device family", which is convenient for
+    # one robot and a *silent mis-assignment* for two: a second Go2 configured
+    # by IP only would be handed the first Go2's key, and the resulting GCM tag
+    # failure reads like a hardware fault. See `fleet/keys.py`.
 
-    def _cache_key(self) -> str:
-        return f"{self.device_type}:{self.target_label()}"
+    def _key_spec(self) -> RobotSpec:
+        """This config's device identity, in the shape the store expects."""
+        return RobotSpec(
+            robot_id="default",
+            model=self.robot,
+            connection=self.connection,
+            ip=self.ip or "",
+            serial_number=self.serial_number or "",
+            device_type=self.device_type,
+        )
+
+    @property
+    def _key_store(self) -> KeyStore:
+        return KeyStore(self.key_cache_path)
 
     def load_cached_aes_key(self) -> Optional[str]:
-        """Return a cached key for this device.
+        """Return the cached key for *this device*, or ``None``.
 
-        Lookup order: exact ``device_type:sn_or_ip`` → the only entry for this
-        device family (so a key fetched once still works on a later run that
-        only sets the IP, or neither) → miss. The family fallback is what
-        makes "fetch the key once, then forget about credentials" work.
+        A miss means "no key known for this robot". It never means "here is a
+        key belonging to a robot of the same model".
         """
-        try:
-            payload = json.loads(self.key_cache_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        if not isinstance(payload, dict):
-            return None
-
-        entry = payload.get(self._cache_key())
-        if isinstance(entry, str) and entry:
-            return entry
-
-        prefix = f"{self.device_type}:"
-        family = [
-            value
-            for key, value in payload.items()
-            if isinstance(key, str) and key.startswith(prefix) and isinstance(value, str) and value
-        ]
-        if len(family) == 1:
-            return family[0]
-        return None
+        return self._key_store.get(self._key_spec())
 
     def store_cached_aes_key(self, key: str) -> None:
         """Persist a key for this device. Best-effort; never raises."""
         if not key:
             return
         try:
-            self.state_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                payload: Dict[str, str] = json.loads(
-                    self.key_cache_path.read_text(encoding="utf-8")
-                )
-                if not isinstance(payload, dict):
-                    payload = {}
-            except (OSError, ValueError):
-                payload = {}
-            payload[self._cache_key()] = key
-            tmp = self.key_cache_path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-            os.chmod(tmp, 0o600)
-            tmp.replace(self.key_cache_path)
-        except OSError:
-            pass
+            self._key_store.put(self._key_spec(), key)
+        except FleetConfigError:
+            # A malformed key is not worth caching, and this method must not
+            # raise: it is called from the connect path.
+            return
 
     def resolve_aes_key(self, *, persist: bool = True) -> Optional[str]:
         """Return the AES key from (in order) config, env, cache, cloud.
