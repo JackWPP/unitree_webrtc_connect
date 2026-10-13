@@ -132,10 +132,63 @@ function buildPens(fleet) {
       state: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="state"]`),
       battery: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="battery"]`),
       keys: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="keys"]`),
+      faults: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="faults"]`),
+      faultCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="fault-count"]`),
     };
     updateVideo(robot.robot_id, true);
   }
   updateKeysHint();
+}
+
+/* Faults are rendered from the server's reconciled active set, never from the
+ * raw notification history: that history is append-only, so a fault cleared in
+ * a snapshot you missed stays in it forever. An empty list is only reassuring
+ * when `faults_authoritative` is true — that means the robot has sent a full
+ * snapshot this session, and until then we simply do not know. */
+function renderFaults(robotId, robot) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.faults) return;
+
+  const faults = robot.faults || [];
+  const known = robot.faults_authoritative === true;
+
+  const list = entry.faults;
+  list.textContent = '';
+
+  if (!faults.length) {
+    const empty = document.createElement('li');
+    empty.className = 'fault-empty';
+    empty.textContent = known ? '无活动故障' : '尚未收到完整故障快照';
+    list.appendChild(empty);
+  } else {
+    for (const fault of faults) {
+      const item = document.createElement('li');
+      item.className = 'fault';
+
+      const what = document.createElement('span');
+      what.className = 'fault-what';
+      what.textContent = fault.label || fault.key;
+
+      const where = document.createElement('span');
+      where.className = 'fault-where';
+      // Per-motor sources are the same catalog as source 300, reported for one
+      // joint — so name the joint rather than printing "301".
+      const parts = [fault.source_label];
+      if (fault.motor) parts.push(`#${fault.motor}`);
+      parts.push(fault.code_hex);
+      where.textContent = parts.join(' ');
+
+      item.appendChild(what);
+      item.appendChild(where);
+      list.appendChild(item);
+    }
+  }
+
+  entry.faultCount.textContent = known
+    ? String(faults.length)
+    : (faults.length ? String(faults.length) + '?' : '?');
+  entry.faultCount.className = 'pill' + (faults.length ? ' bad' : (known ? ' up' : ''));
+  entry.pen.classList.toggle('has-faults', faults.length > 0);
 }
 
 function updateKeysHint() {
@@ -219,6 +272,7 @@ function renderStatus(payload) {
 
     entry.pen.classList.toggle('focused', robot.robot_id === state.focused);
     entry.pen.classList.toggle('driving', state.driving ? state.driving.has(robot.robot_id) : false);
+    renderFaults(robot.robot_id, robot);
   }
 
   document.getElementById('fleet-summary').textContent =

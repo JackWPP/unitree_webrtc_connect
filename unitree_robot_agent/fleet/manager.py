@@ -250,6 +250,13 @@ class FleetManager:
                 "target": spec.target,
                 "connected": runtime.session.is_connected,
                 "session": runtime.session.status(),
+                # The reconciled active fault set — "what is wrong right now",
+                # as opposed to the raw notification history. `authoritative`
+                # is False until the robot has sent a full snapshot this
+                # session, so an empty list is not mistaken for "all clear".
+                "faults": [fault.as_dict() for fault in runtime.faults.active()],
+                "faults_authoritative": runtime.faults.authoritative,
+                "faults_revision": runtime.faults.revision,
             }
             if live:
                 state = states[index]

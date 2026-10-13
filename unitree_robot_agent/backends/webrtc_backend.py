@@ -61,6 +61,10 @@ class WebRTCBackend:
         self._video_track = None
         self._frame_waiter: Optional[asyncio.Future] = None
         self._errors: list = []
+        #: Optional push listener for error notifications; see
+        #: `set_error_listener`. Set by `create_runtime` to feed the robot's
+        #: FaultStore.
+        self._error_listener = None
 
     # ── lifecycle ────────────────────────────────────────────────────
 
@@ -413,6 +417,13 @@ class WebRTCBackend:
                     }
                 )
                 del self._errors[:-200]
+                listener = self._error_listener
+                if listener is not None:
+                    # Pushed straight through, so the active-fault set is
+                    # reconciled as messages arrive rather than by polling a
+                    # ring that may already have been trimmed.
+                    with contextlib.suppress(Exception):
+                        listener(self._errors[-1])
             except Exception:
                 pass
 
@@ -423,6 +434,14 @@ class WebRTCBackend:
 
     def error_events(self) -> list:
         return list(self._errors)
+
+    def set_error_listener(self, callback) -> None:
+        """Receive each error notification as it arrives.
+
+        Called from the data-channel hook thread, so the callback must be
+        cheap and must not assume a running event loop.
+        """
+        self._error_listener = callback
 
     # ── introspection ────────────────────────────────────────────────
 

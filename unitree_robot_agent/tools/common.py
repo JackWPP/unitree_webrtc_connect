@@ -130,13 +130,23 @@ def register(server, ctx: ToolContext) -> None:
                 with contextlib.suppress(Exception):
                     events = getter() or []
             decoded = _decode_errors(events)[-max(1, min(int(limit), 200)):]
-            active = [e for e in decoded if e["type"] != "rm_error"]
+            store = ctx.runtime.faults
+            active = [fault.as_dict() for fault in store.active()]
             return ctx.ok(
+                # The authoritative answer to "what is wrong right now". The
+                # `errors` list below is raw history and cannot answer it: a
+                # fault cleared in a snapshot you missed stays in that list
+                # forever, which is exactly the bug this replaced.
+                active=active,
                 active_count=len(active),
+                authoritative=store.authoritative,
+                revision=store.revision,
                 errors=decoded,
                 note=(
-                    "An empty list means no error notification has been seen "
-                    "since the last connect — it is not a full diagnostic."
+                    "`active` is the reconciled current fault set, and it is "
+                    "authoritative only once `authoritative` is true — that "
+                    "means the robot has sent a full snapshot this session. "
+                    "`errors` is the raw notification history, newest last."
                 ),
             )
 

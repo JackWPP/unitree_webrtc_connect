@@ -236,3 +236,92 @@ def test_an_empty_body_is_not_an_error(open_client):
 def test_video_can_be_toggled_per_robot(open_client):
     payload = open_client.post("/api/robot/dog2/video", json={"enabled": False}).json()
     assert payload["video_enabled"]["dog2"] is False
+
+
+def test_faults_reach_the_console_status_and_reconcile(open_client, tmp_path):
+    """The console shows the *reconciled* set, not the raw event history.
+
+    A fault cleared in a snapshot must disappear; a fault re-sent in a
+    snapshot must not look newly added. The raw history cannot express either.
+    """
+    from unitree_robot_agent.core.faults import FaultStore
+
+    # Drive the store the way the robot would. `at=` pins *our* clock, because
+    # that is what first_seen/last_seen record: the robot's own timestamp is
+    # discarded, since its clock has no NTP guarantee.
+    store = FaultStore()
+    store.apply("errors", [[1.0, 300, 1], [1.0, 200, 4]], at=100.0)
+    store.apply("rm_error", [2.0, 200, 4], at=101.0)
+    assert [f.key for f in store.active()] == ["300:1"]
+
+    store.apply("errors", [[3.0, 300, 1], [3.0, 1000, 1]], at=102.0)
+    keys = [f.key for f in store.active()]
+    assert keys == ["300:1", "1000:1"]
+    assert store.active()[0].first_seen == 100.0  # not re-stamped at 102.0
+    assert store.active()[0].last_seen == 102.0
+
+    labels = {f.key: f.label for f in store.active()}
+    assert labels["300:1"] == "Overcurrent"
+    assert labels["1000:1"] == "code 0x1"  # source is its own field
+
+
+def test_status_payload_carries_fault_fields(open_client):
+    """The UI reads these three keys per robot; if they vanish the panel
+    silently shows nothing, which is worse than showing an error."""
+    payload = open_client.get("/api/fleet/status").json()
+    for robot in payload["robots"]:
+        assert "faults" in robot
+        assert "faults_authoritative" in robot
+        assert "faults_revision" in robot
+        # Nothing has arrived from a robot yet, so we must not claim "clear".
+        assert robot["faults_authoritative"] is False
+
+
+def test_an_injected_fault_reaches_the_console_status(tmp_path):
+    """The whole path: robot notification -> fault store -> status -> UI.
+
+    Faults are per-robot, so this also pins that dog1's fault does not show up
+    on dog2 — the failure mode a shared store would produce, and the reason
+    the store lives on the Runtime rather than in the console.
+    """
+    roster = Roster.from_mapping(
+        {
+            "state_dir": str(tmp_path / "state"),
+            "default": "dog1",
+            "robots": [
+                {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+                {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"},
+            ],
+        }
+    )
+    fleet = FleetManager(roster, backend="mock", audit_to_stderr=False)
+    # Motor 1 overcurrent, reported as a per-motor source.
+    fleet.get("dog1").backend.inject_fault("errors", 301, 1)
+
+    config = ConsoleConfig(host="127.0.0.1", token="", deadman_s=0.2)
+    service = ConsoleService(fleet, config=config)
+    with TestClient(create_app(service, config)) as client:
+        payload = client.get("/api/fleet/status").json()
+
+    by_id = {r["robot_id"]: r for r in payload["robots"]}
+
+    dog1 = by_id["dog1"]
+    assert dog1["faults_authoritative"] is True
+    assert len(dog1["faults"]) == 1
+    fault = dog1["faults"][0]
+    assert fault["label"] == "Overcurrent"
+    assert fault["source_label"] == "Motor"
+    assert fault["motor"] == 1          # named by joint, not by source number
+    assert fault["code_hex"] == "0x1"
+
+    dog2 = by_id["dog2"]
+    assert dog2["faults"] == []
+    assert dog2["faults_authoritative"] is False, "dog2 has sent no snapshot"
+
+
+def test_the_console_javascript_renders_the_fault_fields(open_client):
+    """Cheap guard: if the payload keys and the renderer drift apart the panel
+    silently shows nothing, which reads as 'all clear'."""
+    source = open_client.get("/static/console.js").text
+    for field in ("faults", "faults_authoritative", "source_label", "motor", "code_hex"):
+        assert field in source, f"console.js no longer reads {field}"

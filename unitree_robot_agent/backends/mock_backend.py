@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import math
 import struct
@@ -142,6 +143,7 @@ class MockBackend:
         # diagnostics
         self.calls: list = []
         self._errors: list = []
+        self._error_listener = None
 
     def error_events(self) -> list:
         if self._errors:
@@ -158,6 +160,38 @@ class MockBackend:
         ]
 
     # ── fault injection ──────────────────────────────────────────────
+
+    def set_error_listener(self, callback) -> None:
+        """Receive each error notification as it arrives.
+
+        The real backend pushes from its data-channel hook; the mock matches
+        that shape so the fault plumbing is exercised offline.
+        """
+        self._error_listener = callback
+
+    def inject_fault(
+        self, msg_type: str, source: int, code: int, *, at: Optional[float] = None
+    ) -> dict:
+        """Emit one error notification, as the robot would.
+
+        ``errors`` is a snapshot (a list of triples); ``add_error`` /
+        ``rm_error`` are a single triple — the same asymmetry the wire has, so
+        a test cannot accidentally rely on a shape the robot never sends.
+        """
+        moment = time.time() if at is None else at
+        entry = [moment, int(source), int(code)]
+        event = {
+            "type": msg_type,
+            "data": [entry] if msg_type == "errors" else entry,
+            "at": moment,
+            "mock": True,
+        }
+        self._errors.append(event)
+        del self._errors[:-200]
+        if self._error_listener is not None:
+            with contextlib.suppress(Exception):
+                self._error_listener(event)
+        return event
 
     def set_busy(self, busy: bool) -> None:
         """Simulate another WebRTC client holding the robot."""
