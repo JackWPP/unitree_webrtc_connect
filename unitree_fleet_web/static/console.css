@@ -1069,3 +1069,38 @@ select, input[type="range"] { accent-color: var(--accent); }
 .calib-points { margin: 0; padding-left: 18px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .calib-points li { margin-bottom: 2px; }
 .calib-points .done { color: var(--ok); }
+
+/* ── formation ────────────────────────────────────────────────────── */
+
+.formation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 8px;
+  padding-top: 7px;
+  font-size: 12px;
+}
+.formation input {
+  width: 58px;
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 5px;
+  padding: 3px 5px; font: inherit; font-size: 12px;
+}
+.formation .ctl-select { padding: 3px 6px; font-size: 12px; }
+
+/* One row per measured step, so a run that is going wrong is visible while it
+   is going wrong rather than in a summary afterwards. */
+.form-steps { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
+.form-step {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.form-step.good { color: var(--ok); border-color: #1f5c43; }
+.form-step.bad { color: var(--warn); border-color: #6b4a12; }

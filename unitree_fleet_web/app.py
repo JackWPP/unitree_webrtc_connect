@@ -414,6 +414,19 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 
+    async def post_formation(request) -> Response:
+        body = await _read_body(request)
+        try:
+            return JSONResponse(service.start_formation(body or {}))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
+    async def post_formation_stop(request) -> Response:
+        try:
+            return JSONResponse(await service.stop_formation())
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
     async def post_sync_mark(request) -> Response:
         """Take the alignment reference: "the dogs are together *now*"."""
         body = await _read_body(request)
@@ -602,6 +615,8 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/arena/frame", get_arena_frame),
         Route("/api/arena/calibration", get_arena_calibration),
         Route("/api/arena/calibrate", post_arena_calibrate, methods=["POST"]),
+        Route("/api/fleet/formation", post_formation, methods=["POST"]),
+        Route("/api/fleet/formation/stop", post_formation_stop, methods=["POST"]),
         Route("/api/fleet/sync", delete_sync, methods=["DELETE"]),
         Route("/api/fleet/routines/save", post_routine_save, methods=["POST"]),
         Route("/api/fleet/routines/{routine_id}", delete_routine, methods=["DELETE"]),

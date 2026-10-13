@@ -285,6 +285,9 @@ class ConsoleService:
         self._gate: Dict[str, Dict[str, float]] = {}
         #: In-flight auto-stand requests, so shutdown can cancel them.
         self._gate_tasks: set = set()
+        #: The running formation alignment, and what it is doing.
+        self._formation: Dict[str, Any] = {}
+        self._formation_task: Optional[asyncio.Task] = None
         self._motion_task: Optional[asyncio.Task] = None
         self._motion_limits = MotionLimits(
             accel=float(getattr(self.config, "motion_accel", MotionLimits.accel)),
@@ -404,6 +407,12 @@ class ConsoleService:
             )
 
     async def aclose(self) -> None:
+        if self._formation_task is not None:
+            self._formation_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._formation_task
+            self._formation_task = None
+
         if self._arena_task is not None:
             self._arena_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -1928,6 +1937,96 @@ class ConsoleService:
 
     # ── formation ────────────────────────────────────────────────────
 
+    def formation_state(self) -> Dict[str, Any]:
+        """What the alignment run is doing, for the 4 Hz push.
+
+        Kept small on purpose: the payload budget is 6 KB and this is one of a
+        dozen things in it. The step history is summarised rather than shipped —
+        the operator wants to know whether it is working, not to read the log.
+        """
+        if not self._formation:
+            return {"state": "idle", "steps": 0}
+        return dict(self._formation)
+
+    def start_formation(self, target: Dict[str, Any]) -> Dict[str, Any]:
+        """Begin aligning, in the background.
+
+        A run is up to six steps of up to 2.5 s each plus settling, so it cannot
+        be a request the browser waits on — and the operator needs to watch it
+        happen and be able to stop it.
+        """
+        from .formation import parse_formation
+
+        if self._formation_task is not None and not self._formation_task.done():
+            raise AgentError(
+                "已经在编队中。",
+                code="formation_running",
+                hint="先等它结束，或者停下来。",
+            )
+        try:
+            parsed = parse_formation(target or {})
+        except ValueError as exc:
+            raise AgentError(
+                f"编队参数不对：{exc}",
+                code="bad_formation",
+                hint="间距、方位、朝向差都要数字，mover 是 both 或 b。",
+            ) from exc
+
+        self._formation = {
+            "state": "running",
+            "target": parsed.as_dict(),
+            "steps": 0,
+            "detail": "",
+            "started_at": time.time(),
+            "history": [],
+        }
+        self._formation_task = asyncio.create_task(
+            self._run_formation(parsed), name="console-formation"
+        )
+        return self.formation_state()
+
+    async def stop_formation(self, *, reason: str = "operator") -> Dict[str, Any]:
+        task = self._formation_task
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._formation_task = None
+        if self._formation:
+            self._formation["state"] = "stopped"
+            self._formation["detail"] = reason
+        await self.stop_all()
+        return self.formation_state()
+
+    async def _run_formation(self, target: "Formation") -> None:
+        try:
+            result = await self.align_formation(target)
+            self._formation = {
+                **(self._formation or {}),
+                "state": result["outcome"],
+                "detail": result["detail"],
+                "converged": result["converged"],
+                "steps": len(result["steps"]),
+                "history": [step["measured"] for step in result["steps"]],
+                "ended_at": time.time(),
+            }
+        except asyncio.CancelledError:
+            self._formation = {
+                **(self._formation or {}),
+                "state": "cancelled",
+                "detail": "已取消",
+                "ended_at": time.time(),
+            }
+            raise
+        except Exception as exc:  # noqa: BLE001 - a formation must not kill the console
+            self._formation = {
+                **(self._formation or {}),
+                "state": "error",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "ended_at": time.time(),
+            }
+            logger.warning("formation failed: %r", exc)
+
     async def align_formation(
         self,
         target: "Formation",
@@ -2013,6 +2112,15 @@ class ConsoleService:
                 **move_plan.as_dict(),
                 "measured": current,
             })
+            if self._formation:
+                # Visible while it is happening: an alignment that goes quiet
+                # for twenty seconds is one the operator stops and does by hand.
+                self._formation.update({
+                    "steps": len(steps),
+                    "detail": f"第 {len(steps)} 步：间距差 "
+                              f"{current['distance_error_m']:+.2f} m",
+                    "history": [step["measured"] for step in steps],
+                })
 
         return self._formation_result(steps, target, "budget", "步数用完了")
 
@@ -2259,6 +2367,7 @@ class ConsoleService:
             "sources": {rid: self.source_status(rid) for rid in self.fleet.ids},
             "sync": self.sync_state(),
             "arena": self.arena_state(),
+            "formation": self.formation_state(),
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a

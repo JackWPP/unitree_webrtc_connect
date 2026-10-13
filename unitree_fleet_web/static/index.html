@@ -58,6 +58,30 @@
       <div class="arena-legend muted" id="arena-legend"></div>
     </div>
 
+    <!-- Formation. The map says how far apart they are; this is where the
+         operator says how far apart they should be, and watches it happen. -->
+    <div class="formation" id="formation">
+      <span class="row-label">编队</span>
+      <label class="calib-size">
+        目标间距 <input id="form-distance" type="number" value="1.0" min="0" max="10" step="0.1"> 米
+      </label>
+      <label class="calib-size">
+        方位 <input id="form-bearing" type="number" value="0" min="-180" max="180" step="15"> °
+      </label>
+      <label class="calib-size">
+        朝向差 <input id="form-spread" type="number" value="0" min="-180" max="180" step="15"> °
+      </label>
+      <select id="form-mover" class="ctl-select" title="谁动">
+        <option value="both">两只一起挪</option>
+        <option value="b">只动 dog2</option>
+      </select>
+      <span class="spacer"></span>
+      <span id="form-status" class="muted"></span>
+      <button id="form-start" class="btn">对齐</button>
+      <button id="form-stop" class="btn btn-quiet hidden">停下</button>
+      <div class="form-steps" id="form-steps"></div>
+    </div>
+
     <!-- Calibration. The four points have to be given in the arena's own order,
          which is why the button numbers them as they are clicked and why the
          printed plan numbers them too — four correct points in the wrong order

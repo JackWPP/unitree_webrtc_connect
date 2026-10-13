@@ -73,6 +73,47 @@ def wrap_degrees(value: float) -> float:
     return (value + 180.0) % 360.0 - 180.0
 
 
+#: Which dog moves. "b" holds A still, "both" splits the correction.
+MOVERS = ("b", "both")
+
+
+def parse_formation(raw: Dict[str, Any]) -> "Formation":
+    """A formation from an HTTP body, checked.
+
+    **A dataclass does not type-check.** `Formation(distance_m="far")` is
+    accepted without complaint and blows up somewhere inside the loop, several
+    seconds later, with an error that says nothing about the form the operator
+    filled in. Everything is coerced and range-checked here instead, so the
+    refusal comes back while they are still looking at the field.
+    """
+    values: Dict[str, Any] = {}
+
+    for key, low, high in (
+        ("distance_m", 0.0, 50.0),
+        ("bearing_deg", -360.0, 360.0),
+        ("heading_spread_deg", -360.0, 360.0),
+    ):
+        if key not in raw or raw[key] is None:
+            continue
+        try:
+            value = float(raw[key])
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} 要一个数字，收到 {raw[key]!r}") from None
+        if not math.isfinite(value):
+            raise ValueError(f"{key} 不是有限数")
+        if not low <= value <= high:
+            raise ValueError(f"{key} 要在 {low} 到 {high} 之间，收到 {value}")
+        values[key] = value
+
+    mover = raw.get("mover")
+    if mover is not None:
+        if mover not in MOVERS:
+            raise ValueError(f"mover 只能是 {MOVERS} 之一，收到 {mover!r}")
+        values["mover"] = mover
+
+    return Formation(**values)
+
+
 @dataclass
 class Formation:
     """What the two dogs should look like from above."""

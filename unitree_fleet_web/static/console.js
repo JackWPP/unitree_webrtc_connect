@@ -527,6 +527,7 @@ function renderStatus(payload) {
   state.sync = payload.sync || null;
   renderSync(state.sync);
   renderArena(payload.arena);
+  renderFormation(payload.formation);
   renderFleetTargets();
   renderRoutine(payload.routine);
   state.flags = payload.flags || state.flags || {};
@@ -2323,6 +2324,103 @@ function wireCalibration() {
   }
 }
 
+/* ── formation ─────────────────────────────────────────────────────── */
+
+/* Say how far apart they should be, and watch it happen.
+ *
+ * The run takes seconds — up to six steps of up to 2.5 s each plus settling —
+ * so it runs server-side and reports through the status push. An alignment that
+ * goes quiet for twenty seconds is one the operator stops and does by hand,
+ * which is why each measured step appears as it is taken rather than in a
+ * summary afterwards. */
+const FORMATION_STATES = {
+  idle: ['', ''],
+  running: ['编队中…', 'on'],
+  converged: ['已到位', 'on'],
+  no_progress: ['没有进展', 'warn'],
+  no_measurement: ['测不到位置', 'warn'],
+  budget: ['步数用完', 'warn'],
+  estopped: ['急停中止', 'bad'],
+  cancelled: ['已取消', ''],
+  stopped: ['已停下', ''],
+  error: ['出错', 'bad'],
+};
+
+function renderFormation(formation) {
+  const status = document.getElementById('form-status');
+  const start = document.getElementById('form-start');
+  const stop = document.getElementById('form-stop');
+  if (!status || !formation) return;
+  if (!state.formationSteps) state.formationSteps = [];
+
+  const running = formation.state === 'running';
+  const [label, tone] = FORMATION_STATES[formation.state] || [formation.state, ''];
+  status.textContent = formation.detail ? `${label} · ${formation.detail}` : label;
+  status.className = 'muted' + (tone === 'bad' ? ' warn' : '');
+  if (tone === 'bad') status.className = 'muted warn';
+
+  start.disabled = running;
+  start.textContent = formation.state === 'converged' ? '再来一次' : '对齐';
+  stop.classList.toggle('hidden', !running);
+
+  // The measured history, one chip per step. Drawn from the server's own record
+  // rather than accumulated here, so a page refresh mid-run shows the steps
+  // that already happened.
+  const host = document.getElementById('form-steps');
+  if (host) {
+    host.textContent = '';
+    for (const measured of formation.history || []) {
+      const chip = document.createElement('span');
+      const error = measured.distance_error_m;
+      chip.className = 'form-step' + (Math.abs(error) <= 0.10 ? ' good' : ' bad');
+      chip.textContent = `间距 ${measured.distance_m} m（${error > 0 ? '+' : ''}${error}）`;
+      chip.title = `朝向差 ${measured.yaw_error_deg}°`;
+      host.appendChild(chip);
+    }
+  }
+}
+
+async function startFormation() {
+  const status = document.getElementById('form-status');
+  try {
+    await api('/api/fleet/formation', {
+      method: 'POST',
+      body: JSON.stringify({
+        distance_m: Number(document.getElementById('form-distance').value) || 0,
+        bearing_deg: Number(document.getElementById('form-bearing').value) || 0,
+        heading_spread_deg: Number(document.getElementById('form-spread').value) || 0,
+        mover: document.getElementById('form-mover').value,
+      }),
+    });
+    status.textContent = '编队中…';
+    await refreshStatus();
+  } catch (err) {
+    status.textContent = err.message;
+    status.className = 'muted warn';
+  }
+}
+
+async function stopFormation() {
+  try {
+    await api('/api/fleet/formation/stop', { method: 'POST', body: '{}' });
+    await refreshStatus();
+  } catch (err) {
+    toast('停下失败: ' + err.message, 'bad');
+  }
+}
+
+function wireFormation() {
+  const start = document.getElementById('form-start');
+  const stop = document.getElementById('form-stop');
+  if (start) start.addEventListener('click', startFormation);
+  if (stop) stop.addEventListener('click', stopFormation);
+
+  const host = document.getElementById('form-steps');
+  if (host && !host.parentElement) {
+    document.getElementById('formation').appendChild(host);
+  }
+}
+
 /* ── two-dog synchronisation ───────────────────────────────────────── */
 
 /* The numbers are each dog's *change* since the marked reference, never its
@@ -2688,6 +2786,7 @@ async function boot() {
   wireSync();
   wireArena();
   wireCalibration();
+  wireFormation();
   wireEditor();
   loadFleetActions();
   loadRoutines();

@@ -22,7 +22,9 @@ import pytest
 np = pytest.importorskip("numpy")
 cv2 = pytest.importorskip("cv2")
 
+from unitree_robot_agent.fleet import FleetManager, Roster  # noqa: E402
 from unitree_robot_agent.vision.markers import default_markers, render_tag  # noqa: E402
+from unitree_fleet_web import ConsoleConfig, ConsoleService  # noqa: E402
 from unitree_fleet_web.formation import Formation  # noqa: E402
 
 CALIBRATION = {
@@ -360,3 +362,145 @@ async def test_every_step_is_recorded(loop_service):
     assert step["moves"], "a step with no commands is not a step"
     assert "distance_error_m" in step["measured"]
     assert step["measured"]["distance_m"] > 0
+
+
+# ─── through the console ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def form_client(tmp_path):
+    """A console with the arena camera configured, for the formation routes."""
+    import json as _json
+
+    from starlette.testclient import TestClient
+
+    from unitree_fleet_web.app import create_app
+    from unitree_fleet_web.service import ConsoleService
+
+    path = tmp_path / "calibration.json"
+    path.write_text(_json.dumps(CALIBRATION), encoding="utf-8")
+    roster = Roster.from_mapping(
+        {"state_dir": str(tmp_path / "state"), "default": "dog1", "robots": [
+            {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+            {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"}]}
+    )
+    config = ConsoleConfig(host="127.0.0.1", deadman_s=0.5,
+                           arena_camera="sim", arena_calibration=str(path))
+    service = ConsoleService(FleetManager(roster, backend="mock", audit_to_stderr=False),
+                             config=config)
+    service.start_arena()
+    app = create_app(service, config)
+    app._console_service = service
+    with TestClient(app) as client:
+        client.app = app
+        yield client
+
+
+def test_starting_a_formation_reports_progress_in_the_payload(form_client):
+    """A run is seconds long, so it cannot be a request the browser waits on —
+    and the operator has to be able to watch it and stop it."""
+    service = form_client.app._console_service
+    arena = SimulatedArena([(1.0, 2.0, 0.0), (2.8, 2.0, 0.0)])
+    wire(service, arena)
+    service._arena = {
+        "state": "ok",
+        "poses": {
+            "dog1": {"x": 1.0, "y": 2.0, "heading_deg": 0.0},
+            "dog2": {"x": 2.8, "y": 2.0, "heading_deg": 0.0},
+        },
+    }
+
+    started = form_client.post("/api/fleet/formation", json={
+        "distance_m": 1.0, "bearing_deg": 0.0, "mover": "b",
+    })
+    assert started.status_code == 200, started.text
+    assert started.json()["state"] == "running"
+
+    # The status push carries it, so the page can show progress without polling
+    # a second endpoint.
+    status = form_client.get("/api/fleet/status").json()
+    assert "formation" in status
+    assert status["formation"]["target"]["distance_m"] == 1.0
+
+
+def test_a_second_formation_cannot_start_on_top_of_the_first(form_client):
+    """Two alignment loops driving the same pair is two loops fighting."""
+    service = form_client.app._console_service
+    import asyncio
+
+    async def slow(*_args, **_kwargs):
+        await asyncio.sleep(5)
+        return {"outcome": "converged", "detail": "", "converged": True, "steps": []}
+
+    service.align_formation = slow  # type: ignore[assignment]
+    service._formation = {"state": "running"}
+    service._formation_task = None  # the guard checks the task, so make one
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        service._formation_task = loop.create_task(asyncio.sleep(5))
+        try:
+            service.start_formation({"distance_m": 1.0})
+            assert False, "it allowed a second run"
+        except Exception as exc:  # noqa: BLE001
+            assert getattr(exc, "code", "") == "formation_running"
+        finally:
+            service._formation_task.cancel()
+
+    # TestClient runs the app on its own loop; drive this one directly.
+    asyncio.run(run())
+
+
+def test_stopping_a_formation_stops_the_dogs(form_client):
+    service = form_client.app._console_service
+    response = form_client.post("/api/fleet/formation/stop", json={})
+    assert response.status_code == 200
+    assert response.json()["state"] in ("stopped", "idle")
+
+
+def test_bad_formation_parameters_are_refused_with_a_type(form_client):
+    response = form_client.post("/api/fleet/formation", json={"distance_m": "far"})
+    assert response.status_code == 400
+    assert response.json()["code"] == "bad_formation"
+    # The refusal has to say which field, or the operator is left guessing
+    # which of five inputs was wrong.
+    payload = response.json()
+    said = str(payload.get("error") or payload.get("message") or payload.get("hint") or "")
+    assert "数字" in said, payload
+
+
+def test_every_parameter_is_range_checked(form_client):
+    """A dataclass does not type-check, and `Formation(distance_m="far")` is
+    accepted without complaint — then blows up inside the loop seconds later
+    with an error that says nothing about the form the operator filled in."""
+    for body, why in (
+        ({"distance_m": "far"}, "a string"),
+        ({"distance_m": -1.0}, "a negative distance"),
+        ({"bearing_deg": 1e6}, "an absurd bearing"),
+        ({"mover": "dog3"}, "a dog that is not in the pair"),
+    ):
+        response = form_client.post("/api/fleet/formation", json=body)
+        assert response.status_code == 400, f"{why} was accepted"
+        assert response.json()["code"] == "bad_formation"
+
+
+def test_infinities_and_nans_are_refused_at_the_parser():
+    """They cannot arrive over HTTP — JSON has no infinity — so this is the
+    layer that can be asked. Defensive rather than reachable, and worth having
+    because `Formation(distance_m=float("inf"))` is constructible in Python and
+    would make every later comparison false rather than raising."""
+    from unitree_fleet_web.formation import parse_formation
+
+    for value in (float("inf"), float("-inf"), float("nan")):
+        with pytest.raises(ValueError, match="有限"):
+            parse_formation({"distance_m": value})
+
+
+def test_the_page_carries_the_formation_controls(form_client):
+    html = form_client.get("/").text
+    for marker in ("form-distance", "form-bearing", "form-spread", "form-mover",
+                   "form-start", "form-stop", "form-steps"):
+        assert marker in html, f"the page lost {marker}"
+    source = form_client.get("/static/console.js").text
+    for marker in ("renderFormation", "FORMATION_STATES", "startFormation"):
+        assert marker in source, f"console.js lost {marker}"
