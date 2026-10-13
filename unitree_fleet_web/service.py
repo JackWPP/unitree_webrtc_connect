@@ -1062,12 +1062,23 @@ class ConsoleService:
                         # what produces 3201 and an operator deciding the
                         # console is broken.
                         continue
-                    before = controller.commanded
+                    # Compared against what was last **sent**, not against
+                    # `commanded`. The dead-man calls `hard_stop()`, which
+                    # zeroes `commanded` between ticks; comparing against that
+                    # made the loop decide there was nothing to say and send
+                    # nothing, so the robot went on applying the last frame it
+                    # had received. That is the "alt-tab and the dog keeps
+                    # walking" failure, and the watchdog existed to prevent it.
+                    before = controller.published
                     vx, vy, vyaw = controller.tick(dt, now=now)
-                    if not controller.moving and before == (0.0, 0.0, 0.0):
-                        continue  # nothing to say; do not spend a frame on it
-                    if controller.moving or before != (0.0, 0.0, 0.0):
-                        await self._publish_commanded(robot_id, controller, vx, vy, vyaw)
+                    after = (round(vx, 6), round(vy, 6), round(vyaw, 6))
+                    if after != before or controller.moving:
+                        sent = await self._publish_commanded(robot_id, controller, vx, vy, vyaw)
+                        if sent:
+                            # Only on success: a dropped frame has to be retried
+                            # on the next tick, or a momentary network hiccup
+                            # would leave the robot on a stale value forever.
+                            controller.published = after
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - a mover must survive
@@ -1199,7 +1210,7 @@ class ConsoleService:
 
     async def _publish_commanded(
         self, robot_id: str, controller: MotionController, vx: float, vy: float, vyaw: float
-    ) -> None:
+    ) -> bool:
         """Send the ramped value as a wireless-controller frame.
 
         The stick mapping is the inverse of the one `robot_joystick` documents:
@@ -1212,8 +1223,10 @@ class ConsoleService:
                 robot_id,
                 lx=-vy, ly=vx, rx=-vyaw, ry=0.0, keys=controller.keys,
             )
+            return True
         except Exception as exc:  # noqa: BLE001 - a dropped frame is not fatal
             logger.debug("motion publish(%s) failed: %r", robot_id, exc)
+            return False
 
     # ── telemetry ────────────────────────────────────────────────────
 

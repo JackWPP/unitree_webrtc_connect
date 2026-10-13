@@ -118,6 +118,17 @@ class MotionController:
         self.target: Tuple[float, float, float] = (0.0, 0.0, 0.0)
         #: What we are actually sending.
         self.commanded: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        #: The last value **actually sent** to the robot.
+        #:
+        #: Deliberately not the same thing as `commanded`. A stop that zeroes
+        #: `commanded` without publishing leaves the robot applying whatever it
+        #: last received — and on `rt/wirelesscontroller` the firmware keeps
+        #: applying the last frame indefinitely. The motion loop used to decide
+        #: whether to send by comparing against `commanded`, so once the
+        #: watchdog zeroed it the loop concluded there was nothing to say and
+        #: sent nothing at all. The watchdog's whole purpose, defeated by an
+        #: optimisation.
+        self.published: Tuple[float, float, float] = (0.0, 0.0, 0.0)
         self.keys = 0
         self._target_at = 0.0
         #: Why the robot is or is not moving, for the UI. See `state`.
@@ -160,6 +171,16 @@ class MotionController:
         """
         self.target = (0.0, 0.0, 0.0)
         self.commanded = (0.0, 0.0, 0.0)
+        #: The last value **actually sent** to the robot.
+        #:
+        #: Deliberately not the same thing as `commanded`. A stop that zeroes
+        #: `commanded` without publishing leaves the robot applying whatever it
+        #: last received — and on `rt/wirelesscontroller` the firmware keeps
+        #: applying the last frame indefinitely. The motion loop used to decide
+        #: whether to send by comparing against `commanded`, so once the
+        #: watchdog zeroed it the loop concluded there was nothing to say and
+        #: sent nothing at all. The watchdog's whole purpose, defeated by an
+        #: optimisation.
         self.keys = 0
         self._state = state
 
