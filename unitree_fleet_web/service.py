@@ -163,6 +163,10 @@ class ConsoleService:
         #: Robots with an auto-connect already in flight, so a held key cannot
         #: start a connect storm.
         self._connecting: set = set()
+        #: The tasks themselves, so shutdown can cancel them. A handshake takes
+        #: seconds, and a console that closes mid-connect must not leave a task
+        #: waking up later against a session it has already closed.
+        self._connect_tasks: Dict[str, asyncio.Task] = {}
         #: Latest battery/IMU/gait snapshot per robot, refreshed by a slow
         #: loop. Kept here so the 4 Hz status push stays pure memory: doing
         #: topic reads on that path would put robot I/O inside a UI loop.
@@ -253,6 +257,16 @@ class ConsoleService:
             )
 
     async def aclose(self) -> None:
+        # Cancel in-flight auto-connects first: their whole point is to keep
+        # running while the loop does other things, so nothing else stops them.
+        for task in list(self._connect_tasks.values()):
+            task.cancel()
+        for task in list(self._connect_tasks.values()):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._connect_tasks.clear()
+        self._connecting.clear()
+
         for task in (self._deadman, self._lease, self._telemetry_task):
             if task is not None:
                 task.cancel()
@@ -791,8 +805,12 @@ class ConsoleService:
         """One JPEG, single-flight per robot."""
         if not self.state.video_enabled.get(robot_id, True):
             return None
-        lock = self._frame_locks.setdefault(robot_id, asyncio.Lock())
+        # Validate before touching any per-robot map. The HTTP route checks
+        # too, but a lock created for a robot that does not exist is a leak
+        # that only shows up after enough requests, and the service should not
+        # depend on a caller for that.
         runtime = self.fleet.get(robot_id)
+        lock = self._frame_locks.setdefault(robot_id, asyncio.Lock())
         async with lock:
             if not runtime.session.is_connected and not self.config.video_autoconnect:
                 # Observing only: the operator decides when to take the slot.
@@ -920,7 +938,14 @@ class ConsoleService:
             finally:
                 self._connecting.discard(robot_id)
 
-        asyncio.create_task(_run())
+        task = asyncio.create_task(_run(), name=f"console-autoconnect-{robot_id}")
+        self._connect_tasks[robot_id] = task
+
+        def _forget(finished: asyncio.Task, robot_id: str = robot_id) -> None:
+            if self._connect_tasks.get(robot_id) is finished:
+                self._connect_tasks.pop(robot_id, None)
+
+        task.add_done_callback(_forget)
 
     async def _zero(self, robot_id: str) -> None:
         """Best-effort zero of one robot's sticks."""
