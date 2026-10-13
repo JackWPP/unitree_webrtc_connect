@@ -50,6 +50,22 @@ YAW_AXIS_SIGN = -1.0
 #: the robot's own flip, so a command for "move right" is a negative `lx`.
 LATERAL_AXIS_SIGN = -1.0
 
+#: Metres per second at **full stick**, on this class of robot. A guess.
+#:
+#: It exists because `forward_m` has two branches and only one of them can
+#: measure anything. The closed-loop branch reads the odometry and stops when it
+#: has gone far enough, so it never needs this. The fallback — for a robot that
+#: publishes no position, which the project's own hardware does not — has to turn
+#: a distance into a *duration*, and a duration needs a speed.
+#:
+#: **Sharing one constant between a stick value and a speed is how the fallback
+#: went wrong.** It computed the duration as `metres / speed_mps` and then
+#: commanded a *full-scale* stick, so a 0.35 m shuffle was a 0.87 m sprint at
+#: 1.4 m/s and 1.87 m at 3.0 m/s — the over-drive factor being the robot's top
+#: speed. The fallback now commands the same stick the closed loop does and uses
+#: this to time it, and says in `note` that both numbers are assumptions.
+NOMINAL_FULL_STICK_MPS = 3.0
+
 
 def wrap_angle(radians: float) -> float:
     """Shortest signed representation of an angle, in (-pi, pi]."""
@@ -386,6 +402,12 @@ class MotionController:
             return {"ok": True, "skipped": True, "note": "0 m is a no-op."}
 
         speed = float(speed if speed is not None else getattr(self.config, "max_walk_speed", 0.28))
+        if not math.isfinite(speed):
+            raise AgentError("speed must be a finite number.", code="invalid_speed")
+        # A joystick axis is in [-1, 1]. A caller passing `speed=5` used to reach
+        # the wire as `ly=5`, which the robot clamps or refuses depending on the
+        # firmware — neither of which is a thing to find out from a moving dog.
+        speed = max(-1.0, min(1.0, speed))
         fraction = float(
             arrival if arrival is not None
             else getattr(self.config, "arrival_fraction", 0.85)
@@ -400,15 +422,24 @@ class MotionController:
             # No odometry: drive for the time the distance *would* take and be
             # explicit that it is a guess. Better a labelled guess than a
             # refusal, because the caller may have nothing else.
-            seconds = abs(target_m) / max(0.05, speed)
-            result = await self.drive(ly=math.copysign(1.0, target_m), duration=seconds)
+            # **The same stick the closed loop commands**, not a full-scale one.
+            # `speed` is a joystick magnitude in [-1, 1]; a full-scale stick is
+            # `speed / 1.0` times faster than the timing assumes, and the size of
+            # that error is the robot's top speed in metres per second.
+            reach = max(0.05, min(1.0, abs(speed))) * NOMINAL_FULL_STICK_MPS
+            seconds = abs(target_m) / reach
+            result = await self.drive(
+                ly=math.copysign(min(1.0, abs(speed)), target_m), duration=seconds
+            )
             return {
                 "ok": bool(result.get("ok", True)),
                 "reason": "no_odometry",
                 "requested_m": round(target_m, 3),
+                "stick": round(min(1.0, abs(speed)), 3),
                 "note": (
-                    "机器人没有发布里程计（rt/sportmodestate 的 position），"
-                    "所以这是按时长猜的，不是量出来的。"
+                    "机器人没有发布里程计，所以**速度和距离都是猜的**："
+                    f"按满杆 {NOMINAL_FULL_STICK_MPS:g} m/s、杆量 {min(1.0, abs(speed)):.2f} "
+                    f"折算出时长 {seconds:.2f}s。这是被标注为猜测的猜测，不是测量。"
                 ),
                 "timed_s": round(seconds, 2),
             }
@@ -480,10 +511,15 @@ class MotionController:
         stalled = (not reached) and (time.monotonic() - still_since) > stall_after
         return {
             "ok": reached and not self._abort.is_set(),
+            # **The labels were swapped.** A run that hit its deadline said
+            # "stopped" and a run that lost the odometry said "timeout", and
+            # `robot_walk` hands `reason` straight to the caller — so the one
+            # word a person reads about what happened was wrong on both paths.
+            # `aborted` is the e-stop/dead-man flag, so it means "stopped".
             "reason": (
                 "reached" if reached
                 else ("stalled" if stalled
-                      else ("timeout" if not aborted else "stopped"))
+                      else ("stopped" if aborted else "timeout"))
             ),
             "requested_m": round(target_m, 3),
             # Always the requested sign, because the odometry only gives a

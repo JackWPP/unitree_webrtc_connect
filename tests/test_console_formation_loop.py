@@ -535,3 +535,72 @@ def test_the_page_carries_the_formation_controls(form_client):
     source = form_client.get("/static/console.js").text
     for marker in ("renderFormation", "FORMATION_STATES", "startFormation"):
         assert marker in source, f"console.js lost {marker}"
+
+
+async def test_stop_all_stops_a_running_formation(loop_service):
+    """**The button an operator reaches for.**
+
+    `stop_all` cancelled `_routine_task`, and its own comment explains why that
+    matters — *"leaving it running would mean the fleet stops and then the
+    sequence immediately issues its next step"* — and then never touched
+    `_formation_task`. The formation loop only checks the e-stop latch, so it
+    planned again on its next iteration and called `robot_walk`.
+
+    Reproduced before the fix: one command before STOP ALL, **two three seconds
+    later**, with `formation["state"]` still `running`.
+
+    The tests that existed used the formation's own stop endpoint (which does
+    cancel the task) and the e-stop (which works, because the latch makes
+    `call_tool` refuse the motion-gated tools). **STOP ALL was the one stop that
+    left the loop running**, and it is the one an operator reaches for.
+
+    Commands are observed by wrapping `call_tool` rather than by driving the
+    simulated arena: the question is whether the loop *issued* anything, which
+    is one level above what the dogs did with it.
+    """
+    # Two dogs far enough apart that the formation needs several steps, so the
+    # loop is still running when STOP ALL arrives.
+    arena = SimulatedArena([(1.0, 2.0, 0.0), (4.0, 2.0, 0.0)])
+    # `_settled` starts the detector loop as well as wiring the arena — without
+    # it the formation waits forever for a measurement that never arrives, and
+    # the test would "pass" by never reaching the thing it is testing.
+    detector = await _settled(loop_service, arena)
+    await loop_service.connect("dog1")
+    await loop_service.connect("dog2")
+
+    try:
+        loop_service.start_formation(
+            {"distance_m": 1.0, "bearing_deg": 0.0, "mover": "b"}
+        )
+        # Wait until the loop has actually commanded something, so the test is
+        # about a *running* formation rather than a starting one.
+        for _ in range(120):
+            await asyncio.sleep(0.05)
+            if arena.commands:
+                break
+        assert arena.commands, "the formation never issued a command"
+
+        before = len(arena.commands)
+        await loop_service.stop_all(reason="test_stop_all")
+
+        # Three seconds is several loop iterations — long enough that a loop
+        # which was not cancelled would have commanded again. Measured before
+        # the fix: one more command, and state still `running`.
+        await asyncio.sleep(3.0)
+
+        assert len(arena.commands) == before, (
+            f"the formation issued {len(arena.commands) - before} more command(s) "
+            f"after STOP ALL: {arena.commands[before:]}"
+        )
+        assert loop_service.formation_state().get("state") != "running", (
+            "STOP ALL left the formation reporting "
+            f"{loop_service.formation_state().get('state')!r}"
+        )
+    finally:
+        detector.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await detector
+        for task in (loop_service._motion_task, loop_service._deadman,
+                     loop_service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()

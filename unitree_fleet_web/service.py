@@ -2734,6 +2734,26 @@ class ConsoleService:
                 self._routine["running"] = False
                 self._routine["aborted"] = reason
                 self._routine["step_label"] = "已停止"
+        # **And the formation, for exactly the same reason.**
+        #
+        # It was missed, and the shape of the miss is worth naming: `stop_all`
+        # cancels the routine with a comment explaining that leaving it running
+        # would make the stop look like it did nothing — and then does not touch
+        # the other loop that drives the dogs. `_run_formation` only checks the
+        # e-stop latch, not a STOP ALL, so it plans again on its next iteration
+        # and calls `robot_walk`. Reproduced: one command before STOP ALL, two
+        # three seconds later, with `_formation["state"]` still `running`.
+        #
+        # STOP ALL is the button an operator reaches for. It has to stop
+        # everything that moves.
+        if self._formation_task is not None and not self._formation_task.done():
+            self._formation_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._formation_task
+            self._formation_task = None
+            if self._formation is not None:
+                self._formation["state"] = "stopped"
+                self._formation["reason"] = reason
         self.state.stop_driving()
         # Cut every ramp first. The motion loop re-publishes whatever the ramp
         # commands 50 times a second, so a stop that only tells the fleet to

@@ -377,8 +377,24 @@ def converged(
     yaw_error = wrap_degrees(
         (a["heading_deg"] + target.heading_spread_deg) - b["heading_deg"]
     )
+    # **And the bearing, which this used to ignore.** `plan()` honours it, but
+    # `ready` did not, so a formation that was the right distance apart in the
+    # wrong *direction* reported 已到位 with zero steps taken: two dogs a metre
+    # apart due north, told to sit a metre apart due east, were called aligned
+    # while `plan()` would have moved them. A display that says "done" about a
+    # shape that is ninety degrees wrong is worse than no display.
+    #
+    # The same tolerance as the heading, and for the same reason: at the default
+    # 1 m separation, 8° is 14 cm of lateral error, which is the order of
+    # `tolerance_m`. Two different tolerances for two facets of one shape would
+    # just be two ways to disagree.
+    bearing_error = wrap_degrees(bearing - target.bearing_deg)
     return {
-        "ready": abs(distance_error) <= tolerance_m and abs(yaw_error) <= tolerance_deg,
+        "ready": (
+            abs(distance_error) <= tolerance_m
+            and abs(yaw_error) <= tolerance_deg
+            and abs(bearing_error) <= tolerance_deg
+        ),
         "a": names[0],
         "b": names[1],
         "distance_m": round(distance, 3),
@@ -386,4 +402,5 @@ def converged(
         "heading_spread_deg": round(spread, 1),
         "distance_error_m": round(distance_error, 3),
         "yaw_error_deg": round(yaw_error, 1),
+        "bearing_error_deg": round(bearing_error, 1),
     }

@@ -237,7 +237,12 @@ class Calibration:
             "adequate": self.adequate,
             "scale_factor": round(self.scale_factor, 3),
             "camera_world_xy": list(self.camera_world_xy) if self.camera_world_xy else None,
-            "mirrored": self.mirrored,
+            # **`mirrored` is deliberately not here.** It is inverted with
+            # respect to the convention the page generates (see the property),
+            # so writing it into the calibration file and the calibrate response
+            # would ship a flag that means the opposite of its name to whoever
+            # reads it next. It stays as a documented negative result, not as
+            # data.
         }
 
     @staticmethod

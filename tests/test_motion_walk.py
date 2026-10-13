@@ -129,7 +129,18 @@ def test_a_malformed_position_is_none():
 
 def test_without_odometry_it_walks_on_a_timer_and_says_so():
     """A guess labelled as a guess. Refusing instead would leave a caller with
-    nothing, and the caller is the one that knows whether a guess is useful."""
+    nothing, and the caller is the one that knows whether a guess is useful.
+
+    **And it has to command what the closed loop commands.** This test used to
+    assert only `reason`, `requested_m`, `timed_s` and the note — and the code it
+    was passing computed the duration as `metres / speed_mps` while publishing a
+    **full-scale stick**: `forward_m(0.35)` was 0.624 stick-seconds, which is
+    0.87 m at 1.4 m/s and 1.87 m at 3 m/s, for a requested 0.35 m. The
+    over-drive factor was the robot's top speed.
+
+    Same shape as the sign bug on this same line: the test checked what was
+    *reported*, not what was *commanded*.
+    """
     session = FakeSession(topic=False)
     control = controller(session)
     result = asyncio.run(control.forward_m(0.35, speed=0.5))
@@ -137,7 +148,43 @@ def test_without_odometry_it_walks_on_a_timer_and_says_so():
     assert result["reason"] == "no_odometry"
     assert result["requested_m"] == 0.35
     assert "猜" in result["note"]
-    assert result["timed_s"] == pytest.approx(0.7, abs=0.01)
+
+    # **The invariant is an upper bound, not equality.** `drive` runs a
+    # trapezoid profile, so a duration short enough to be still accelerating
+    # never reaches full scale — measured 0.4286 for a 0.5 request. What must
+    # never happen is commanding *more* than the closed loop would, so the check
+    # is `<= speed`, and `> 0` so a silent no-op cannot pass it.
+    commanded = [abs(ly) for _lx, ly, _rx in session.published if ly]
+    assert commanded, "nothing was published"
+    assert 0.0 < max(commanded) <= 0.5 + 0.01, (
+        f"the fallback commanded {max(commanded)} for a speed of 0.5 — the closed "
+        f"loop commands exactly `speed`, and anything above it is the units bug: "
+        f"a full stick is `speed / 1.0` times faster than the duration assumes, "
+        f"and the error is the robot's top speed in metres per second"
+    )
+
+
+def test_the_timed_fallback_is_not_a_sprint():
+    """The measured consequence, as an assertion.
+
+    The review behind this found `forward_m(0.35)` producing 0.624 stick-seconds
+    of *full-scale* command. The formation prefers `robot_walk` for forward
+    corrections and the project's own hardware publishes no odometry, so every
+    formation step's forward correction was that sprint — two dogs in a room,
+    aimed at each other by a loop that believed it was shuffling 35 cm.
+    """
+    session = FakeSession(topic=False)
+    control = controller(session)
+    result = asyncio.run(control.forward_m(0.35, speed=0.28))
+
+    # Stick-seconds of command: the integral the robot actually receives. With
+    # the fix this is a fraction of the old 0.624, which was full-scale.
+    integral = sum(abs(ly) for _lx, ly, _rx in session.published) * (1.0 / 50.0)
+    assert integral < 0.35, (
+        f"{integral:.3f} stick-seconds for a 0.35 m shuffle at 0.28 stick — the "
+        f"full-scale version measured 0.624, which is 0.87 m at 1.4 m/s"
+    )
+    assert result["stick"] == pytest.approx(0.28, abs=0.01)
 
 
 def test_a_measured_walk_stops_when_it_has_gone_far_enough():

@@ -292,3 +292,50 @@ def test_the_tolerance_is_what_decides_ready():
     assert converged(poses, target)["ready"] is True
     assert converged(poses, target, tolerance_m=0.01)["ready"] is False
     assert DEFAULT_TOLERANCE_M == pytest.approx(0.10)
+
+
+def test_the_right_distance_in_the_wrong_direction_is_not_aligned():
+    """**`converged()` ignored the target bearing, and `plan()` did not.**
+
+    Two dogs a metre apart due north, told to sit a metre apart due east:
+    `distance_error` was zero, the heading spread was zero, and the verdict was
+    `ready: True` — 已到位, no steps taken — while `plan()` would have moved
+    them. A display that says "done" about a shape that is ninety degrees wrong
+    is worse than no display.
+    """
+    from unitree_fleet_web.formation import Formation, converged
+
+    # A at the origin facing north, B one metre north of it. The pair runs
+    # north-south.
+    poses = {
+        "dog1": {"x": 0.0, "y": 0.0, "heading_deg": 90.0},
+        "dog2": {"x": 0.0, "y": 1.0, "heading_deg": 90.0},
+    }
+
+    north = converged(poses, Formation(distance_m=1.0, bearing_deg=90.0))
+    assert north["ready"] is True, north
+    assert abs(north["bearing_error_deg"]) <= 8.0
+
+    # The same two dogs, told to sit a metre apart **due east**.
+    east = converged(poses, Formation(distance_m=1.0, bearing_deg=0.0))
+    assert abs(east["distance_error_m"]) <= 0.1, "the distance is right, which is the trap"
+    assert east["ready"] is False, (
+        "a formation ninety degrees off its target bearing was called aligned"
+    )
+    assert abs(east["bearing_error_deg"]) > 8.0
+    # The error is reported rather than only used, so the page can say which way.
+    assert "bearing_error_deg" in east
+
+
+def test_the_bearing_check_wraps_the_short_way_round():
+    """A bearing target of 179° against a measured -179° is two degrees out, not
+    358 — and a naive subtraction would refuse to ever call it aligned."""
+    from unitree_fleet_web.formation import Formation, converged
+
+    poses = {
+        "dog1": {"x": 0.0, "y": 0.0, "heading_deg": 0.0},
+        "dog2": {"x": -1.0, "y": -0.02, "heading_deg": 0.0},
+    }
+    near_180 = converged(poses, Formation(distance_m=1.0, bearing_deg=179.0))
+    assert abs(near_180["bearing_error_deg"]) <= 180.0
+    assert abs(near_180["bearing_error_deg"]) < 5.0, near_180
