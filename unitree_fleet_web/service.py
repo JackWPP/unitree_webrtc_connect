@@ -2447,7 +2447,12 @@ class ConsoleService:
         # browser watching. The lease and the telemetry sampler both key off it.
         self.note_watch()
         return {
-            "robots": await self.fleet.status_all(live=live),
+            # `compact=True`: the page reads `role`, `target`, `connected`,
+            # `faults` and `faults_authoritative` from these rows and **nothing
+            # else** — `console.js` has no `session.<field>` in it at all. The
+            # session block is ~450 B per robot and was going out four times a
+            # second. `/api/fleet` still carries it, and that is fetched once.
+            "robots": await self.fleet.status_all(live=live, compact=True),
             # `telemetry` is deliberately absent. It is the raw snapshot —
             # 1.7 KB, a quarter of what this used to weigh — and everything the
             # page shows from it is already derived into `body`, `flags`,

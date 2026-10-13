@@ -224,12 +224,23 @@ class FleetManager:
             detail="stop delivered" if delivered else "robot did not acknowledge",
         )
 
-    async def status_all(self, *, live: bool = False) -> List[Dict[str, Any]]:
+    async def status_all(
+        self, *, live: bool = False, compact: bool = False
+    ) -> List[Dict[str, Any]]:
         """One status record per robot.
 
         ``live`` additionally reads each connected robot's current state,
         concurrently. Keep it off for high-frequency polling: it talks to the
         robots.
+
+        ``compact`` drops ``session``, which is ~450 bytes per robot of
+        connection bookkeeping — idle timers, refusal counts, the mock's own
+        fields — that the console's status push sent **four times a second to
+        nobody**. `console.js` never reads it; the record that needs it is the
+        boot-time `/api/fleet` snapshot, which asks once.
+
+        Same lesson as `telemetry` before it: a payload is not free because it
+        is a dict.
         """
         records: List[Dict[str, Any]] = []
         states = [None] * len(self.ids)
@@ -249,7 +260,7 @@ class FleetManager:
                 "connection": spec.connection,
                 "target": spec.target,
                 "connected": runtime.session.is_connected,
-                "session": runtime.session.status(),
+                **({} if compact else {"session": runtime.session.status()}),
                 # The reconciled active fault set — "what is wrong right now",
                 # as opposed to the raw notification history. `authoritative`
                 # is False until the robot has sent a full snapshot this

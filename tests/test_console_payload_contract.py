@@ -23,6 +23,7 @@ is designed to catch.
 from __future__ import annotations
 
 import re
+from typing import Dict
 
 import pytest
 
@@ -305,4 +306,141 @@ def test_the_stop_button_is_wired_exactly_once(open_client):
     wire = _function_body(source, "wireFleetBar")
     assert "routine-stop" in wire, (
         "the stop button is not wired at boot, so it would do nothing"
+    )
+
+
+# ─── what the payload costs ───────────────────────────────────────────
+
+
+def _dig(tree, path):
+    """Follow a `(key, key, index, …)` path into a JSON tree."""
+    current = tree
+    for step in path:
+        try:
+            current = current[step]
+        except (KeyError, IndexError, TypeError):
+            return None
+    return current
+
+
+#: Bytes allowed per top-level key of the status push.
+#:
+#: **A total budget cannot tell you which key grew.** The push was comfortably
+#: inside its 6000 B cap at 4962, and `robots` was quietly 30% of it — a third
+#: of every push, four times a second, spent on connection bookkeeping that
+#: `console.js` never reads. Naming a limit per key means the next growth
+#: arrives with the key's name attached.
+#:
+#: These are ceilings, not targets. Raising one should be a deliberate act with
+#: a reason, which is the point.
+STATUS_BUDGET: Dict[str, int] = {
+    "robots": 700,
+    "body": 1600,
+    "motion": 500,
+    "state": 400,
+    "sources": 400,
+    "telemetry_health": 400,
+    "video": 400,
+    "where": 300,
+    "flags": 300,
+    "sync": 300,
+    "arena": 400,
+    "formation": 300,
+    "routine": 2000,
+    "connecting": 200,
+    "watching": 20,
+}
+
+
+def test_no_single_key_of_the_status_push_grows_past_its_budget(open_client):
+    """The per-key half of the payload budget.
+
+    The total-size test next door is the one that existed, and it was happy: the
+    push sat at 4962 B against a 6000 B cap while **30% of it — `robots` — was
+    connection bookkeeping the page never reads**. Dropping `robots[].session`
+    took it to 3814 B, a 23% saving on every push, four times a second.
+
+    Measuring per key means the next growth names itself.
+    """
+    import json as _json
+
+    payload = open_client.get("/api/fleet/status").json()
+    over = []
+    for key, value in payload.items():
+        size = len(_json.dumps(value, ensure_ascii=False))
+        allowed = STATUS_BUDGET.get(key)
+        if allowed is None:
+            over.append((key, size, "no budget declared"))
+        elif size > allowed:
+            over.append((key, size, f"budget {allowed}"))
+    assert not over, "\n".join(
+        f"  {key}: {size} B ({why})" for key, size, why in over
+    )
+
+
+def test_the_budget_table_covers_every_key_the_push_sends(open_client):
+    """A key with no budget is how a payload grows quietly: nobody added it,
+    it just stopped being measured."""
+    payload = open_client.get("/api/fleet/status").json()
+    missing = sorted(set(payload) - set(STATUS_BUDGET))
+    assert not missing, (
+        f"{missing} are in the push with no declared budget. Add a ceiling for "
+        f"each — an unbounded key is the one that grows."
+    )
+
+
+def test_the_budget_table_has_no_keys_the_push_does_not_send(open_client):
+    """The other direction: a budget for something that is gone is a table
+    nobody trusts, and the next person stops reading it."""
+    payload = open_client.get("/api/fleet/status").json()
+    stale = sorted(set(STATUS_BUDGET) - set(payload))
+    assert not stale, f"{stale} have budgets but are not in the push"
+
+
+async def test_a_frozen_block_cannot_be_told_from_an_idle_one(open_client):
+    """**An approach that did not work, written down so nobody retries it.**
+
+    The obvious way to find wasted bytes is to compare two pushes and flag
+    subtrees that did not change. It was tried: `robots[].session` is exactly
+    that shape — a large block that never changes — and the check caught it.
+
+    It also flagged `motion`, `state`, `sources`, `telemetry_health` and
+    `video`, **all of which are live data that simply had not changed yet**
+    because the mock dog was idle. A change detector cannot tell "unused" from
+    "unchanged", and a check that cries wolf on an idle robot gets deleted.
+
+    So the payload's cost is bounded by the per-key table above, and which data
+    is *useless* is a judgement about what the page renders — which is what
+    `console.js` reading it, or not, is for. This test exists to keep the
+    negative result.
+    """
+    import asyncio
+    import json as _json
+
+    def containers(tree, path=()):
+        found = []
+        if isinstance(tree, (dict, list)):
+            found.append((len(_json.dumps(tree, ensure_ascii=False)), path, tree))
+            items = tree.items() if isinstance(tree, dict) else enumerate(tree)
+            for key, child in items:
+                found.extend(containers(child, path + (key,)))
+        return found
+
+    first = open_client.get("/api/fleet/status").json()
+    await asyncio.sleep(0.8)
+    last = open_client.get("/api/fleet/status").json()
+
+    import json as _j
+
+    frozen_large = [
+        (size, path) for size, path, value in containers(first)
+        if size >= 200 and _j.dumps(value, ensure_ascii=False)
+        == _j.dumps(_dig(last, path), ensure_ascii=False)
+    ]
+
+    # The finding, asserted as a fact rather than as a failure: an idle console
+    # produces plenty of frozen blocks that are entirely legitimate.
+    assert frozen_large, (
+        "nothing was frozen, so the false-positive problem this test documents "
+        "no longer applies — the reasoning above may need revisiting"
     )
