@@ -33,6 +33,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any, Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -59,9 +60,18 @@ CANDIDATES = (
 )
 
 
-async def probe(
-    ip: str, serial: str, key: str, timeout: float, robot: str, backend: str
-) -> int:
+async def probe_topics(
+    ip: str, serial: str = "", key: str = "", timeout: float = 6.0,
+    robot: str = "Go2", backend: str = "auto", *, quiet: bool = False,
+) -> Dict[str, Any]:
+    """Ask the robot which topics it actually publishes. **Returns the data.**
+
+    Split out from `probe` so that a second tool — `scripts/session_report.py` —
+    can build on the same answer. Two copies of a topic list is how two tools
+    end up disagreeing about what a firmware publishes, and the disagreement
+    would be found at the worst possible moment: on a robot, by somebody who
+    then cannot trust either of them.
+    """
     from unitree_robot_agent.config import AgentConfig
     from unitree_robot_agent.runtime import create_runtime
 
@@ -77,50 +87,103 @@ async def probe(
     )
     runtime = create_runtime(config)
 
-    print(f"connecting to {ip} …")
+    def say(message: str) -> None:
+        if not quiet:
+            print(message)
+
+    say(f"connecting to {ip} …")
     try:
         await runtime.session.ensure_connected()
     except Exception as exc:  # noqa: BLE001 - the failure is the report
-        print(f"  CONNECT FAILED: {type(exc).__name__}: {exc}")
-        return 2
-    print("  connected\n")
+        say(f"  CONNECT FAILED: {type(exc).__name__}: {exc}")
+        return {
+            "ip": ip, "connected": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "rows": [], "delivered": 0, "total": len(CANDIDATES),
+        }
+    say("  connected\n")
 
-    rows = []
+    rows: List[Dict[str, Any]] = []
     try:
         for topic, purpose, group in CANDIDATES:
             started = time.monotonic()
             try:
                 payload = await runtime.session.read_topic(topic, timeout=timeout)
             except Exception as exc:  # noqa: BLE001
-                rows.append((topic, group, "error", f"{type(exc).__name__}", 0.0, purpose, None))
+                rows.append({
+                    "topic": topic, "group": group, "status": "error",
+                    "ok": False, "note": type(exc).__name__, "wait_s": 0.0,
+                    "unlocks": purpose, "keys": [],
+                })
                 continue
             elapsed = time.monotonic() - started
-
             if payload is None:
-                rows.append((topic, group, "silent", "", elapsed, purpose, None))
+                rows.append({
+                    "topic": topic, "group": group, "status": "silent", "ok": False,
+                    "note": "", "wait_s": round(elapsed, 1), "unlocks": purpose,
+                    "keys": [],
+                })
             else:
                 keys = sorted(payload.keys())[:8] if isinstance(payload, dict) else []
-                rows.append((topic, group, "OK", "", elapsed, purpose, keys))
+                rows.append({
+                    "topic": topic, "group": group, "status": "OK", "ok": True,
+                    "note": "", "wait_s": round(elapsed, 1), "unlocks": purpose,
+                    "keys": keys,
+                })
     finally:
         await runtime.aclose()
 
-    width = max(len(topic) for topic, *_ in rows)
-    print(f"{'topic'.ljust(width)}  {'result':7} {'wait':>6}  what it would unlock")
-    print(f"{'-' * width}  {'-' * 7} {'-' * 6}  {'-' * 40}")
-    for topic, group, status, note, elapsed, purpose, keys in rows:
-        mark = {"OK": "OK", "silent": "silent", "error": "error"}[status]
-        print(f"{topic.ljust(width)}  {mark:7} {elapsed:5.1f}s  {purpose}")
-        if keys:
-            print(f"{' ' * width}            keys: {', '.join(keys)}")
-        if note:
-            print(f"{' ' * width}            {note}")
+    return {
+        "ip": ip,
+        "connected": True,
+        "rows": rows,
+        "delivered": sum(1 for row in rows if row["ok"]),
+        "total": len(rows),
+    }
 
-    working = [row for row in rows if row[2] == "OK"]
-    print()
-    print(f"{len(working)}/{len(rows)} topics delivered.")
-    print("Silent is not an error: the firmware simply does not publish it over")
-    print("this link. Do not build a feature on a silent row without another way")
-    print("to get the data.")
+
+def render_probe(result: Dict[str, Any]) -> str:
+    """The table, as text. Separate from gathering it so the same data can be
+    printed here, formatted into a report, or serialised as JSON."""
+    rows = result.get("rows") or []
+    if not rows:
+        return f"no topics probed: {result.get('error', 'unknown')}"
+    width = max(len(row["topic"]) for row in rows)
+    lines = [
+        f"{'topic'.ljust(width)}  {'result':7} {'wait':>6}  what it would unlock",
+        f"{'-' * width}  {'-' * 7} {'-' * 6}  {'-' * 40}",
+    ]
+    for row in rows:
+        lines.append(
+            f"{row['topic'].ljust(width)}  {row['status']:7} "
+            f"{row['wait_s']:5.1f}s  {row['unlocks']}"
+        )
+        if row["keys"]:
+            lines.append(f"{' ' * width}            keys: {', '.join(row['keys'])}")
+        if row["note"]:
+            lines.append(f"{' ' * width}            {row['note']}")
+    lines += [
+        "",
+        f"{result['delivered']}/{result['total']} topics delivered.",
+        "Silent is not an error: the firmware simply does not publish it over",
+        "this link. Do not build a feature on a silent row without another way",
+        "to get the data.",
+    ]
+    return "\n".join(lines)
+
+
+async def probe(
+    ip: str, serial: str, key: str, timeout: float, robot: str, backend: str
+) -> int:
+    """Command-line entry point: gather, print, report an exit code."""
+    result = await probe_topics(
+        ip, serial, key, timeout, robot, backend, quiet=True
+    )
+    if not result.get("connected"):
+        print(f"connecting to {ip} …")
+        print(f"  CONNECT FAILED: {result.get('error')}")
+        return 2
+    print(render_probe(result))
     return 0
 
 
