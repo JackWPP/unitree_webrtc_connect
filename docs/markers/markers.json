@@ -1,0 +1,30 @@
+{
+  "family": "DICT_APRILTAG_36h11",
+  "size_m": 0.15,
+  "dpi": 300,
+  "quiet_zone_mm": 25.0,
+  "cells_across": 8,
+  "print_instructions": "按 100% 打印，不要「适合页面」。黑方块边长必须是 150mm —— 打印完用尺子量一下。贴的时候让箭头指向狗头。",
+  "markers": [
+    {
+      "tag_id": 0,
+      "robot_id": "dog1",
+      "label": "dog1",
+      "size_m": 0.15,
+      "size_mm": 150.0,
+      "family": "DICT_APRILTAG_36h11",
+      "colour": "#1f6feb",
+      "pixels": 1772
+    },
+    {
+      "tag_id": 1,
+      "robot_id": "dog2",
+      "label": "dog2",
+      "size_m": 0.15,
+      "size_mm": 150.0,
+      "family": "DICT_APRILTAG_36h11",
+      "colour": "#d29922",
+      "pixels": 1772
+    }
+  ]
+}
