@@ -83,6 +83,8 @@ def test_tool_counts_are_stable():
     Bumped 23/29 -> 27/33 for the four fleet tools (``robot_roster``,
     ``robot_fleet_status``, ``robot_stop_all``, ``robot_emergency_stop_all``),
     which register unconditionally so the model can always ask what it is
-    driving."""
-    assert len(bundle_for("R1").tool_names) == 27
-    assert len(bundle_for("Go2").tool_names) == 33
+    driving. Bumped again to 28/34 for ``robot_preflight``, which answers "can
+    I even reach these robots, and what will the handshake need" without
+    connecting."""
+    assert len(bundle_for("R1").tool_names) == 28
+    assert len(bundle_for("Go2").tool_names) == 34

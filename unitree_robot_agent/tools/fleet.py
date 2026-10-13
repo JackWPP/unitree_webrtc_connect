@@ -30,6 +30,23 @@ STOP = ToolAnnotations(
 )
 
 
+def _spec_from_config(ctx: ToolContext):
+    """A one-robot spec, so preflight works without a roster."""
+    from ..fleet import RobotSpec
+
+    cfg = ctx.config
+    return RobotSpec(
+        robot_id=cfg.robot_id,
+        model=cfg.robot,
+        connection=cfg.connection,
+        ip=cfg.ip or "",
+        serial_number=cfg.serial_number or "",
+        aes_128_key=cfg.aes_128_key or "",
+        device_type=cfg.device_type or cfg.robot,
+        region=cfg.region,
+    )
+
+
 def register(server, ctx: ToolContext) -> None:
     @server.tool(
         name="robot_roster",
@@ -79,6 +96,41 @@ def register(server, ctx: ToolContext) -> None:
             )
 
         return await run_tool(ctx, "robot_roster", {"robot_id": robot_id}, _impl)
+
+    @server.tool(
+        name="robot_preflight",
+        description=(
+            "Check whether the configured robots can actually be reached and "
+            "what their handshake will need — WITHOUT connecting to them. "
+            "Reports, per robot: whether the signaling port answers, whether "
+            "the firmware needs a per-device AES-128 key (data2=3), whether we "
+            "hold a key, and whether that key is accepted. Read-only: it "
+            "starts the handshake (con_notify) but never sends an SDP, so the "
+            "robot's single WebRTC client slot is not claimed and you can run "
+            "it while the official app is connected. Call this first when a "
+            "connect fails, or before pointing the fleet at real hardware."
+        ),
+        annotations=READ,
+    )
+    async def robot_preflight(robot_id: str = "") -> Dict[str, Any]:
+        async def _impl():
+            from ..fleet import run_preflight, summarise
+
+            if ctx.fleet is None:
+                spec = ctx.runtime.config
+                from ..fleet import Roster
+
+                roster = Roster.single(
+                    _spec_from_config(ctx), state_dir=ctx.config.state_dir.parent
+                )
+                results = await run_preflight(roster)
+                payload = summarise(results)
+            else:
+                payload = summarise(await run_preflight(ctx.fleet.roster))
+
+            return ctx.ok(**payload)
+
+        return await run_tool(ctx, "robot_preflight", {"robot_id": robot_id}, _impl)
 
     @server.tool(
         name="robot_fleet_status",

@@ -20,6 +20,7 @@ instantiated once per roster entry.
 from typing import TYPE_CHECKING, Any
 
 from .keys import KeyEntry, KeyStore
+from .preflight import PreflightResult, probe_robot, run_preflight, summarise
 from .roster import (
     DEFAULT_STATE_DIR as ROSTER_DEFAULT_STATE_DIR,
     ROSTER_ENV_VAR,
@@ -57,6 +58,10 @@ __all__ = [
     "FleetManager",
     "KeyEntry",
     "KeyStore",
+    "PreflightResult",
+    "probe_robot",
+    "run_preflight",
+    "summarise",
     "ROSTER_ENV_VAR",
     "ROSTER_DEFAULT_STATE_DIR",
     "RobotOutcome",

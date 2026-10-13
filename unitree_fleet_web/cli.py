@@ -46,15 +46,25 @@ def _parse_args(argv) -> argparse.Namespace:
                         help="override the roster's per-robot state directory")
     parser.add_argument("--no-ui", action="store_true",
                         help="serve the API only, not the built-in page")
+    parser.add_argument("--preflight", action="store_true",
+                        help="check each robot's reachability and what its "
+                             "handshake will need, then exit. Read-only: it "
+                             "never claims the robot's WebRTC client slot, so "
+                             "it is safe to run while the official app is "
+                             "connected")
     parser.add_argument("--log-level", default="INFO",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser.parse_args(argv)
 
 
-def build(argv=None) -> tuple:
-    """Build ``(config, service)`` without binding a socket. Used by tests."""
-    args = _parse_args(argv if argv is not None else sys.argv[1:])
+def _roster_from_args(args):
+    roster = load_roster(args.roster)
+    if args.state_dir:
+        roster = replace(roster, state_dir=Path(args.state_dir))
+    return roster
 
+
+def _config_from_args(args) -> ConsoleConfig:
     overrides = {}
     if args.host is not None:
         overrides["host"] = args.host
@@ -64,15 +74,17 @@ def build(argv=None) -> tuple:
         overrides["token"] = args.token
     config = ConsoleConfig.from_env(**overrides)
     config.serve_ui = not args.no_ui
+    return config
+
+
+def build(argv=None) -> tuple:
+    """Build ``(config, service)`` without binding a socket. Used by tests."""
+    args = _parse_args(argv if argv is not None else sys.argv[1:])
+    config = _config_from_args(args)
     config.check()
 
-    roster = load_roster(args.roster)
-    if args.state_dir:
-        roster = replace(roster, state_dir=Path(args.state_dir))
-
-    fleet = FleetManager(roster, backend=args.backend)
-    service = ConsoleService(fleet, config=config)
-    return config, service
+    fleet = FleetManager(_roster_from_args(args), backend=args.backend)
+    return config, ConsoleService(fleet, config=config)
 
 
 def main(argv=None) -> int:
@@ -81,7 +93,14 @@ def main(argv=None) -> int:
         level=getattr(logging, args.log_level, logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    args = _parse_args(argv if argv is not None else sys.argv[1:])
+
     try:
+        if args.preflight:
+            # Deliberately before `build`: a preflight is a diagnostic, and
+            # constructing a fleet and a 34-tool server to run one would make
+            # the diagnostic the most complicated thing in the picture.
+            return _run_preflight(_roster_from_args(args))
         config, service = build(argv)
     except AgentError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -104,6 +123,36 @@ def main(argv=None) -> int:
 
     uvicorn.run(app, host=config.host, port=config.port, log_level=args.log_level.lower())
     return 0
+
+
+def _run_preflight(roster) -> int:
+    """Print what each robot will need, then exit.
+
+    Exists so that "the dogs are finally on the network" is one command
+    instead of a debugging session: the two failures that have cost the most
+    time here both surface as something other than what they are.
+    """
+    import asyncio
+
+    from unitree_robot_agent.fleet import run_preflight, summarise
+
+    results = asyncio.run(run_preflight(roster))
+    summary = summarise(results)
+
+    for record in summary["results"]:
+        mark = "OK  " if record["ok"] else "FAIL"
+        print(f"[{mark}] {record['robot_id']:<8} {record['model']:<4} "
+              f"{record['ip'] or record['target']:<16} {record['verdict']}")
+        if record["detail"]:
+            print(f"         {record['detail']}")
+        if not record["ok"] and record["hint"]:
+            print(f"         → {record['hint']}")
+
+    print()
+    print(f"{len(summary['ready'])}/{summary['count']} ready"
+          + (f"; blocked: {', '.join(summary['blocked'])}" if summary["blocked"] else ""))
+    print(summary["note"])
+    return 0 if summary["complete"] else 1
 
 
 if __name__ == "__main__":
