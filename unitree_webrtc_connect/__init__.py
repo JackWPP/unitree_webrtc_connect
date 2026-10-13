@@ -62,6 +62,7 @@ from .constants import (  # noqa: E402
 )
 from .multicast_scanner import discover_ip_sn  # noqa: E402
 from .msgs.pub_sub import WebRTCDataChannelPubSub  # noqa: E402
+from .msgs.rtc_inner_req import FileUploadError  # noqa: E402
 from .unitree_cloud import (  # noqa: E402
     UnitreeCloud,
     UnitreeCloudError,
@@ -108,4 +109,5 @@ __all__ = [
     "LocalSignalingPortError",
     "NoSdpAnswerError",
     "RobotBusyError",
+    "FileUploadError",
 ]

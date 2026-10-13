@@ -4,6 +4,39 @@ import base64
 from ..constants import DATA_CHANNEL_TYPE, WebRTCConnectionMethod
 from ..util import generate_uuid
 
+
+class FileUploadError(RuntimeError):
+    """A chunked file upload did not complete.
+
+    Raised rather than returned so a caller cannot accidentally treat a
+    partial upload as a finished one — which is exactly what the original
+    implementation did, by never sending anything and always returning "ok".
+    """
+
+
+def _file_status(response):
+    """Pull ``file_status`` out of a chunk acknowledgement, if present.
+
+    Returns ``None`` when the reply carries no recognisable status. That is
+    deliberately not treated as a failure: the point of this check is that
+    *something came back* for each chunk, and the exact envelope has not been
+    confirmed against hardware here. A status that is present but not "ok" is
+    always a failure.
+    """
+    if not isinstance(response, dict):
+        return None
+    for candidate in (
+        response.get("file_status"),
+        (response.get("info") or {}).get("file_status")
+        if isinstance(response.get("info"), dict) else None,
+        (response.get("data") or {}).get("file_status")
+        if isinstance(response.get("data"), dict) else None,
+    ):
+        if candidate is not None:
+            return candidate
+    return None
+
+
 class WebRTCChannelProbeResponse:
     def __init__(self, channel, pub_sub):
         self.channel = channel
@@ -95,29 +128,48 @@ class WebRTCDataChannelFileUploader:
         return [data[i:i + chunk_size] for i in range(0, len(data), chunk_size)]
     
     
-    async def upload_file(self, data, file_path, chunk_size=60*1024, progress_callback=None):
-        """Uploads a file in chunks with the possibility to cancel the upload."""
-        
+    async def upload_file(self, data, file_path, chunk_size=60*1024,
+                          progress_callback=None, ack_timeout=10.0):
+        """Upload a file in chunks, waiting for each chunk to be acknowledged.
+
+        Three bugs were fixed here, all of which made a failed upload look
+        successful:
+
+        1. ``self.publish(...)`` was called **without await**. ``publish`` is a
+           coroutine, so this built a coroutine object and threw it away —
+           nothing was ever sent, ``publish`` was never entered, and the method
+           still returned ``"ok"``. A SLAM map "upload" transmitted zero bytes
+           and reported success.
+        2. The per-chunk acknowledgement was never waited for. Even once the
+           chunks go out, a dropped or rejected one was invisible.
+        3. The breather ran *before the first chunk* (``i % 5 == 0`` is true at
+           ``i == 0``), adding half a second of pure latency to every upload.
+
+        Raises :class:`FileUploadError` when a chunk is not acknowledged in
+        time or is rejected, so a corrupt upload cannot be mistaken for a good
+        one.
+        """
         # Encode the data to Base64
         encoded_data = base64.b64encode(data).decode('utf-8')
-        
+
         print("Total size after Base64 encoding:", len(encoded_data))
         chunks = self.slice_base64_into_chunks(encoded_data, chunk_size)
         total_chunks = len(chunks)
-        
+
         self.cancel_upload = False
-        
+
         for i, chunk in enumerate(chunks):
             if self.cancel_upload:
                 print("Upload canceled.")
                 return "cancel"
-            
-            if i % 5 == 0:
+
+            # Breather every 5 chunks, but not before the first one.
+            if i and i % 5 == 0:
                 await asyncio.sleep(0.5)
-            
+
             uuid = generate_uuid()
             req_uuid = f"upload_req_{uuid}"
-            
+
             message = {
                 "req_type": "push_static_file",
                 "req_uuid": req_uuid,
@@ -132,14 +184,31 @@ class WebRTCDataChannelFileUploader:
                     "chunk_data_size": len(chunk)
                 }
             }
-            
-            self.publish("", message, DATA_CHANNEL_TYPE["RTC_INNER_REQ"])
-            
+
+            try:
+                response = await asyncio.wait_for(
+                    self.publish("", message, DATA_CHANNEL_TYPE["RTC_INNER_REQ"]),
+                    timeout=ack_timeout,
+                )
+            except asyncio.TimeoutError:
+                raise FileUploadError(
+                    f"chunk {i + 1}/{total_chunks} of {file_path} was not "
+                    f"acknowledged within {ack_timeout}s; the upload is "
+                    f"incomplete and the file on the robot is corrupt"
+                ) from None
+
+            status = _file_status(response)
+            if status is not None and status != "ok":
+                raise FileUploadError(
+                    f"chunk {i + 1}/{total_chunks} of {file_path} was rejected: "
+                    f"file_status={status!r}"
+                )
+
             if progress_callback:
                 progress_callback(int(((i + 1) / total_chunks) * 100))
-        
+
         return "ok"
-    
+
     def cancel(self):
         """Cancel the ongoing upload."""
         self.cancel_upload = True
