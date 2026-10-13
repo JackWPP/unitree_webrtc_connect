@@ -3,7 +3,10 @@ name = "unitree_webrtc_connect"
 version = "2.2.0"
 description = "Connect to the Unitree Go2 and G1 with WebRTC"
 readme = "README.md"
-requires-python = ">=3.8"
+# `>=3.10` is what aiortc actually needs; the previous `>=3.8` was a claim the
+# dependency tree never honoured (aiortc >= 1.15 requires 3.10+, and the
+# pinned versions below are what this project is tested against).
+requires-python = ">=3.10"
 authors = [
     { name = "legion1581", email = "legion1581@gmail.com" }
 ]
@@ -12,7 +15,11 @@ authors = [
 # touch (LiDAR decoding, audio I/O, AudioHub transcoding) live in the extras
 # below, and the corresponding imports moved to first-use inside the package.
 dependencies = [
-    "aiortc>=1.9.0",
+    # Upper-bounded on purpose. `unitree_webrtc_connect/__init__.py` monkey
+    # patches aiortc internals and only branches on `== 1.10.0` and
+    # `>= 1.11.0`, so a 2.x release would be patched by guesswork. Anything
+    # below 1.15.0 is also untested by this fork.
+    "aiortc>=1.9.0,<2",
     "pycryptodome",
     "requests",
     "curl_cffi",
