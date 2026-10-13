@@ -44,6 +44,20 @@
        stop button are always on screen while it runs. -->
   <div class="fleet-row routines" id="fleet-routines"></div>
 
+  <!-- Two dogs, one intent. `robot_turn(-90)` is closed loop on each robot's
+       own gyro, so two dogs end a turn at different headings and the error
+       accumulates over a sequence. This says how far apart they have got, and
+       gives the operator the one thing the console cannot guess: the moment
+       they were lined up. -->
+  <div class="fleet-row sync-row" id="fleet-sync">
+    <span class="row-label">同步</span>
+    <span class="flag" id="sync-state">未标定</span>
+    <span class="sync-detail muted" id="sync-detail"></span>
+    <span class="spacer"></span>
+    <button id="sync-mark" class="btn" title="以两只狗当前的位置和朝向为基准，之后所有偏差都相对此刻">标记对齐</button>
+    <button id="sync-clear" class="btn btn-quiet" title="清除基准">清除</button>
+  </div>
+
   <!-- The editor. A routine is a document, so it should be authorable from the
        page rather than only by editing Python — which is exactly why the
        branch this idea came from never had anyone author one. -->

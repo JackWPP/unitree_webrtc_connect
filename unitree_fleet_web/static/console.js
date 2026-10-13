@@ -479,6 +479,8 @@ function renderStatus(payload) {
   state.where = payload.where || {};
   state.body = payload.body || {};
   state.sources = payload.sources || {};
+  state.sync = payload.sync || null;
+  renderSync(state.sync);
   renderFleetTargets();
   renderRoutine(payload.routine);
   state.flags = payload.flags || state.flags || {};
@@ -1868,6 +1870,96 @@ function wireEditor() {
   }
 }
 
+/* ── two-dog synchronisation ───────────────────────────────────────── */
+
+/* The numbers are each dog's *change* since the marked reference, never its
+ * raw pose. Two odometers have two origins — comparing them directly would
+ * invent a relationship that does not exist — so the console asks the operator
+ * for the one thing it cannot know: the moment the dogs were lined up. */
+const SYNC_LABELS = {
+  unmarked: '未标定',
+  unknown: '无法判断',
+  aligned: '同步',
+  drifting: '有偏差',
+  diverged: '已错位',
+};
+
+function renderSync(sync) {
+  const stateEl = document.getElementById('sync-state');
+  const detail = document.getElementById('sync-detail');
+  if (!stateEl || !detail) return;
+  if (!sync) return;
+
+  const label = SYNC_LABELS[sync.state] || sync.state;
+  stateEl.textContent = label;
+  stateEl.className = 'flag' + (sync.state === 'aligned' ? ' on'
+    : (sync.state === 'drifting' ? ' warn'
+      : (sync.state === 'diverged' ? ' bad' : '')));
+
+  detail.textContent = '';
+  if (sync.state === 'unmarked') {
+    detail.textContent = '按「标记对齐」把两只狗当前的位置和朝向记为基准';
+    return;
+  }
+  if (sync.state === 'unknown') {
+    // Marked, but nobody is reporting a pose. Not the same as aligned.
+    detail.textContent = '已标定，但机器狗没有报告位姿 —— 无法判断';
+    return;
+  }
+
+  for (const pair of sync.pairs || []) {
+    const chip = document.createElement('span');
+    chip.className = 'sync-pair ' + pair.state;
+    const yaw = document.createElement('b');
+    yaw.textContent = `${pair.yaw_spread_deg}°`;
+    const dist = document.createElement('b');
+    dist.textContent = `${pair.distance_spread_m} m`;
+    chip.append(`${pair.a} ↔ ${pair.b}　朝向差 `, yaw, '　路程差 ', dist);
+    chip.title = `${pair.a} 转了 ${pair.detail.a.turned_deg}°，`
+      + `${pair.b} 转了 ${pair.detail.b.turned_deg}°；`
+      + `走了 ${pair.detail.a.travelled} m / ${pair.detail.b.travelled} m`
+      + (pair.state === 'aligned' ? '' : `　（${pair.laggard} 落后）`);
+    detail.appendChild(chip);
+  }
+}
+
+/* One status fetch, applied through the same path the socket uses. Two
+ * renderers for one payload is how a panel ends up disagreeing with itself. */
+async function refreshStatus() {
+  try {
+    renderStatus(await api('/api/fleet/status'));
+  } catch (_) { /* the socket will bring it round anyway */ }
+}
+
+async function markSync() {
+  try {
+    const result = await api('/api/fleet/sync', { method: 'POST', body: '{}' });
+    const parts = [`已以 ${result.marked.join('、')} 为基准`];
+    if (result.skipped && result.skipped.length) {
+      parts.push(`${result.skipped.join('、')} 没有位姿，未覆盖`);
+    }
+    toast(parts.join('；'), result.skipped && result.skipped.length ? 'warn' : 'ok');
+    await refreshStatus();
+  } catch (err) {
+    toast('标记失败: ' + err.message, 'bad');
+  }
+}
+
+function wireSync() {
+  const mark = document.getElementById('sync-mark');
+  const clear = document.getElementById('sync-clear');
+  if (mark) mark.addEventListener('click', markSync);
+  if (clear) clear.addEventListener('click', async () => {
+    try {
+      await api('/api/fleet/sync', { method: 'DELETE' });
+      toast('已清除同步基准', 'ok');
+      await refreshStatus();
+    } catch (err) {
+      toast('清除失败: ' + err.message, 'bad');
+    }
+  });
+}
+
 /* ── routines ──────────────────────────────────────────────────────── */
 
 /* A sequence keeps sending commands after the operator has taken their hands
@@ -2122,6 +2214,7 @@ async function boot() {
   wireButtons();
   wireInput();
   wireFleetBar();
+  wireSync();
   wireEditor();
   loadFleetActions();
   loadRoutines();

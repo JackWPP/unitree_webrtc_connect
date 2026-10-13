@@ -934,3 +934,20 @@ select, input[type="range"] { accent-color: var(--accent); }
   background: transparent;
   opacity: 0.75;
 }
+
+/* ── two-dog synchronisation ──────────────────────────────────────── */
+
+.sync-row { align-items: center; }
+.sync-detail { font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.sync-pair {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  background: var(--panel-2);
+}
+.sync-pair.aligned { border-left-color: var(--ok); }
+.sync-pair.drifting { border-left-color: var(--warn); }
+.sync-pair.diverged { border-left-color: var(--danger); }
+.sync-pair b { font-variant-numeric: tabular-nums; }

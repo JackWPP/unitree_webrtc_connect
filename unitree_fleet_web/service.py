@@ -28,6 +28,7 @@ from .motion import MotionController, MotionLimits
 from .posture import PostureBelief
 from .routines import ROUTINES, validate as validate_routine
 from .state import ConsoleState, EStopScope, InputMode, MotionBlocked
+from .sync import SyncMonitor
 
 logger = logging.getLogger("unitree_fleet_web.service")
 
@@ -250,6 +251,9 @@ class ConsoleService:
         #: What the console believes each robot's posture is, learned from its
         #: own commands. See `posture.PostureBelief`.
         self._posture: Dict[str, PostureBelief] = {}
+        #: How far apart the dogs have got, measured against a shared reference
+        #: the operator marks. See `sync.SyncMonitor`.
+        self._sync = SyncMonitor()
         #: The auto-stand gate's bookkeeping, per robot.
         self._gate: Dict[str, Dict[str, float]] = {}
         #: In-flight auto-stand requests, so shutdown can cancel them.
@@ -1418,6 +1422,48 @@ class ConsoleService:
             ],
         }
 
+    # ── two-dog synchronisation ──────────────────────────────────────
+
+    def _pose_of(self, robot_id: str) -> Optional[tuple]:
+        """(x, y, yaw) for a robot, or None when it is not reporting one."""
+        spot = self.where(robot_id)
+        if not spot:
+            return None
+        return (spot["x"], spot["y"], spot["yaw"])
+
+    @property
+    def sync(self) -> SyncMonitor:
+        return self._sync
+
+    def mark_sync(self, robot_ids: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+        """Take the alignment reference: "the dogs are together *now*".
+
+        Everything the sync monitor reports is a change since this moment, so
+        the operator marks it once the dogs are lined up. Nothing is marked
+        automatically — a console that decided for itself when two dogs were
+        aligned would be guessing about the physical world from two odometers
+        that do not share an origin.
+        """
+        wanted = list(robot_ids) if robot_ids else list(self.fleet.ids)
+        poses: Dict[str, Any] = {}
+        for robot_id in wanted:
+            pose = self._pose_of(robot_id)
+            if pose is not None:
+                poses[robot_id] = pose
+        if not poses:
+            raise AgentError(
+                "没有机器狗在报告位姿，无法记录对齐基准。",
+                code="no_pose",
+                hint="位姿来自状态 topic；机器人没发布它时无法对齐。",
+            )
+        result = self._sync.mark(poses)
+        result["skipped"] = [rid for rid in wanted if rid not in poses]
+        logger.info("sync reference marked for %s", result["marked"])
+        return result
+
+    def sync_state(self) -> Dict[str, Any]:
+        return self._sync.summary({rid: self._pose_of(rid) for rid in self.fleet.ids})
+
     def controls_payload(self, robot_id: str) -> Dict[str, Any]:
         """The control descriptors this robot can actually honour.
 
@@ -1604,6 +1650,7 @@ class ConsoleService:
             "posture": {rid: self.posture(rid).as_dict() for rid in self.fleet.ids},
             "body": {rid: self.body(rid) for rid in self.fleet.ids},
             "sources": {rid: self.source_status(rid) for rid in self.fleet.ids},
+            "sync": self.sync_state(),
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a

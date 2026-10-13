@@ -379,6 +379,21 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 
+    async def post_sync_mark(request) -> Response:
+        """Take the alignment reference: "the dogs are together *now*"."""
+        body = await _read_body(request)
+        robots = (body or {}).get("robots")
+        try:
+            return JSONResponse(
+                service.mark_sync(robots if isinstance(robots, list) else None)
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
+    async def delete_sync(request) -> Response:
+        service.sync.clear()
+        return JSONResponse({"cleared": True, "sync": service.sync_state()})
+
     async def post_routine_save(request) -> Response:
         body = await _read_body(request)
         try:
@@ -548,6 +563,8 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/fleet/routine", post_routine_start, methods=["POST"]),
         Route("/api/fleet/routine/stop", post_routine_stop, methods=["POST"]),
         Route("/api/fleet/routine/insert", post_routine_insert, methods=["POST"]),
+        Route("/api/fleet/sync", post_sync_mark, methods=["POST"]),
+        Route("/api/fleet/sync", delete_sync, methods=["DELETE"]),
         Route("/api/fleet/routines/save", post_routine_save, methods=["POST"]),
         Route("/api/fleet/routines/{routine_id}", delete_routine, methods=["DELETE"]),
         Route("/api/fleet/action", post_fleet_action, methods=["POST"]),

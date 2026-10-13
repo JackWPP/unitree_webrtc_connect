@@ -55,3 +55,46 @@ def invoke():
         return await ToolBridge(bundle).call(name, arguments or {})
 
     return _invoke
+
+
+# ── the console's HTTP fixture, shared ────────────────────────────────
+#
+# Moved here from `test_console_app` so that any test module can open the
+# console without copying the roster. Two copies of a fixture is how two
+# modules end up testing subtly different applications.
+
+
+def _console_app(tmp_path, *, token: str = ""):
+    from unitree_robot_agent.fleet import FleetManager, Roster
+    from unitree_fleet_web.app import create_app
+    from unitree_fleet_web.config import ConsoleConfig
+    from unitree_fleet_web.service import ConsoleService
+
+    roster = Roster.from_mapping(
+        {
+            "state_dir": str(tmp_path / "state"),
+            "default": "dog1",
+            "robots": [
+                {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "B42D2000AAAA"},
+                {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B42D2000BBBB"},
+            ],
+        }
+    )
+    fleet = FleetManager(roster, backend="mock", audit_to_stderr=False)
+    config = ConsoleConfig(host="127.0.0.1", token=token, deadman_s=0.2)
+    service = ConsoleService(fleet, config=config)
+    app = create_app(service, config)
+    app._console_service = service
+    return app
+
+
+import pytest as _pytest
+
+
+@_pytest.fixture
+def open_client(tmp_path):
+    """No token: the loopback-only case."""
+    from starlette.testclient import TestClient
+
+    with TestClient(_console_app(tmp_path)) as client:
+        yield client
