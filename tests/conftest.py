@@ -44,3 +44,14 @@ def r1_runtime(r1_config) -> Runtime:
 @pytest.fixture
 def go2_runtime(go2_config) -> Runtime:
     return create_runtime(go2_config)
+
+
+@pytest.fixture
+def invoke():
+    """Call one registered tool through the bridge, the way the CLI does."""
+    from unitree_robot_agent.bridge import ToolBridge
+
+    async def _invoke(bundle, name, arguments=None):
+        return await ToolBridge(bundle).call(name, arguments or {})
+
+    return _invoke

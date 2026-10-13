@@ -30,6 +30,31 @@ logger = logging.getLogger("unitree_fleet_web.service")
 #: Joystick axes are normalised; the robot applies its own limits on top.
 AXIS_LIMIT = 1.0
 
+#: Tools that call ``Guard.require_motion_enabled`` and so refuse in safe mode.
+#:
+#: Listed rather than inferred because there is no annotation for it — safe
+#: mode is a runtime check inside each tool body (`core/guards.py`), not
+#: something the tool schema carries. If a tool is added or loses its guard,
+#: this list is what has to change, which is why there is a test asserting
+#: every name here is a real control somewhere.
+MOTION_GATED_TOOLS = frozenset(
+    {
+        "robot_stand",
+        "robot_lie_down",
+        "robot_move",
+        "robot_turn",
+        "robot_play_action",
+        "robot_switch_state",
+        "go2_recover",
+        "go2_motion_mode",
+        "go2_obstacle_avoid",
+    }
+)
+
+#: Tools that call ``Guard.require_dangerous_allowed`` and so refuse unless
+#: ``UNITREE_AGENT_ALLOW_DANGEROUS`` is set.
+DANGEROUS_GATED_TOOLS = frozenset({"robot_lie_down"})
+
 #: Ceiling on one robot's telemetry refresh.
 #:
 #: This has to clear `collect_lowstate`'s *own* worst case, because that
@@ -103,12 +128,21 @@ CONSOLE_TOOLS = frozenset(
         "go2_set_led",
         "go2_get_vui",
         "go2_obstacle_avoid",
+        "go2_lidar",
+        "go2_recover",
         "go2_set_volume",
         "go2_set_brightness",
         "go2_get_state",
         # safety
         "robot_stop",
         "robot_stop_all",
+        # Bounded, self-terminating movement. Deliberately allowed alongside
+        # the dead-man teleop rather than instead of it: a nudge carries its
+        # own duration and stops on its own, so it is the *safer* of the two
+        # ways to move a robot — there is no key to release and nothing that
+        # can be left held down.
+        "robot_move",
+        "robot_turn",
     }
 )
 
@@ -452,6 +486,72 @@ class ConsoleService:
         self._telemetry[robot_id] = snapshot
         return snapshot
 
+    def flags(self, robot_id: str) -> Dict[str, Any]:
+        """What the robot says it is currently set to.
+
+        Derived here rather than in the browser on purpose: the mapping from a
+        tool's return shape to a switch value is model knowledge, and putting
+        it in the frontend would mean one formatter per tool per model. The
+        UI gets flat keys and renders chips.
+
+        Sourced from the telemetry snapshot, which the slow sampler already
+        reads — so this costs no extra robot I/O on the status path.
+        """
+        snapshot = self._telemetry.get(robot_id) or {}
+        aggregate = snapshot.get("aggregate_state") or {}
+        sport = snapshot.get("sport_state") or {}
+
+        out: Dict[str, Any] = {}
+        for key, value in (
+            ("brightness", aggregate.get("brightness")),
+            ("volume", aggregate.get("volume")),
+            ("obstacle_avoid", aggregate.get("obstaclesAvoidSwitch")),
+            ("motion_mode", sport.get("mode")),
+        ):
+            if value is not None:
+                out[key] = value
+        return out
+
+    def controls_payload(self, robot_id: str) -> Dict[str, Any]:
+        """The control descriptors this robot can actually honour.
+
+        Safe mode does not unregister movement tools — it refuses them when
+        called. So a panel that simply listed the registered tools would offer
+        buttons that can only fail. Controls whose tool is motion-gated are
+        marked ``blocked`` instead, and the UI greys them out: hiding them
+        would misrepresent what the robot can do once safe mode is off.
+        """
+        runtime = self.fleet.get(robot_id)
+        model = getattr(runtime.config, "robot", "") or ""
+        try:
+            from .controls import controls_for
+
+            controls = controls_for(model, self.tools_available)
+        except Exception as exc:  # noqa: BLE001 - a missing panel beats a dead page
+            logger.warning("controls(%s) unavailable: %r", robot_id, exc)
+            controls = []
+
+        safe = bool(getattr(runtime.config, "safe_mode", False))
+        if safe:
+            for control in controls:
+                if control["tool"] in MOTION_GATED_TOOLS:
+                    control["blocked"] = "安全模式已开启"
+                elif not control.get("read") and control["tool"] in DANGEROUS_GATED_TOOLS:
+                    control["blocked"] = "需要 UNITREE_AGENT_ALLOW_DANGEROUS"
+
+        groups: List[str] = []
+        for control in controls:
+            if control["group"] not in groups:
+                groups.append(control["group"])
+        return {
+            "robot_id": robot_id,
+            "model": model,
+            "groups": groups,
+            "controls": controls,
+            "flags": self.flags(robot_id),
+            "safe_mode": safe,
+        }
+
     def telemetry_health(self, robot_id: str) -> Dict[str, Any]:
         """Whether the panels have real data, and why not if they do not."""
         try:
@@ -579,6 +679,7 @@ class ConsoleService:
         return {
             "robots": await self.fleet.status_all(live=live),
             "telemetry": dict(self._telemetry),
+            "flags": {rid: self.flags(rid) for rid in self.fleet.ids},
             "telemetry_health": {
                 rid: self.telemetry_health(rid) for rid in self.fleet.ids
             },

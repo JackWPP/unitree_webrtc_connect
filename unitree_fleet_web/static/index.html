@@ -69,6 +69,12 @@
       <div><dt>目标</dt><dd data-role="target">—</dd></div>
     </dl>
 
+    <!-- Live settings the robot reports about itself: motion mode, obstacle
+         avoidance, brightness, volume. Read-only mirror of what the controls
+         below have actually set — a toggle that flips locally but is rejected
+         by the robot would otherwise look like it worked. -->
+    <div class="flags" data-role="flags"></div>
+
     <div class="faults" data-role="faults-wrap">
       <div class="faults-head">
         <span>故障</span>
@@ -96,9 +102,11 @@
       <button class="btn" data-role="video-toggle">关闭画面</button>
     </div>
 
-    <!-- Populated from /api/console/tools, so a robot that cannot do
-         something is never offered a button for it. -->
-    <div class="posture" data-role="posture"></div>
+    <!-- Every group below is rendered from /api/console/controls, which is
+         derived from the tools this robot actually registered. A capability
+         the model lacks never gets a button, so the panel cannot offer
+         something that will only fail. -->
+    <div class="controls" data-role="controls"></div>
 
     <details class="audit" data-role="audit-wrap">
       <summary>最近操作 <span class="muted" data-role="audit-count"></span></summary>

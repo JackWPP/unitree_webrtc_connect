@@ -351,8 +351,16 @@ def test_the_console_exposes_an_allowlist_not_a_passthrough(open_client):
     assert "robot_status" in tools
     for forbidden in ("robot_fetch_key", "robot_auth_status", "robot_doctor",
                       "robot_discover", "robot_audit_tail", "robot_snapshot",
-                      "robot_move", "robot_joystick", "robot_turn"):
+                      "robot_joystick"):
         assert forbidden not in tools, f"{forbidden} must not be console-reachable"
+
+    # `robot_move` / `robot_turn` *are* allowed, and that is a deliberate
+    # reversal. They were excluded on the reasoning that the console drives by
+    # joystick; but a bounded move carries its own duration and stops on its
+    # own, so it is the safer of the two — there is no key to release and
+    # nothing that can be left held down. The dead-man still governs teleop.
+    for allowed in ("robot_move", "robot_turn"):
+        assert allowed in tools, f"{allowed} should be console-reachable"
 
 
 def test_an_off_allowlist_tool_is_refused(open_client):
@@ -677,3 +685,87 @@ def test_the_console_js_surfaces_a_telemetry_failure(open_client):
     source = open_client.get("/static/console.js").text
     assert "telemetryHealth" in source
     assert "health.error" in source
+
+
+# ─── the control panel ────────────────────────────────────────────────
+
+
+def test_the_controls_endpoint_lists_what_this_robot_can_do(open_client):
+    """The panel used to render controls for 4 of the 22 tools it exposed. The
+    rest were reachable only by curl."""
+    payload = open_client.get("/api/console/controls?robot_id=dog1").json()
+
+    assert payload["robot_id"] == "dog1"
+    assert payload["model"] == "Go2"
+    assert payload["controls"], "no controls for a Go2 console"
+    assert payload["groups"] == [c["group"] for c in payload["controls"]][:0] or payload["groups"]
+
+    tools = {c["tool"] for c in payload["controls"]}
+    # The capabilities that had a backend and no UI.
+    for tool in ("go2_obstacle_avoid", "go2_lidar", "go2_motion_mode",
+                 "go2_set_led", "go2_set_brightness", "go2_set_volume",
+                 "robot_play_action", "go2_recover"):
+        assert tool in tools, f"{tool} has no control"
+
+
+def test_every_control_names_a_tool_that_is_actually_available(open_client):
+    """Capability gating is the whole point: a control whose tool is not
+    registered must not be offered, or the panel promises what it cannot do."""
+    listed = set(open_client.get("/api/console/tools").json()["tools"])
+    controls = open_client.get("/api/console/controls?robot_id=dog1").json()["controls"]
+
+    for control in controls:
+        assert control["tool"] in listed, control["tool"]
+
+
+def test_the_controls_endpoint_covers_every_robot_without_asking(open_client):
+    payload = open_client.get("/api/console/controls").json()
+    assert set(payload["robots"]) == {"dog1", "dog2"}
+
+
+def test_an_unknown_robot_is_a_404_not_an_empty_panel(open_client):
+    assert open_client.get("/api/console/controls?robot_id=dog9").status_code == 404
+
+
+def test_the_controls_endpoint_is_authenticated(locked_client):
+    assert locked_client.get("/api/console/controls?robot_id=dog1").status_code == 401
+
+
+def test_safe_mode_blocks_motion_controls_instead_of_hiding_them(open_client):
+    """Safe mode does not unregister movement tools — it refuses them at call
+    time. Hiding the buttons would misrepresent what the robot can do once
+    safe mode is off, so they are marked blocked and the UI greys them out."""
+    service = _service_of(open_client)
+    runtime = service.fleet.get("dog1")
+    runtime.config.safe_mode = True
+    try:
+        controls = open_client.get("/api/console/controls?robot_id=dog1").json()["controls"]
+    finally:
+        runtime.config.safe_mode = False
+
+    blocked = {c["tool"] for c in controls if c.get("blocked")}
+    assert "robot_stand" in blocked
+    assert "go2_recover" in blocked
+    # Reads and GENTLE settings are not motion-gated; blocking them would be
+    # as wrong as hiding the others.
+    assert "go2_get_state" not in blocked
+    assert "go2_set_volume" not in blocked
+
+    assert not any(c.get("blocked") for c in open_client.get(
+        "/api/console/controls?robot_id=dog1").json()["controls"])
+
+
+def test_every_motion_gated_tool_named_in_the_service_is_real(open_client):
+    """That list is hand-maintained because safe mode is a runtime check with
+    no schema annotation. If a tool is renamed, blocking would silently stop
+    working — so every name in it has to be a real registered tool."""
+    from unitree_fleet_web.service import DANGEROUS_GATED_TOOLS, MOTION_GATED_TOOLS
+
+    # Against the allowlist, not the registered set: the allowlist is
+    # model-agnostic, and R1-only tools (robot_switch_state) are legitimately
+    # absent from a Go2 console.
+    from unitree_fleet_web.service import CONSOLE_TOOLS
+
+    assert MOTION_GATED_TOOLS, "the motion-gated list is empty"
+    for tool in MOTION_GATED_TOOLS | DANGEROUS_GATED_TOOLS:
+        assert tool in CONSOLE_TOOLS, f"{tool} is not in the console allowlist"

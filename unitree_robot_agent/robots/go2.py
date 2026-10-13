@@ -192,6 +192,28 @@ class Go2Profile(RobotProfile):
     def stand_command(self) -> tuple:
         return (RTC_TOPIC["SPORT_MOD"], SPORT_CMD["BalanceStand"], None)
 
+    #: Ways back onto the feet, and why they are not the same command.
+    #:
+    #: `BalanceStand` — what `robot_stand` sends — asks a robot that is already
+    #: upright to hold its balance. On a Go2 lying on its side or its back it
+    #: does nothing useful; the firmware needs `RecoveryStand` to roll up, and
+    #: `StandUp` to rise from a crouch. Both ids sat in `SPORT_CMD` and in
+    #: `_DEDICATED` from the start, and `_DEDICATED` is exactly what excludes a
+    #: command from the action catalog — so **no tool could send either one**,
+    #: and a fallen dog had no way up through the MCP surface at all.
+    RECOVER_MODES = {
+        "stand_up": SPORT_CMD["StandUp"],
+        "recovery_stand": SPORT_CMD["RecoveryStand"],
+    }
+
+    def recover_command(self, mode: str) -> tuple:
+        """``(topic, api_id, parameter)`` for one recovery mode.
+
+        Raises ``KeyError`` for an unknown mode; the tool turns that into a
+        refusal rather than sending a guess to a real robot.
+        """
+        return (RTC_TOPIC["SPORT_MOD"], self.RECOVER_MODES[mode], None)
+
     def lie_command(self) -> tuple:
         return (RTC_TOPIC["SPORT_MOD"], SPORT_CMD["StandDown"], None)
 

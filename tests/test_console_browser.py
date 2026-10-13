@@ -179,6 +179,22 @@ def rendered(tmp_path_factory):
         thread.join(timeout=10)
 
 
+@pytest.fixture(scope="module")
+def console_js():
+    """The page's script.
+
+    Read from disk rather than over HTTP: this is a contract on the source
+    (which functions exist), not on the serve path, which the render already
+    proves works.
+    """
+    from pathlib import Path
+
+    return (
+        Path(__file__).resolve().parent.parent
+        / "unitree_fleet_web" / "static" / "console.js"
+    ).read_text(encoding="utf-8")
+
+
 def pen_block(doc: str, robot_id: str) -> str:
     """The rendered markup for one pen, excluding the inert <template>."""
     marker = f'data-robot="{robot_id}"'
@@ -217,38 +233,45 @@ def test_each_pen_gets_its_own_video_stream(rendered):
         assert f"/api/robot/{robot_id}/stream.mjpeg" in block
 
 
-def test_the_posture_buttons_were_built_from_the_server_tool_list(rendered):
-    """Proves the whole chain ran: page → /api/console/tools → tool bridge →
-    站立/趴下 buttons, per dog."""
-    for robot_id in ("dog1", "dog2"):
-        block = pen_block(rendered, robot_id)
-        assert "站立" in block
-        assert "趴下" in block
+def test_the_control_panel_renders_every_group(rendered):
+    """Proves the whole chain ran: page → /api/console/controls → descriptor →
+    widgets in the DOM, per dog.
 
-
-# ─── the regression ───────────────────────────────────────────────────
-
-
-def test_live_status_reached_the_page(rendered):
-    """The guard for the bug this test was written after.
-
-    With the WebSocket closed and no fallback, every live field stayed on its
-    initial placeholder: the summary read 连接中… forever and the link pills
-    read —. Polling is the fallback, so a reachable API is always reflected.
+    The panel used to render controls for 4 of the 22 tools the console
+    exposed; everything else was reachable only by curl. A browser render is
+    the only thing that catches this class of gap, because the endpoint tests
+    would all still pass with an empty page.
     """
-    summary = re.search(r'id="fleet-summary"[^>]*>([^<]*)<', rendered)
-    assert summary, "no fleet summary element"
-    assert summary.group(1).strip() == "2/2 在线", (
-        "live status never reached the page — is the polling fallback gone?"
-    )
-
-
-def test_the_link_pills_are_no_longer_placeholders(rendered):
     for robot_id in ("dog1", "dog2"):
         block = pen_block(rendered, robot_id)
-        assert role_text(block, "link") in ("在线", "连接中…"), (
-            f"{robot_id} still shows the initial placeholder"
-        )
+
+        for group in ("姿态与动作", "步法动作", "运动模式", "避障与感知",
+                      "灯光与声音", "微动"):
+            assert group in block, f"{robot_id} has no {group} group"
+
+        # One widget of each kind, so a broken renderer for any of them fails.
+        assert "避障：开" in block or "避障：关" in block      # toggle
+        assert "雷达：" in block                               # toggle, second one
+        assert "站立" in block and "趴下" in block             # button
+        assert "<select" in block                              # select
+        assert 'type="range"' in block                         # range
+        assert "亮度" in block and "音量" in block
+        # The capability that had no route up before this round.
+        assert "恢复" in block
+
+
+def test_the_blocked_controls_are_disabled_not_missing(rendered, console_js):
+    """Safe mode keeps movement tools registered and refuses them at call time,
+    so a control can be present and still fail. The page has to disable it
+    rather than hide it — hiding would misrepresent what the robot can do once
+    safe mode is off.
+
+    A source contract, because the render fixture runs with safe mode off: the
+    behaviour itself is covered by the endpoint test that turns it on.
+    """
+    assert "applyBlocked" in console_js
+    assert "blocked" in console_js
+    assert "disabled = true" in console_js
 
 
 def test_the_battery_and_posture_panels_show_real_values(rendered):

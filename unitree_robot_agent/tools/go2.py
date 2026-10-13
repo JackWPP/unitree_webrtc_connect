@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 from mcp.types import ToolAnnotations
 
-from ..errors import FeatureUnavailable
+from ..errors import AgentError, FeatureUnavailable
 from ..robots.base import CAP_LIDAR, CAP_MOTION_SWITCHER, CAP_OBSTACLE_AVOID, CAP_VUI
 from ..robots.go2 import MOTION_MODES
 from .context import ToolContext, run_tool
@@ -267,6 +267,49 @@ def register(server, ctx: ToolContext) -> None:
             )
 
         return await run_tool(ctx, "go2_get_state", {}, _impl)
+
+    @server.tool(
+        name="go2_recover",
+        description=(
+            "Get a Go2 back onto its feet. Two modes, and they are not "
+            "interchangeable: `recovery_stand` (RecoveryStand 1006) is the one "
+            "that works when the robot is lying on its side or its back and "
+            "needs to roll up; `stand_up` (StandUp 1004) rises from a crouch. "
+            "This is NOT the same as robot_stand, which sends BalanceStand and "
+            "only holds a robot that is already upright. Use this after a fall "
+            "or a damp."
+        ),
+        annotations=MOTION,
+    )
+    async def go2_recover(
+        mode: str = "stand_up", confirm: bool = False, robot_id: str = ""
+    ) -> Dict[str, Any]:
+        args = {"mode": mode, "confirm": confirm}
+
+        async def _impl():
+            modes = sorted(type(ctx.profile).RECOVER_MODES)
+            if mode not in modes:
+                raise AgentError(
+                    f"Unknown recovery mode {mode!r}.",
+                    code="unknown_mode",
+                    hint=f"Use one of: {', '.join(modes)}.",
+                )
+            ctx.session.guard.require_motion_enabled("go2_recover")
+            ctx.session.guard.require_confirm(confirm, "go2_recover")
+            await ctx.session.ensure_connected()
+
+            topic, api_id, parameter = ctx.profile.recover_command(mode)
+            response = await ctx.session.call(topic, api_id, parameter)
+            if not response.ok:
+                raise ctx.session.refusal(
+                    response, api_id=api_id, topic=topic, action="go2_recover"
+                )
+            # The firmware takes a moment to complete the roll; the same 1 s
+            # `robot_stand` waits, so a read straight afterwards is not stale.
+            await asyncio.sleep(1.0)
+            return await ctx.result_of(response, action="recover", mode=mode)
+
+        return await run_tool(ctx, "go2_recover", args, _impl)
 
     if ctx.profile.has(CAP_LIDAR):
 

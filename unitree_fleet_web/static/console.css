@@ -198,12 +198,84 @@ select {
 .pill.bad { color: #ffb4b4; border-color: var(--danger); }
 .pen.has-faults { border-color: #6b2b2b; }
 
-/* ── posture / actions ────────────────────────────────────────────── */
+/* ── live flags (what the robot says it is set to) ────────────────── */
 
-.posture { display: flex; flex-wrap: wrap; gap: 6px; }
-.posture:empty { display: none; }
-.posture .btn { padding: 6px 10px; font-size: 13px; }
-.posture select { padding: 6px 8px; font-size: 13px; max-width: 100%; }
+.flags { display: flex; flex-wrap: wrap; gap: 6px; }
+.flags:empty { display: none; }
+.flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--panel-2);
+}
+.flag.on { color: var(--ok); border-color: #1f5c43; }
+.flag b { color: var(--fg); font-weight: 600; }
+
+/* ── controls ─────────────────────────────────────────────────────── */
+
+.controls { display: flex; flex-direction: column; gap: 2px; }
+.controls:empty { display: none; }
+
+.ctl-group { border-top: 1px solid var(--line); }
+.ctl-group > summary {
+  cursor: pointer;
+  padding: 7px 2px;
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.ctl-group > summary:hover { color: var(--fg); }
+.ctl-group[open] > summary { color: var(--fg); }
+.ctl-group > summary .count { color: var(--muted); font-size: 11px; }
+.ctl-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 10px;
+}
+.ctl-body .btn { padding: 6px 10px; font-size: 13px; }
+
+/* A range control carries its own label and value so a slider that has not
+   been moved still says what it is currently set to. */
+.ctl-range { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.ctl-range > span { color: var(--muted); min-width: 28px; }
+.ctl-range input[type=range] { width: 104px; accent-color: var(--accent); }
+.ctl-range output { min-width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.ctl-select { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.ctl-select > span { color: var(--muted); }
+.controls select {
+  padding: 6px 8px;
+  font-size: 13px;
+  max-width: 100%;
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+/* Off is the resting state of a toggle; on has to be visible at a glance. */
+.btn.toggle-on { background: #16412f; border-color: #1f5c43; color: var(--ok); }
+
+.ctl-read {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 6px 9px;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 /* ── pad ──────────────────────────────────────────────────────────── */
 
@@ -258,3 +330,11 @@ select {
 .audit-list .when { color: var(--muted); white-space: nowrap; }
 .audit-list .what { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .audit-list .what.bad { color: #ffb4b4; }
+
+/* Blocked by safe mode or the dangerous gate. Disabled rather than hidden:
+   safe mode can be turned off, and a capability that vanishes looks like one
+   that never existed. */
+.btn.blocked, .controls select:disabled, .ctl-range input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

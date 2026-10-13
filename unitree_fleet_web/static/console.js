@@ -44,6 +44,10 @@ const state = {
   held: new Set(),        // physical keys currently down
   sticky: {},             // robot_id -> {axis: bool} from on-screen pad
   lastZeroSent: 0,
+  // Grouped control descriptors per robot, from /api/console/controls.
+  controls: {},
+  // Live values the robot reports, so a widget starts from reality.
+  flags: {},
 };
 
 /* ── transport ─────────────────────────────────────────────────────── */
@@ -135,8 +139,9 @@ function buildPens(fleet) {
       keys: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="keys"]`),
       faults: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="faults"]`),
       faultCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="fault-count"]`),
-      posture: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="posture"]`),
       linkToggle: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="link-toggle"]`),
+      controls: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="controls"]`),
+      flags: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="flags"]`),
       auditWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-wrap"]`),
       audit: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit"]`),
       auditCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-count"]`),
@@ -398,6 +403,7 @@ function renderStatus(payload) {
     entry.pen.classList.toggle('focused', robot.robot_id === state.focused);
     entry.pen.classList.toggle('driving', state.driving ? state.driving.has(robot.robot_id) : false);
     renderVideoHealth(robot.robot_id);
+    renderFlags(robot.robot_id);
     renderFaults(robot.robot_id, robot);
   }
 
@@ -406,6 +412,7 @@ function renderStatus(payload) {
   // Named `videoHealth` rather than `video`: `focusMap[id].video` is the
   // <img> element, and two things called video would invite a mix-up.
   state.videoHealth = payload.video || {};
+  state.flags = payload.flags || state.flags || {};
   state.telemetryHealth = payload.telemetry_health || {};
   document.getElementById('fleet-summary').textContent =
     `${online}/${payload.robots.length} 在线`;
@@ -523,8 +530,6 @@ async function setMode(mode) {
   } catch (err) { toast('切换模式失败: ' + err.message, 'bad'); }
 }
 
-/* ── posture / actions ─────────────────────────────────────────────── */
-
 /* Every button below calls the SAME guarded tool function the MCP server
  * exposes, through /api/robot/<id>/tool. That means the `confirm` gate, the
  * dangerous-action gate, safe mode, the rate limiter and the audit trail all
@@ -557,64 +562,313 @@ async function callTool(robotId, tool, args) {
   }
 }
 
-function postureButton(robotId, label, tool, args) {
+/* ── the control panel ─────────────────────────────────────────────── */
+
+/* Group headings. The descriptor's group ids are stable; the labels live here
+   because they are presentation. An unknown group falls back to its id rather
+   than disappearing, so adding a group server-side shows up immediately. */
+const GROUP_LABELS = {
+  posture: '姿态与动作',
+  // Not "步态": there is no gait tool, and these are one-shot moves. Calling
+  // the group 步态 would promise a persistent gait switch that does not exist.
+  gait: '步法动作',
+  motion: '运动模式',
+  safety_net: '避障与感知',
+  lighting: '灯光与声音',
+  media: '画面',
+  motion_nudge: '微动',
+};
+
+/* A control is rendered from its `kind`, so the frontend never hardcodes a
+   widget per tool — adding a control server-side is enough. */
+function controlWidget(robotId, control) {
+  // `read` is independent of `kind`: a reader can be a button (fetch and show)
+  // or a toggle that only reports. Checked first so a reader never renders as
+  // a plain button that appears to do nothing.
+  let widget;
+  if (control.read) {
+    widget = readWidget(robotId, control);
+  } else {
+    switch (control.kind) {
+      case 'toggle': widget = toggleWidget(robotId, control); break;
+      case 'select': widget = selectWidget(robotId, control); break;
+      case 'range': widget = rangeWidget(robotId, control); break;
+      default: widget = buttonWidget(robotId, control);
+    }
+  }
+  return applyBlocked(widget, control);
+}
+
+function baseArgs(control, extra) {
+  return Object.assign({}, control.args || {}, extra || {});
+}
+
+/* A control the server marked blocked is disabled, not hidden: safe mode can
+ * be turned off, and a capability that vanishes looks like one that does not
+ * exist. */
+function applyBlocked(widget, control) {
+  if (!control.blocked) return widget;
+  widget.disabled = true;
+  widget.classList.add('blocked');
+  widget.title = `${control.title || control.label} —— ${control.blocked}`;
+  return widget;
+}
+
+function buttonWidget(robotId, control) {
   const button = document.createElement('button');
   button.className = 'btn';
-  button.textContent = label;
-  button.addEventListener('click', () => callTool(robotId, tool, args));
+  button.textContent = control.label;
+  if (control.title) button.title = control.title;
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      await callTool(robotId, control.tool, baseArgs(control));
+    } finally {
+      button.disabled = false;
+    }
+  });
   return button;
 }
 
-async function buildPosture(robotId, available) {
-  const entry = state.focusMap[robotId];
-  if (!entry || !entry.posture) return;
-  entry.posture.textContent = '';
+function toggleWidget(robotId, control) {
+  const button = document.createElement('button');
+  button.className = 'btn';
+  button.textContent = control.label;
+  if (control.title) button.title = control.title;
+  // Start from what the robot reports, not from an assumption: a toggle that
+  // flips locally but is refused would otherwise look like it worked.
+  const current = (state.flags[robotId] || {})[control.id];
+  button.dataset.on = current ? '1' : '0';
+  paintToggle(button, control, button.dataset.on === '1');
 
-  if (available.includes('robot_stand')) {
-    entry.posture.appendChild(
-      postureButton(robotId, '站立', 'robot_stand', { confirm: true }));
-  }
-  if (available.includes('robot_lie_down')) {
-    entry.posture.appendChild(
-      postureButton(robotId, '趴下', 'robot_lie_down', { confirm: true }));
-  }
+  button.addEventListener('click', async () => {
+    const next = button.dataset.on !== '1';
+    button.disabled = true;
+    try {
+      const result = await callTool(robotId, control.tool,
+        baseArgs(control, { [control.arg_name]: next ? control.on_value : control.off_value }));
+      // Only believe it if the call succeeded; a refusal must not leave the
+      // button showing a state the robot is not in.
+      if (result !== null && result !== undefined) {
+        button.dataset.on = next ? '1' : '0';
+        paintToggle(button, control, next);
+      }
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return button;
+}
 
-  if (!available.includes('robot_play_action')) {
-    if (!entry.posture.childElementCount) entry.posture.classList.add('hidden');
-    return;
-  }
+function paintToggle(button, control, on) {
+  button.classList.toggle('toggle-on', on);
+  button.textContent = on ? `${control.label}：开` : `${control.label}：关`;
+}
 
-  // Ask the robot what it can actually do rather than hard-coding a list.
-  let actions = [];
-  try {
-    const listed = await api(`/api/robot/${encodeURIComponent(robotId)}/tool`, {
-      method: 'POST',
-      body: JSON.stringify({ tool: 'robot_list_actions', args: { include_dangerous: false } }),
-    });
-    actions = (listed && listed.actions) || [];
-  } catch (_) { /* leave the picker empty */ }
-
-  if (!actions.length) return;
+function selectWidget(robotId, control) {
+  const wrap = document.createElement('label');
+  wrap.className = 'ctl-select';
+  const caption = document.createElement('span');
+  caption.textContent = control.title || control.label;
+  wrap.appendChild(caption);
 
   const picker = document.createElement('select');
+  if (control.title) picker.title = control.title;
   const placeholder = document.createElement('option');
   placeholder.value = '';
-  placeholder.textContent = '选择动作…';
+  placeholder.textContent = control.label;
   picker.appendChild(placeholder);
 
-  for (const action of actions) {
-    const option = document.createElement('option');
-    option.value = action.name;
-    option.textContent = action.name;
-    picker.appendChild(option);
+  const fill = (options) => {
+    for (const option of options) {
+      const element = document.createElement('option');
+      element.value = typeof option.value === 'string' ? option.value : JSON.stringify(option.value);
+      element.textContent = option.label;
+      picker.appendChild(element);
+    }
+  };
+  fill(control.options || []);
+
+  // Some lists only the robot knows — the actions a particular Go2 firmware
+  // supports, for instance. Asking beats hardcoding a catalogue that would go
+  // stale on the next firmware.
+  if (control.options_from) {
+    const source = control.options_from;
+    const arg = control.options_arg || 'name';
+    api(`/api/robot/${encodeURIComponent(robotId)}/tool`, {
+      method: 'POST',
+      body: JSON.stringify({ tool: source, args: { include_dangerous: false } }),
+    }).then((listed) => {
+      const items = (listed && listed.actions) || [];
+      if (!items.length) return;
+      fill(items.map((item) => ({
+        value: item[arg] !== undefined ? item[arg] : item.name,
+        label: item.label || item.name,
+      })));
+      picker.disabled = false;
+    }).catch(() => { /* leave the picker empty rather than wrong */ });
+    picker.disabled = true;
   }
   picker.addEventListener('change', () => {
-    const name = picker.value;
+    const raw = picker.value;
     picker.value = '';
-    if (name) callTool(robotId, 'robot_play_action', { name, confirm: true });
+    if (!raw) return;
+    let value = raw;
+    try { value = JSON.parse(raw); } catch (_) { /* a plain string */ }
+    callTool(robotId, control.tool, baseArgs(control, { [control.arg_name || 'value']: value }));
   });
-  entry.posture.appendChild(picker);
+  wrap.appendChild(picker);
+  return wrap;
 }
+
+function rangeWidget(robotId, control) {
+  const wrap = document.createElement('label');
+  wrap.className = 'ctl-range';
+  const caption = document.createElement('span');
+  caption.textContent = control.label;
+  if (control.title) caption.title = control.title;
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = control.min;
+  slider.max = control.max;
+  slider.step = control.step || 1;
+  const current = (state.flags[robotId] || {})[control.id];
+  slider.value = typeof current === 'number' ? current : control.min;
+
+  const readout = document.createElement('output');
+  readout.textContent = slider.value;
+  slider.addEventListener('input', () => { readout.textContent = slider.value; });
+  // `change`, not `input`: a slider drag would otherwise send a command per
+  // pixel, and each one is a real robot command.
+  slider.addEventListener('change', () => {
+    callTool(robotId, control.tool,
+      baseArgs(control, { [control.arg_name]: Number(slider.value) }));
+  });
+
+  wrap.appendChild(caption);
+  wrap.appendChild(slider);
+  wrap.appendChild(readout);
+  return wrap;
+}
+
+function readWidget(robotId, control) {
+  const box = document.createElement('button');
+  box.className = 'ctl-read';
+  box.textContent = control.label;
+  if (control.title) box.title = control.title;
+  box.addEventListener('click', async () => {
+    const result = await callTool(robotId, control.tool, baseArgs(control));
+    if (result) box.textContent = summariseRead(result, control.label);
+  });
+  return box;
+}
+
+/* One line of whatever came back, without assuming which fields a tool
+   returns — the tools differ per model and would otherwise need a formatter
+   per tool in the frontend. */
+function summariseRead(result, fallback) {
+  if (typeof result !== 'object' || result === null) return String(result);
+  const skip = new Set(['ok', 'robot', 'robot_id', 'note', 'hint', 'code']);
+  const parts = [];
+  for (const [key, value] of Object.entries(result)) {
+    if (skip.has(key) || value === null || value === undefined) continue;
+    if (typeof value === 'object') continue;
+    parts.push(`${key}=${value}`);
+    if (parts.length >= 6) break;
+  }
+  return parts.length ? parts.join('  ') : (result.note || fallback);
+}
+
+function renderControls(robotId) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.controls) return;
+  const spec = state.controls[robotId];
+  entry.controls.textContent = '';
+  if (!spec || !spec.groups || !spec.groups.length) {
+    entry.controls.classList.add('hidden');
+    return;
+  }
+  entry.controls.classList.remove('hidden');
+
+  const byGroup = new Map();
+  for (const control of spec.controls || []) {
+    if (!byGroup.has(control.group)) byGroup.set(control.group, []);
+    byGroup.get(control.group).push(control);
+  }
+
+  for (const group of spec.groups) {
+    const items = byGroup.get(group);
+    if (!items || !items.length) continue;
+
+    const section = document.createElement('details');
+    section.className = 'ctl-group';
+    // Open the posture group by default: it is what an operator reaches for,
+    // and a panel of seven collapsed rows helps nobody.
+    section.open = group === 'posture';
+
+    const summary = document.createElement('summary');
+    summary.textContent = GROUP_LABELS[group] || group;
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent = `${items.length}`;
+    summary.appendChild(count);
+    section.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'ctl-body';
+    for (const control of items) body.appendChild(controlWidget(robotId, control));
+    section.appendChild(body);
+    entry.controls.appendChild(section);
+  }
+}
+
+/* ── loading the panel ─────────────────────────────────────────────── */
+
+async function loadControls(robotId) {
+  try {
+    const spec = await api(`/api/console/controls?robot_id=${encodeURIComponent(robotId)}`);
+    state.controls[robotId] = spec || { groups: [], controls: [] };
+    if (spec && spec.flags) state.flags[robotId] = spec.flags;
+  } catch (_) {
+    // A console with no tool bridge still shows video and telemetry.
+    state.controls[robotId] = { groups: [], controls: [] };
+  }
+  renderControls(robotId);
+  renderFlags(robotId);
+}
+
+/* ── live flags ────────────────────────────────────────────────────── */
+
+/* What the robot says about itself. Populated from the read controls and from
+   status, so a setting changed elsewhere is still visible here. */
+const FLAG_ORDER = ['motion_mode', 'obstacle_avoid', 'brightness', 'volume', 'led'];
+
+function renderFlags(robotId) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.flags) return;
+  const values = state.flags[robotId] || {};
+  entry.flags.textContent = '';
+
+  const shown = FLAG_ORDER.filter((key) => values[key] !== undefined && values[key] !== null);
+  for (const key of shown) {
+    const chip = document.createElement('span');
+    chip.className = 'flag' + (values[key] === true || (typeof values[key] === 'number' && values[key] > 0) ? ' on' : '');
+    const label = document.createElement('span');
+    label.textContent = FLAG_LABELS[key] || key;
+    const value = document.createElement('b');
+    value.textContent = typeof values[key] === 'boolean'
+      ? (values[key] ? '开' : '关') : String(values[key]);
+    chip.appendChild(label);
+    chip.appendChild(value);
+    entry.flags.appendChild(chip);
+  }
+}
+
+const FLAG_LABELS = {
+  motion_mode: '模式', obstacle_avoid: '避障', brightness: '亮度',
+  volume: '音量', led: '灯光', lidar: '雷达',
+};
 
 function groupFor(robotId) {
   if (state.mode !== 'split') return null;
@@ -858,14 +1112,10 @@ async function boot() {
 
     // Only offer operations this robot registered — capability gating happens
     // server-side, so an R1 never gets a Go2 LED button.
-    let available = [];
     try {
-      available = (await api('/api/console/tools')).tools || [];
+      state.tools = (await api('/api/console/tools')).tools || [];
     } catch (_) { /* read-only console */ }
-    state.tools = available;
-    for (const robot of snapshot.fleet.robots) {
-      buildPosture(robot.robot_id, available);
-    }
+    await Promise.all(snapshot.fleet.robots.map((robot) => loadControls(robot.robot_id)));
   } catch (err) {
     toast('无法读取机队信息: ' + err.message, 'bad');
     return;
