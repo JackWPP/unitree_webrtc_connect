@@ -278,3 +278,103 @@ async def test_the_estop_latch_survives_a_console_reload(service):
     # A fresh status read (what a reloaded page does) must still show it.
     payload = await service.status()
     assert payload["state"]["estop"]["engaged"] is True
+
+
+# ─── handing the link back ────────────────────────────────────────────
+
+
+async def _run_lease(service, seconds: float):
+    """Run the lease loop for a bounded time, then stop it."""
+    await service.start()
+    try:
+        await asyncio.sleep(seconds)
+    finally:
+        for task in (service._lease, service._deadman, service._telemetry_task):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+
+async def test_a_closed_console_hands_the_link_back_promptly(service):
+    """"Take over safely" is the objective's word, and waiting out the 45 s
+    idle timer is not prompt: the owner stands next to the dog wondering
+    whether the app is broken."""
+    service.config.unwatched_release_s = 0.5
+    # Idle release itself is disabled here so the *unwatched* path is what is
+    # being measured, not the session's own timer.
+    for rid in service.fleet.ids:
+        service.fleet.get(rid).config.idle_disconnect_s = 0.0
+    await service.connect("dog1")
+    assert service.fleet.get("dog1").session.is_connected is True
+
+    await _run_lease(service, 2.0)
+
+    assert service.fleet.get("dog1").session.is_connected is False
+    assert "dog1" not in service._telemetry  # noqa: SLF001
+
+
+async def test_a_watched_console_keeps_the_link(service):
+    """The other half: the release must not fire while somebody is looking."""
+    service.config.unwatched_release_s = 0.5
+    for rid in service.fleet.ids:
+        service.fleet.get(rid).config.idle_disconnect_s = 0.0
+    await service.connect("dog1")
+
+    service.client_connected()
+    await _run_lease(service, 2.0)
+
+    assert service.fleet.get("dog1").session.is_connected is True
+
+
+async def test_the_unwatched_release_can_be_disabled(service):
+    """`0` means "fall back to the session's own idle timer"."""
+    service.config.unwatched_release_s = 0
+    for rid in service.fleet.ids:
+        service.fleet.get(rid).config.idle_disconnect_s = 0.0
+    await service.connect("dog1")
+
+    await _run_lease(service, 2.0)
+
+    assert service.fleet.get("dog1").session.is_connected is True
+
+
+async def test_handing_back_stops_the_robot_first(service):
+    """The worst possible hand-back: releasing the link and leaving the dog
+    walking, with the app unable to connect and stop it."""
+    service.config.unwatched_release_s = 0.3
+    for rid in service.fleet.ids:
+        service.fleet.get(rid).config.idle_disconnect_s = 0.0
+    await service.connect("dog1")
+    await service.teleop("dog1", ly=1.0)
+    assert service.state.driven_robots() == {"dog1"}
+
+    stopped: list = []
+    session = service.fleet.get("dog1").session
+    original = session.disconnect
+
+    async def watching_disconnect(*args, **kwargs):
+        stopped.append(kwargs.get("stop_first"))
+        return await original(*args, **kwargs)
+
+    session.disconnect = watching_disconnect  # type: ignore[assignment]
+    await _run_lease(service, 1.5)
+
+    assert stopped == [True], "the hand-back did not ask for a stop first"
+    assert session.is_connected is False
+
+
+async def test_a_refresh_does_not_drop_the_link(service):
+    """The reason the grace period exists at all: a page reload, a blip, or a
+    background tab that stops polling must not cost the operator their link."""
+    service.config.unwatched_release_s = 3.0
+    for rid in service.fleet.ids:
+        service.fleet.get(rid).config.idle_disconnect_s = 0.0
+    await service.connect("dog1")
+
+    service.client_connected()
+    await _run_lease(service, 1.0)   # watched
+    service.client_disconnected()    # the reload
+    await _run_lease(service, 1.5)   # still inside the grace period
+
+    assert service.fleet.get("dog1").session.is_connected is True

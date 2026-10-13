@@ -314,32 +314,87 @@ class ConsoleService:
         self._last_watch_at = time.monotonic()
 
     async def _lease_loop(self) -> None:
-        """Keep connected robots from releasing themselves while watched.
+        """Hold connected robots while watched, and hand them back promptly
+        when nobody is left.
+
+        Two halves of the same idea.
 
         A robot session disconnects after ``idle_disconnect_s`` precisely so
         the owner can take over with the official app. That is right for an
-        agent asking a question; it is wrong for an operator with the console
+        agent asking one question; it is wrong for an operator with the console
         open, where the link dropping mid-session kills the video stream and
-        makes the next command reconnect.
+        makes the next command pay for a fresh handshake. So while a browser is
+        watching, the claim is re-asserted.
 
-        The lease only *prevents release*. It never connects anything: a robot
-        nobody asked for stays disconnected, and when the last browser goes
-        away the sessions release on their own.
+        The other half is what happens when the browser goes away. Waiting out
+        the 45 s idle timer means an owner standing next to the dog waits the
+        better part of a minute to take over by hand — so after
+        ``unwatched_release_s`` the console releases the links itself.
+
+        Neither half ever *connects* anything: a robot nobody asked for stays
+        disconnected.
         """
-        interval = max(1.0, self.config.lease_s)
+        # A fixed one-second tick would quantise a short grace period into
+        # "somewhere in the next second". Half the grace period, capped at a
+        # second, keeps it accurate without spinning.
+        grace = self.config.unwatched_release_s
+        tick = 1.0 if grace <= 0 else min(1.0, max(0.1, grace / 2.0))
+        lease_every = max(1, int(round(self.config.lease_s / tick)))
+        ticks = 0
+        unwatched_since: Optional[float] = None
         while True:
             try:
-                await asyncio.sleep(interval)
-                if not self.watching:
+                await asyncio.sleep(tick)
+                ticks += 1
+
+                if self.watching:
+                    unwatched_since = None
+                    if ticks % lease_every == 0:
+                        for robot_id in self.fleet.ids:
+                            runtime = self.fleet.get(robot_id)
+                            if runtime.session.is_connected:
+                                runtime.session.touch()
                     continue
-                for robot_id in self.fleet.ids:
-                    runtime = self.fleet.get(robot_id)
-                    if runtime.session.is_connected:
-                        runtime.session.touch()
+
+                if self.config.unwatched_release_s <= 0:
+                    continue
+                if unwatched_since is None:
+                    unwatched_since = time.monotonic()
+                    continue
+                if time.monotonic() - unwatched_since >= self.config.unwatched_release_s:
+                    await self._release_unwatched()
+                    unwatched_since = None
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - a lease must not crash
                 logger.warning("lease loop error: %r", exc)
+
+    async def _release_unwatched(self) -> None:
+        """Hand every held link back, stopping each robot on the way out.
+
+        ``stop_first`` is the session's default and is what is wanted here: a
+        dog must not be left travelling because a browser was closed.
+        """
+        released = []
+        for robot_id in self.fleet.ids:
+            runtime = self.fleet.get(robot_id)
+            if not runtime.session.is_connected:
+                continue
+            with contextlib.suppress(Exception):
+                await runtime.session.disconnect(
+                    reason="console_unwatched", stop_first=True
+                )
+                released.append(robot_id)
+        if released:
+            logger.info(
+                "released %s: nothing has been watching for %.0fs, so the "
+                "official app can take over",
+                ", ".join(released),
+                self.config.unwatched_release_s,
+            )
+            # Freshness is meaningless for a link we no longer hold.
+            for robot_id in released:
+                self._telemetry.pop(robot_id, None)
 
     # ── telemetry ────────────────────────────────────────────────────
 
@@ -458,6 +513,7 @@ class ConsoleService:
                 "stream_fps": self.config.stream_fps,
                 "axis_limit": AXIS_LIMIT,
                 "lease_s": self.config.lease_s,
+                "unwatched_release_s": self.config.unwatched_release_s,
             },
             "watching": self._clients,
             "connecting": sorted(self._connecting),

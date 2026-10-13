@@ -48,6 +48,18 @@ DEFAULT_LEASE_S = 5.0
 #: the connection state alone.
 DEFAULT_TELEMETRY_HZ = 1.0
 
+#: How long after the last browser goes away the console hands its links back.
+#:
+#: Without this the links wait out the session's own `idle_disconnect_s` (45 s)
+#: plus a lease tick, so an owner standing next to a dog waits the better part
+#: of a minute for the official app to get in — the opposite of "take over
+#: safely". A closed tab is not a session anyone is coming back to.
+#:
+#: Not zero on purpose: a page refresh, a brief network blip or a background
+#: tab that stops polling must not drop a link the operator is still using.
+#: `0` disables it and falls back to plain idle release.
+DEFAULT_UNWATCHED_RELEASE_S = 10.0
+
 
 def _env(name: str) -> Optional[str]:
     raw = os.environ.get(name)
@@ -74,6 +86,9 @@ class ConsoleConfig:
     lease_s: float = DEFAULT_LEASE_S
     #: Battery/IMU/gait refresh rate. See DEFAULT_TELEMETRY_HZ.
     telemetry_hz: float = DEFAULT_TELEMETRY_HZ
+    #: Hand the links back this long after the last browser leaves. See
+    #: DEFAULT_UNWATCHED_RELEASE_S.
+    unwatched_release_s: float = DEFAULT_UNWATCHED_RELEASE_S
     #: Serve the built-in single-page console.
     serve_ui: bool = True
     #: Whether fetching a video frame may bring a robot up.
