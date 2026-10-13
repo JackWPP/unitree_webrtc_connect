@@ -308,20 +308,65 @@ function renderStick(robotId, axes) {
   }
 }
 
+/* The key legend, written as keycaps rather than prose.
+ *
+ * "WASD 前进/平移 · QE 转向" wrapped to three lines in a 118 px column and
+ * buried the two things that matter — which keys, and which axis. The keycaps
+ * are the first thing the eye lands on, and the mode is one short line under
+ * them.
+ *
+ * Built as elements rather than `innerHTML`: the text is ours, but a console
+ * that assembles markup from strings is one edit away from doing it with
+ * something that is not. */
+function keycapLegend(keys, description) {
+  const wrap = document.createDocumentFragment();
+  for (const key of keys) {
+    const cap = document.createElement('kbd');
+    cap.textContent = key;
+    wrap.appendChild(cap);
+    wrap.appendChild(document.createTextNode(' '));
+  }
+  const note = document.createElement('span');
+  note.className = 'hint-note';
+  note.textContent = description;
+  wrap.appendChild(note);
+  return wrap;
+}
+
+const KEY_LEGENDS = {
+  focus: [['W', 'A', 'S', 'D'], '平移'],
+  both: [['W', 'A', 'S', 'D'], '同时驱动所有已选狗'],
+  split_a: [['W', 'A', 'S', 'D'], '平移'],
+  split_b: [['I', 'J', 'K', 'L'], '平移'],
+  per_source: [[], '按输入设备绑定（下方 bind）'],
+};
+
 function updateKeysHint() {
-  const hint = {
-    focus: 'WASD 前进/平移 · QE 转向',
-    both: 'WASD 同时驱动所有已选狗',
-    split: 'Dog A = WASD+QE · Dog B = IJKL+UO',
-    per_source: '按输入设备绑定（下方 bind）',
-  }[state.mode] || '';
+  const mode = state.mode || 'focus';
   for (const id of Object.keys(state.focusMap)) {
     const el = state.focusMap[id].keys;
     if (!el) continue;
-    if (state.mode === 'split') {
-      el.textContent = id === firstId() ? 'WASD + QE' : 'IJKL + UO';
+    el.textContent = '';
+
+    let legend;
+    if (mode === 'split') {
+      legend = id === firstId() ? KEY_LEGENDS.split_a : KEY_LEGENDS.split_b;
+      const turn = document.createElement('div');
+      turn.className = 'hint-row';
+      turn.appendChild(keycapLegend(
+        id === firstId() ? ['Q', 'E'] : ['U', 'O'], '转向'
+      ));
+      el.appendChild(keycapLegend(legend[0], legend[1]));
+      el.appendChild(turn);
     } else {
-      el.textContent = hint;
+      legend = KEY_LEGENDS[mode] || KEY_LEGENDS.focus;
+      el.appendChild(keycapLegend(legend[0], legend[1]));
+      if (mode === 'focus') {
+        const turn = document.createElement('div');
+        turn.className = 'hint-row';
+        turn.appendChild(keycapLegend(['Q', 'E'], '转向'));
+        el.appendChild(turn);
+      }
     }
   }
 }
