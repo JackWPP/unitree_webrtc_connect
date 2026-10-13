@@ -60,6 +60,10 @@ def register(server, ctx: ToolContext) -> None:
     )
     async def robot_roster(robot_id: str = "") -> Dict[str, Any]:
         async def _impl():
+            # `ctx.runtime` is right **here and only here**: with no fleet it is
+            # the one robot there is. The same line inside a fleet-aware branch
+            # is the bug that made every tool drive the default dog — see
+            # `ToolContext.motion`.
             if ctx.fleet is None:
                 spec = ctx.runtime.config
                 return ctx.ok(
@@ -244,6 +248,7 @@ def register(server, ctx: ToolContext) -> None:
                     "hint": "Re-issue with confirm=true.",
                 }
 
+            # Single-robot: `ctx.runtime` is the only robot. Not a default.
             if ctx.fleet is None:
                 targets = [(ctx.config.robot_id, ctx.runtime)]
             else:
