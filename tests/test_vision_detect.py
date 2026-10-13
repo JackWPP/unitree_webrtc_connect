@@ -429,3 +429,79 @@ def test_a_reversed_click_order_produces_identical_distances():
     assert correct.to_world((720, 80)) != pytest.approx(
         reversed_order.to_world((720, 80)), abs=0.5
     )
+
+
+# ─── the parallax bound ───────────────────────────────────────────────
+
+
+def test_the_parallax_matches_the_geometry_scale_factor_derives():
+    """**Two formulas for one quantity, in one class, disagreeing.**
+
+    `parallax_m` returned `L·h/H`. The line of sight from a camera at `H`
+    through a tag at `h` crosses the floor at `H/(H-h)` times the tag's lateral
+    distance, so the error is `L·h/(H-h)` — which is `parallax_m` times
+    `scale_factor`, the quantity this same class derives ten lines further down.
+
+    The existing tests asserted `> 0.15` and the ratio separately, so they passed
+    with either formula. This one pins the number.
+    """
+    from unitree_robot_agent.vision.detect import Calibration
+
+    corners = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
+    calibration = Calibration(
+        [(0, 0), (100, 0), (100, 100), (0, 100)],
+        corners,
+        tag_height_m=0.35,
+        camera_height_m=2.5,
+    )
+
+    h, H, lateral = 0.35, 2.5, 1.5
+
+    # The bound is the *worst* parallax over the calibrated area, and the centre
+    # is the origin when the camera position was not given, so use the farthest
+    # corner from there.
+    expected = h * lateral / (H - h)
+    assert calibration.parallax_m((0.0, 0.0)) == pytest.approx(
+        h * 2.8284 / (H - h), abs=0.01
+    )
+
+    # The relationship that makes the old form wrong rather than merely
+    # different: parallax × scale_factor is the old answer.
+    assert calibration.scale_factor == pytest.approx(H / (H - h), abs=0.001)
+    wrong = calibration.parallax_m((0.0, 0.0)) / calibration.scale_factor
+    assert wrong != pytest.approx(calibration.parallax_m((0.0, 0.0)), abs=0.001), (
+        "if these are equal the scale factor is 1 and the test proves nothing"
+    )
+    del expected
+
+
+def test_the_residual_is_a_bound_and_not_an_optimistic_estimate():
+    """`residual_m` is documented as an upper bound and decides `adequate`. **A
+    bound that is 16% low is not a bound** — it answers the "is a floor
+    calibration good enough" question in the flattering direction."""
+    from unitree_robot_agent.vision.detect import Calibration
+
+    corners = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
+    floor = Calibration(
+        [(0, 0), (100, 0), (100, 100), (0, 100)],
+        corners,
+        tag_height_m=0.35,      # calibrated on the floor, tags on the dogs
+        camera_height_m=2.5,
+    )
+    at_height = Calibration(
+        [(0, 0), (100, 0), (100, 100), (0, 100)],
+        corners,
+        tag_height_m=0.0,       # calibrated on boxes at tag height
+        camera_height_m=2.5,
+    )
+
+    assert at_height.residual_m == 0.0
+    assert at_height.adequate is True
+    # The floor case is a real error worth warning about.
+    assert floor.residual_m > 0.3, floor.residual_m
+    assert floor.scale_factor == pytest.approx(1.163, abs=0.01)
+    # And the two are consistent, which is the check the old formula failed.
+    farthest = max(
+        floor.parallax_m(point) for point in floor.world_points
+    )
+    assert floor.residual_m == pytest.approx(farthest, abs=1e-9)

@@ -155,11 +155,22 @@ class Calibration:
     def parallax_m(self, world_point: Point) -> float:
         """How far the reported point is from the floor point under the dog.
 
-        `height × lateral / camera_height` — the small-angle form of where the
-        line of sight to the tag crosses the floor. Reported rather than
-        corrected: correcting it needs the direction from the camera to the
-        point, and a correction applied from the wrong geometry is worse than a
-        stated error.
+        The line of sight from a camera at height `H` through a tag at height
+        `h` crosses the floor at `H / (H - h)` times the tag's true lateral
+        distance `L`, so the error is
+
+            L · H/(H-h) - L  =  L · h / (H - h)
+
+        **The formula here used to be `L · h / H`** — `H` where `H - h` belongs —
+        which under-reports by exactly `scale_factor`, the very quantity this
+        class derives ten lines further down. For the worked case in
+        `scale_factor` (h = 0.35, H = 2.5) that is 16% optimistic, and it fed
+        `residual_m`, which is documented as an **upper bound** and decides
+        `adequate`. A bound that is 16% low is not a bound.
+
+        Reported rather than corrected, deliberately: correcting it needs the
+        direction from the camera to the point, and a correction applied from
+        the wrong geometry is worse than a stated error.
 
         The lateral distance is measured from the camera when the calibration
         says where the camera was, and from the **centre of the calibrated
@@ -168,9 +179,14 @@ class Calibration:
         """
         if self.tag_height_m <= 0 or self.camera_height_m <= 0:
             return 0.0
+        if self.camera_height_m <= self.tag_height_m:
+            # The camera is at or below tag height, so the geometry this is the
+            # small-angle form of does not exist. `scale_factor` says the same
+            # thing with infinity; here there is no meaningful bound at all.
+            return float("inf")
         origin = self.camera_world_xy or self._centre
         lateral = math.dist(world_point, origin)
-        return self.tag_height_m * lateral / self.camera_height_m
+        return self.tag_height_m * lateral / (self.camera_height_m - self.tag_height_m)
 
     @property
     def residual_m(self) -> float:

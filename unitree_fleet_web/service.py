@@ -1776,15 +1776,84 @@ class ConsoleService:
                 logger.warning("arena loop error: %r", exc)
 
     def _marker_manifest(self) -> Dict[str, Any]:
-        from unitree_robot_agent.vision.markers import default_markers
+        """Which tag belongs to which robot.
 
-        return {
+        **The printed sheet owns this mapping, not the roster.** Markers are
+        printed once and stuck on the dogs; the roster is a JSON file that
+        somebody reorders. Deriving the map from `list(self.fleet.ids)` — which
+        is what this did — means that a roster listing `dog2` first attributes
+        every pose the camera reports to the other dog. Positions, headings and
+        the separation all look completely plausible, and `align_formation` then
+        steers each physical dog by the other one's error.
+
+        So the manifest written next to the printed tags is read when it is
+        configured, and the roster is cross-checked against it. The fallback
+        still exists — a console with no manifest has to do *something* — but it
+        says which mapping it used, and the page shows it.
+        """
+        from unitree_robot_agent.vision.markers import default_markers, load_manifest
+
+        path = getattr(self.config, "marker_manifest", "") or ""
+        positional = {
             "family": "DICT_APRILTAG_36h11",
             "markers": [
                 {"tag_id": m.tag_id, "robot_id": m.robot_id, "size_m": m.size_m}
                 for m in default_markers(list(self.fleet.ids))
             ],
         }
+        if not path:
+            positional["source"] = "roster"
+            positional["note"] = (
+                "没有配置 markers.json，所以标签→狗的映射是**按名单顺序推出来的**。"
+                "打印的标签纸如果和名单顺序不一致，每只狗的位置都会归到另一只身上。"
+                "用 --marker-manifest docs/markers/markers.json 指定打印时写出的清单。"
+            )
+            return positional
+
+        try:
+            document = load_manifest(path)
+        except Exception as exc:  # noqa: BLE001 - a bad path is a finding, not a crash
+            positional["source"] = "roster"
+            positional["note"] = (
+                f"markers.json 读不了（{type(exc).__name__}: {exc}），"
+                f"退回按名单顺序推断 —— 这个映射可能和打印的标签纸不一致。"
+            )
+            return positional
+
+        markers = [
+            {
+                "tag_id": int(m["tag_id"]),
+                "robot_id": str(m["robot_id"]),
+                "size_m": float(m.get("size_m") or document.get("size_m") or 0.15),
+            }
+            for m in (document.get("markers") or [])
+            if isinstance(m, dict) and "tag_id" in m and "robot_id" in m
+        ]
+        if not markers:
+            positional["source"] = "roster"
+            positional["note"] = f"{path} 里没有可用的标记，退回按名单顺序推断。"
+            return positional
+
+        out = {
+            "family": document.get("family") or positional["family"],
+            "markers": markers,
+            "source": "manifest",
+            "path": str(path),
+        }
+        # A manifest that names robots this console does not have is worth
+        # saying out loud: it usually means the sheet was printed for a
+        # different pair.
+        known = set(self.fleet.ids)
+        named = {m["robot_id"] for m in markers}
+        strangers = sorted(named - known)
+        unseen = sorted(known - named)
+        if strangers or unseen:
+            out["note"] = (
+                f"清单和名单对不上：清单里有 {strangers or '无'}，"
+                f"名单里有 {unseen or '无'} 不在清单里。"
+                f"**贴错标签或者打印的是另一对狗。**"
+            )
+        return out
 
     def robots_with_markers(self) -> List[str]:
         return list(self.fleet.ids)

@@ -116,6 +116,12 @@ class ConsoleConfig:
     #: JSON with the four calibration points. Without it there is no mapping
     #: from pixels to metres, so there is no position — only a bearing.
     arena_calibration: str = ""
+    #: The `markers.json` written by `write_markers` when the tag sheet was
+    #: printed. **The map from tag to robot belongs to the printed artifact.**
+    #: Deriving it from the roster's order works until the roster changes order,
+    #: and then every pose is attributed to the other dog with nothing looking
+    #: wrong.
+    marker_manifest: str = ""
     arena_hz: float = DEFAULT_ARENA_HZ
     #: Hand the links back this long after the last browser leaves. See
     #: DEFAULT_UNWATCHED_RELEASE_S.

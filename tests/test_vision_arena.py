@@ -625,3 +625,137 @@ def test_without_a_calibration_path_there_is_nowhere_to_save(tmp_path):
     result = service.start_arena()
     assert result["started"] is False
     assert "路径" in result["reason"]
+
+
+# ─── which tag belongs to which robot ─────────────────────────────────
+
+
+def _console(tmp_path, robots, *, manifest=""):
+    from unitree_robot_agent.fleet import FleetManager, Roster
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    roster = Roster.from_mapping(
+        {"state_dir": str(tmp_path / "state"), "default": robots[0]["id"],
+         "robots": robots}
+    )
+    return ConsoleService(
+        FleetManager(roster, backend="mock", audit_to_stderr=False),
+        config=ConsoleConfig(deadman_s=1.0, marker_manifest=manifest),
+    )
+
+
+def test_the_manifest_is_read_when_it_is_configured(tmp_path):
+    """**The printed sheet owns the mapping, not the roster.**
+
+    Markers are printed once and stuck on the dogs; the roster is a JSON file
+    somebody reorders. `load_manifest` existed, was exported, and had **no call
+    site anywhere** — the console re-derived the map positionally instead.
+    """
+    import json
+
+    manifest = tmp_path / "markers.json"
+    manifest.write_text(json.dumps({
+        "family": "DICT_APRILTAG_36h11",
+        "size_m": 0.15,
+        "markers": [
+            {"tag_id": 0, "robot_id": "dog1", "size_m": 0.15},
+            {"tag_id": 1, "robot_id": "dog2", "size_m": 0.15},
+        ],
+    }), encoding="utf-8")
+
+    service = _console(
+        tmp_path,
+        [{"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+         {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"}],
+        manifest=str(manifest),
+    )
+    result = service._marker_manifest()  # noqa: SLF001
+    assert result["source"] == "manifest", result
+    assert {m["tag_id"]: m["robot_id"] for m in result["markers"]} == {0: "dog1", 1: "dog2"}
+
+
+def test_the_manifest_beats_the_roster_order(tmp_path):
+    """**The bug, as a test.** The sheet was printed with dog1 as tag 0, and the
+    console's roster lists dog2 first. The positional mapping swaps the two dogs
+    and nothing looks wrong: positions, headings and the separation are all
+    plausible, and the formation then steers each dog by the other's error.
+    """
+    import json
+
+    manifest = tmp_path / "markers.json"
+    manifest.write_text(json.dumps({
+        "family": "DICT_APRILTAG_36h11",
+        "markers": [
+            {"tag_id": 0, "robot_id": "dog1", "size_m": 0.15},
+            {"tag_id": 1, "robot_id": "dog2", "size_m": 0.15},
+        ],
+    }), encoding="utf-8")
+
+    # dog2 first — the order that made the positional mapping wrong.
+    service = _console(
+        tmp_path,
+        [{"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"},
+         {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"}],
+        manifest=str(manifest),
+    )
+    mapping = {
+        m["tag_id"]: m["robot_id"]
+        for m in service._marker_manifest()["markers"]  # noqa: SLF001
+    }
+    assert mapping == {0: "dog1", 1: "dog2"}, (
+        f"the roster order overrode the printed sheet: {mapping}"
+    )
+
+
+def test_without_a_manifest_the_fallback_says_which_mapping_it_used(tmp_path):
+    """It has to do *something*, so it derives one — and says so, because a
+    silent derivation is how a wrong mapping survives a whole session."""
+    service = _console(
+        tmp_path,
+        [{"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+         {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"}],
+    )
+    result = service._marker_manifest()  # noqa: SLF001
+    assert result["source"] == "roster"
+    assert "按名单顺序" in result["note"]
+    assert "marker-manifest" in result["note"], (
+        "the fallback does not say how to remove the guess"
+    )
+
+
+def test_a_manifest_for_a_different_pair_is_reported(tmp_path):
+    """A sheet printed for another pair is not a subtle failure — it means the
+    tags in the arena belong to robots this console does not have."""
+    import json
+
+    manifest = tmp_path / "markers.json"
+    manifest.write_text(json.dumps({
+        "family": "DICT_APRILTAG_36h11",
+        "markers": [
+            {"tag_id": 0, "robot_id": "dog1", "size_m": 0.15},
+            {"tag_id": 1, "robot_id": "dog9", "size_m": 0.15},
+        ],
+    }), encoding="utf-8")
+
+    service = _console(
+        tmp_path,
+        [{"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+         {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"}],
+        manifest=str(manifest),
+    )
+    result = service._marker_manifest()  # noqa: SLF001
+    assert "dog9" in result["note"]
+    assert "dog2" in result["note"]
+
+
+def test_a_broken_manifest_falls_back_rather_than_crashing(tmp_path):
+    """The console has to come up. A bad path is a finding, not a traceback."""
+    service = _console(
+        tmp_path,
+        [{"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+         {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"}],
+        manifest=str(tmp_path / "nope.json"),
+    )
+    result = service._marker_manifest()  # noqa: SLF001
+    assert result["source"] == "roster"
+    assert "读不了" in result["note"]
