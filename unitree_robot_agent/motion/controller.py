@@ -39,7 +39,16 @@ TICK = 1.0 / TICK_HZ
 #: ``[ly, -lx, -rx] -> [vx, vy, omega]``, so a *negative* rx produces a
 #: *positive* omega, and positive omega increases yaw (counter-clockwise).
 #: Turning is therefore commanded with rx = -kp * yaw_error.
+#:
+#: **Only the yaw axis.** `ly` maps straight to forward velocity and `lx` to
+#: lateral with one flip; reusing this constant on either of them inverts the
+#: direction of travel, which is what happened here once.
 YAW_AXIS_SIGN = -1.0
+
+#: Forward and lateral sign conventions, named so they cannot be confused with
+#: the yaw one. `ly` is forward-positive as written; `lx` is left-positive after
+#: the robot's own flip, so a command for "move right" is a negative `lx`.
+LATERAL_AXIS_SIGN = -1.0
 
 
 def wrap_angle(radians: float) -> float:
@@ -399,7 +408,14 @@ class MotionController:
                     travelled = math.hypot(current[0] - start[0], current[1] - start[1])
                     if travelled >= abs(target_m) * fraction:
                         break
-                    await self._publish(lx=0.0, ly=YAW_AXIS_SIGN * sign * speed, rx=0.0)
+                    # **`ly`, not `YAW_AXIS_SIGN * ...`.** The joystick maps
+                    # `[ly, -lx, -rx] -> [vx, vy, omega]`, so `ly` goes straight
+                    # to forward velocity and the sign convention that flips an
+                    # axis belongs to the yaw one only. Applying it here made
+                    # `robot_walk(0.3)` walk *backwards*, and the tests did not
+                    # catch it because they checked the reported distance and
+                    # never the direction that was commanded.
+                    await self._publish(lx=0.0, ly=sign * speed, rx=0.0)
                     frames += 1
                     await asyncio.sleep(TICK)
                 else:

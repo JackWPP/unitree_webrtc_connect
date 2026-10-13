@@ -210,3 +210,61 @@ def test_the_signed_distance_is_reported_not_the_path_length():
 
     assert result["actual_m"] == pytest.approx(0.1, abs=0.05), result
     assert result["reason"] != "reached"
+
+
+def test_a_forward_walk_commands_forward():
+    """**The bug the first version had, and the reason this test exists.**
+
+    The publish line was `ly=YAW_AXIS_SIGN * sign * speed`, copying the yaw
+    axis's sign convention onto the forward one. `YAW_AXIS_SIGN` is -1.0, so
+    `robot_walk(0.3)` walked **backwards** — and every existing test passed,
+    because they checked `reason` and `actual_m` (both derived from a simulated
+    odometry that moved whichever way it was told) and never the direction that
+    was actually commanded.
+
+    So this asserts the sign of what goes on the wire, which is the one thing
+    the loop can be wrong about while still reporting success.
+    """
+    control = controller(FakeSession(position=(0.0, 0.0)))
+    position_sequence(control, [0.05, 0.10, 0.20, 0.30, 0.40])
+
+    asyncio.run(control.forward_m(0.35, speed=0.5))
+
+    forward_frames = [ly for _lx, ly, _rx in control.session.published if ly]
+    assert forward_frames, "nothing was published, so nothing was tested"
+    assert all(ly > 0 for ly in forward_frames), (
+        f"a forward walk commanded {forward_frames} — `ly` goes straight to "
+        f"forward velocity and must not carry the yaw axis's sign"
+    )
+
+
+def test_a_backward_walk_commands_backward():
+    """The mirror, so a sign flip cannot pass both."""
+    control = controller(FakeSession(position=(0.0, 0.0)))
+    position_sequence(control, [0.05, 0.10, 0.20])
+
+    asyncio.run(control.forward_m(-0.2, speed=0.5))
+
+    forward_frames = [ly for _lx, ly, _rx in control.session.published if ly]
+    assert forward_frames and all(ly < 0 for ly in forward_frames), forward_frames
+
+
+def test_a_turn_does_not_touch_the_forward_axis():
+    """Turning is commanded on `rx` only, and the two conventions must not
+    leak into each other in either direction."""
+    session = FakeSession(yaw=0.0)
+    control = controller(session)
+    reads = {"n": 0}
+
+    async def yaw_progress(timeout=None):
+        reads["n"] += 1
+        session.yaw = math.radians(min(90.0, reads["n"] * 20.0))
+        return session.yaw
+
+    control.read_yaw = yaw_progress  # type: ignore[assignment]
+    asyncio.run(control.turn(90.0))
+
+    assert session.published
+    for lx, ly, _rx in session.published:
+        assert lx == 0.0 and ly == 0.0, "a turn moved the robot"
+    assert any(rx for _lx, _ly, rx in session.published), "a turn never turned"

@@ -1134,6 +1134,24 @@ class ConsoleService:
                         # what produces 3201 and an operator deciding the
                         # console is broken.
                         continue
+                    # **A tool holding a motion window owns the sticks.**
+                    #
+                    # `robot_walk`, `robot_turn` and `robot_move` publish
+                    # wireless-controller frames directly, and so does this loop.
+                    # Both write the same topic with no arbitration, so an
+                    # operator holding W while a routine or a formation runs
+                    # produces an interleaving of two intents — measured at 297
+                    # frames from the tool with 3 from the loop spliced between
+                    # them, which is a robot being told to walk and to stop
+                    # alternately at 50 Hz.
+                    #
+                    # The window is the tool saying "I am driving"; the loop
+                    # waits for it. The dead-man still applies, and the ramp
+                    # keeps its state, so nothing is lost by standing aside.
+                    with contextlib.suppress(Exception):
+                        if self.fleet.get(robot_id).motion.window_active:
+                            continue
+
                     # Compared against what was last **sent**, not against
                     # `commanded`. The dead-man calls `hard_stop()`, which
                     # zeroes `commanded` between ticks; comparing against that
