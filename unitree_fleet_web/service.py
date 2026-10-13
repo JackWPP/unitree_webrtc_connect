@@ -293,6 +293,11 @@ class ConsoleService:
         self._gate: Dict[str, Dict[str, float]] = {}
         #: In-flight auto-stand requests, so shutdown can cancel them.
         self._gate_tasks: set = set()
+        #: When each robot's telemetry snapshot was read. The panels show
+        #: numbers from four different rates — 50 Hz motion, 10 Hz camera, 1 Hz
+        #: telemetry, on-demand reads — and without this the page cannot tell
+        #: the operator which of them is the old one.
+        self._telemetry_at: Dict[str, float] = {}
         #: The running formation alignment, and what it is doing.
         self._formation: Dict[str, Any] = {}
         self._formation_task: Optional[asyncio.Task] = None
@@ -1328,6 +1333,7 @@ class ConsoleService:
                 runtime.session.state_view(), timeout=TELEMETRY_TIMEOUT_S
             )
         self._telemetry[robot_id] = snapshot
+        self._telemetry_at[robot_id] = time.monotonic()
         return snapshot
 
     def flags(self, robot_id: str) -> Dict[str, Any]:
@@ -1422,6 +1428,12 @@ class ConsoleService:
         """
         snapshot = self._telemetry.get(robot_id) or {}
         out: Dict[str, Any] = {}
+
+        taken = self._telemetry_at.get(robot_id)
+        if taken is not None:
+            age = time.monotonic() - taken
+            out["age_s"] = round(age, 2)
+            out["stale"] = age > 1.6
 
         imu = snapshot.get("imu") or {}
         attitude = {
@@ -2247,7 +2259,18 @@ class ConsoleService:
         }
 
     def telemetry_health(self, robot_id: str) -> Dict[str, Any]:
-        """Whether the panels have real data, and why not if they do not."""
+        """Whether the panels have real data, why not, **and how old it is**.
+
+        The age is the part that matters more than it looks. Telemetry refreshes
+        at 1 Hz and the arena camera at 10 Hz, so the panels are routinely
+        showing numbers sampled a second apart — and an operator comparing a
+        fresh picture with a stale speed concludes the dog is not moving, one
+        second after it started.
+
+        Nothing here pretends the numbers are simultaneous. Each one carries
+        when it was taken, and the page says so beside the ones that are old
+        enough to mislead.
+        """
         try:
             connected = self.fleet.get(robot_id).session.is_connected
         except Exception:  # noqa: BLE001
@@ -2265,11 +2288,18 @@ class ConsoleService:
             state = "ok"
         else:
             state = "starting"
+        taken = self._telemetry_at.get(robot_id)
+        age = (time.monotonic() - taken) if taken else None
         return {
             "state": state,
             "error": error,
             "has_data": bool(snapshot),
             "battery": bool((snapshot or {}).get("battery")),
+            "age_s": round(age, 2) if age is not None else None,
+            # One refresh at 1 Hz plus a little: past this the number is old
+            # enough that the page should stop presenting it as current.
+            "stale": bool(age is not None and age > 1.6),
+            "refresh_hz": round(self.config.telemetry_hz, 2),
         }
 
     async def _telemetry_loop(self) -> None:
@@ -2324,6 +2354,7 @@ class ConsoleService:
         # A fresh link might reach a robot somebody has since moved. Forgetting
         # is the honest state; guessing is not.
         self.posture(robot_id).forget()
+        self._telemetry_at.pop(robot_id, None)
         return {"robot_id": robot_id, "connected": runtime.session.is_connected}
 
     async def _deadman_loop(self) -> None:

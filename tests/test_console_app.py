@@ -1216,3 +1216,18 @@ def test_the_console_js_renders_the_source_inventory(open_client):
     source = open_client.get("/static/console.js").text
     for marker in ("renderSources", "SOURCE_LABELS", "not_attempted", "untried"):
         assert marker in source, f"console.js lost {marker}"
+
+
+def test_the_page_says_when_a_number_is_old(open_client):
+    """Telemetry is 1 Hz and the arena camera is 10 Hz, so the panels routinely
+    show numbers sampled a second apart. A stale speed beside a fresh picture
+    reads as "not moving" — one second after the dog started moving."""
+    payload = open_client.get("/api/fleet/status").json()
+    health = payload["telemetry_health"]["dog1"]
+    assert "age_s" in health
+    assert "stale" in health
+    assert "refresh_hz" in health
+
+    source = open_client.get("/static/console.js").text
+    assert "body.age_s" in source
+    assert "前的读数" in source

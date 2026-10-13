@@ -413,3 +413,65 @@ async def test_the_status_payload_carries_the_sources(service):
     await service.connect("dog1")
     payload = await service.status()
     assert set(payload["sources"]) == set(service.fleet.ids)
+
+
+# ─── how old the numbers are ──────────────────────────────────────────
+
+
+async def test_telemetry_reports_its_own_age(service):
+    """The panels show numbers sampled at four different rates — 50 Hz motion,
+    10 Hz camera, 1 Hz telemetry, on-demand reads — and without an age the page
+    cannot tell the operator which of them is the old one."""
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    health = service.telemetry_health("dog1")
+    assert health["age_s"] is not None
+    assert health["age_s"] < 1.0
+    assert health["stale"] is False
+    assert health["refresh_hz"] == service.config.telemetry_hz
+
+
+async def test_a_telemetry_snapshot_goes_stale_on_its_own(service):
+    """1 Hz refresh, so past about 1.6 s the number is old enough that the page
+    should stop presenting it as current. Asserted by moving the clock rather
+    than by sleeping, because a test that sleeps for two seconds to check a
+    two-second threshold is a test that gets slower every time somebody
+    touches it."""
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    service._telemetry_at["dog1"] -= 3.0  # noqa: SLF001
+    health = service.telemetry_health("dog1")
+    assert health["stale"] is True
+    assert health["age_s"] >= 3.0
+
+    # ...and the body panel, which is derived from the same snapshot, agrees.
+    body = service.body("dog1")
+    assert body["stale"] is True
+    assert body["age_s"] >= 3.0
+
+
+async def test_the_body_panel_carries_the_age_of_what_it_shows(service):
+    """A speed readout is the specific trap: telemetry is 1 Hz and the arena
+    map is 10 Hz, so the two are routinely a second apart, and a stale speed
+    beside a fresh picture reads as "not moving" one second after it started."""
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    body = service.body("dog1")
+    assert "age_s" in body
+    assert "stale" in body
+
+
+async def test_disconnecting_forgets_the_time_as_well_as_the_data(service):
+    """Otherwise the panels show a *stale* number rather than an absent one,
+    which is worse: an absent number is obviously absent."""
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+    assert service.telemetry_health("dog1")["age_s"] is not None
+
+    await service.disconnect("dog1")
+
+    assert service.telemetry_health("dog1")["age_s"] is None
+    assert service.telemetry_health("dog1")["stale"] is False

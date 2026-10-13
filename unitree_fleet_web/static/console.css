@@ -1104,3 +1104,11 @@ select, input[type="range"] { accent-color: var(--accent); }
 }
 .form-step.good { color: var(--ok); border-color: #1f5c43; }
 .form-step.bad { color: var(--warn); border-color: #6b4a12; }
+
+/* The age of a number, when it is old enough to mislead.
+   Telemetry is 1 Hz and the camera is 10 Hz, so these panels routinely show
+   numbers sampled a second apart — and a stale speed next to a fresh picture
+   reads as "not moving". Dimmed rather than hidden: the number is still the
+   best one there is, it just is not current. */
+.age { color: var(--muted); font-size: 10.5px; }
+.age.stale { color: var(--warn); }

@@ -1302,9 +1302,24 @@ function renderBody(robotId) {
       entry.speed.appendChild(actualEl);
       entry.speed.appendChild(tail);
       entry.speed.className = 'speed' + (stalled ? ' stalled' : '');
+      // **The age, said out loud.** Telemetry refreshes at 1 Hz and the arena
+      // camera at 10 Hz, so the panels routinely show numbers sampled a second
+      // apart. Without this an operator compares a fresh picture against a
+      // stale speed and concludes the dog is not moving, one second after it
+      // started.
+      const age = body.age_s;
+      const stale = body.stale === true;
+      if (age != null) {
+        const ageEl = document.createElement('span');
+        ageEl.className = stale ? 'age stale' : 'age';
+        ageEl.textContent = stale ? `　${age}s 前的读数` : '';
+        entry.speed.appendChild(ageEl);
+      }
       entry.speed.title = stalled
         ? '摇杆推着但机器人没动 —— 可能没站好，或避障拦住了'
-        : '本体速度与斜坡指令';
+        : (stale
+          ? `本体速度与斜坡指令（这组数字是 ${age} 秒前的，遥测 1Hz）`
+          : '本体速度与斜坡指令');
     }
   }
 
