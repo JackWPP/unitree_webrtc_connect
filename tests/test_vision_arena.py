@@ -316,3 +316,57 @@ def test_cv2_is_never_imported_at_module_level():
         "cv2 is imported at module level, so every console session now loads a "
         f"second FFmpeg: {offenders}"
     )
+
+
+# ─── the map on the page ──────────────────────────────────────────────
+
+
+def test_the_arena_payload_carries_bounds_and_separation(arena_service):
+    """The map is drawn to the calibration's own extent rather than a fixed
+    one: an arena the drawing disagrees with is a map that lies about
+    distances."""
+    import asyncio
+
+    markers = default_markers(["dog1", "dog2"])
+    frames = [
+        _arena_scene([(markers[0], 1.0, 2.0, 0.0), (markers[1], 3.0, 2.0, 90.0)])
+    ] * 3
+    arena_service._camera = ReplayCamera(frames, fps=30)
+    arena_service._camera.start()
+    loop = asyncio.new_event_loop()
+    task = loop.create_task(arena_service._arena_loop())
+    try:
+        for _ in range(60):
+            loop.run_until_complete(asyncio.sleep(0.05))
+            if arena_service.arena_state()["state"] == "ok":
+                break
+        state = loop.run_until_complete(arena_service.status())["arena"]
+        assert state["calibration"]["bounds"] == [0.0, 0.0, 4.0, 4.0]
+        gap = state["separation"]
+        assert gap["distance_m"] == pytest.approx(2.0, abs=0.1)
+        assert gap["yaw_spread_deg"] == pytest.approx(90.0, abs=5.0)
+        assert gap["bearing_deg_from_a_to_b"] == pytest.approx(0.0, abs=5.0)
+    finally:
+        task.cancel()
+        loop.run_until_complete(asyncio.sleep(0))
+        loop.close()
+        arena_service._camera.close()
+
+
+def test_the_console_js_draws_the_map(open_client):
+    source = open_client.get("/static/console.js").text
+    for marker in ("renderArena", "ARENA_STATES", "bearing_deg", "scale_factor"):
+        assert marker in source, f"console.js lost {marker}"
+    # The map must be built from the calibration's bounds, not a hardcoded size.
+    assert "calibration.bounds" in source or "calibration && calibration.bounds" in source
+
+
+def test_the_page_says_which_reason_the_map_is_blank(open_client):
+    """An empty field and two dogs out of shot look identical, and they want
+    different reactions."""
+    html = open_client.get("/").text
+    for marker in ("arena-panel", "arena-map", "arena-state", "arena-legend"):
+        assert marker in html, f"the page lost {marker}"
+    source = open_client.get("/static/console.js").text
+    for state in ("camera_failed", "camera_stale", "no_markers", "starting"):
+        assert state in source, f"the map does not handle {state}"
