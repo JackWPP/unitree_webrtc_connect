@@ -432,6 +432,10 @@ python scripts/probe_dual_connection.py --ips <dog1>,<dog2>          # N connect
 python scripts/measure_connect_interference.py --ips <dog1>,<dog2>   # does connecting one stall the others?
 ```
 
+**First time on real hardware?** Follow
+[`docs/HARDWARE_BRINGUP.md`](docs/HARDWARE_BRINGUP.md) — steps in dependency
+order, each with the expected output and what a divergence means.
+
 Full design notes, findings and what remains:
 [`docs/DUAL_DOG_CONSOLE_PLAN.md`](docs/DUAL_DOG_CONSOLE_PLAN.md).
 

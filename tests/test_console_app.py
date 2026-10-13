@@ -636,6 +636,10 @@ def test_the_readme_documents_the_console():
     # And the two things that behave unlike a naive reader would expect.
     assert "not_stopped" in text
     assert "Latch" in text or "latches" in text
+    # The hardware runbook has to be reachable from the front door too — this
+    # is the file someone reads while standing next to two powered-on dogs.
+    assert "HARDWARE_BRINGUP.md" in text
+    assert (readme.parent / "docs" / "HARDWARE_BRINGUP.md").exists()
 
 
 def test_the_skill_documents_the_fleet_surface():
