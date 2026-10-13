@@ -24,6 +24,13 @@ from .encode import (
     make_test_frame,
     probe_dimensions,
 )
+from .arena import (
+    STALE_AFTER_S,
+    ArenaCamera,
+    Frame as ArenaFrame,
+    ReplayCamera,
+    frame_provider,
+)
 from .detect import (
     Calibration,
     DogPose,
@@ -60,6 +67,8 @@ from .sources import (
 )
 
 __all__ = [
+    "ArenaCamera",
+    "ArenaFrame",
     "BytesSource",
     "Calibration",
     "DEFAULT_MAX_WIDTH",
@@ -74,7 +83,9 @@ __all__ = [
     "FrameResult",
     "FrameSource",
     "PhotoApiSource",
+    "ReplayCamera",
     "RtspSource",
+    "STALE_AFTER_S",
     "SnapshotRecord",
     "SourceStatus",
     "VisionService",
@@ -86,6 +97,7 @@ __all__ = [
     "encode_buffer",
     "encode_frame",
     "encode_image_file",
+    "frame_provider",
     "load_manifest",
     "locate",
     "make_test_frame",
