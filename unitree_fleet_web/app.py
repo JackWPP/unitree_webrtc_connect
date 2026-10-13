@@ -379,6 +379,41 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 
+    async def get_arena_frame(request) -> Response:
+        """The newest camera frame, for clicking four corners on."""
+        jpeg = service.arena_frame_jpeg()
+        if jpeg is None:
+            return JSONResponse(
+                {
+                    "available": False,
+                    "detail": service.arena_state().get("detail", "")
+                    or "没有画面",
+                    "state": service.arena_state().get("state"),
+                },
+                status_code=409,
+            )
+        return Response(
+            jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"}
+        )
+
+    async def get_arena_calibration(request) -> Response:
+        state = service.arena_state()
+        return JSONResponse(
+            {
+                "calibration": state.get("calibration"),
+                "state": state.get("state"),
+                "frame_size": service.arena_frame_size(),
+                "markers": service._marker_manifest(),  # noqa: SLF001
+            }
+        )
+
+    async def post_arena_calibrate(request) -> Response:
+        body = await _read_body(request)
+        try:
+            return JSONResponse(service.calibrate_arena(body or {}))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
     async def post_sync_mark(request) -> Response:
         """Take the alignment reference: "the dogs are together *now*"."""
         body = await _read_body(request)
@@ -564,6 +599,9 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/fleet/routine/stop", post_routine_stop, methods=["POST"]),
         Route("/api/fleet/routine/insert", post_routine_insert, methods=["POST"]),
         Route("/api/fleet/sync", post_sync_mark, methods=["POST"]),
+        Route("/api/arena/frame", get_arena_frame),
+        Route("/api/arena/calibration", get_arena_calibration),
+        Route("/api/arena/calibrate", post_arena_calibrate, methods=["POST"]),
         Route("/api/fleet/sync", delete_sync, methods=["DELETE"]),
         Route("/api/fleet/routines/save", post_routine_save, methods=["POST"]),
         Route("/api/fleet/routines/{routine_id}", delete_routine, methods=["DELETE"]),

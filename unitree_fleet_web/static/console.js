@@ -2142,6 +2142,185 @@ function renderArena(arena) {
   legend.appendChild(ruler);
 }
 
+/* ── calibrating the arena ─────────────────────────────────────────── */
+
+/* Click the four corners on a live frame.
+ *
+ * This is the last place that needed a hand-written JSON file, and hand-writing
+ * one is how a session starts with a calibration that is subtly wrong: four
+ * numbers copied from a phone photo, in an order nobody wrote down.
+ *
+ * **The click coordinates are converted back to native frame pixels.** The
+ * frame is displayed at whatever width the panel gets, and recording the
+ * display coordinates would make the calibration wrong by exactly the ratio
+ * between the two — a mistake that produces a map which looks entirely
+ * plausible and is off by a factor. The frame's own size comes from the server
+ * beside it.
+ */
+const CALIB_ORDER = ['左上 (0)', '右上 (1)', '右下 (2)', '左下 (3)'];
+
+function defaultWorldPoints(width, depth) {
+  // The order the printed plan uses: anticlockwise from the far-left corner,
+  // with arena +y away from the camera.
+  return [[0, depth], [width, depth], [width, 0], [0, 0]];
+}
+
+function renderCalibrationPoints(state) {
+  const list = document.getElementById('calib-points');
+  if (!list) return;
+  list.textContent = '';
+  for (let index = 0; index < 4; index += 1) {
+    const item = document.createElement('li');
+    const point = state.points[index];
+    const world = state.world[index];
+    item.className = point ? 'done' : '';
+    item.textContent = point
+      ? `${CALIB_ORDER[index]} → 画面 (${Math.round(point[0])}, ${Math.round(point[1])})　场地 (${world[0]}, ${world[1]}) m`
+      : `${CALIB_ORDER[index]} —— 还没点`;
+    list.appendChild(item);
+  }
+}
+
+function renderCalibrationOverlay(state) {
+  const svg = document.getElementById('calib-overlay');
+  const image = document.getElementById('calib-image');
+  if (!svg || !image || !state.size[0]) return;
+  // The overlay is positioned over the image and uses the image's own pixel
+  // space as its viewBox, so the marks land where they were clicked whatever
+  // width the panel happens to be.
+  svg.setAttribute('viewBox', `0 0 ${state.size[0]} ${state.size[1]}`);
+  svg.textContent = '';
+  state.points.forEach((point, index) => {
+    const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    ring.setAttribute('cx', point[0]); ring.setAttribute('cy', point[1]);
+    ring.setAttribute('r', 14); ring.setAttribute('class', 'marker-ring');
+    svg.appendChild(ring);
+
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', point[0]); dot.setAttribute('cy', point[1]);
+    dot.setAttribute('r', 4); dot.setAttribute('class', 'marker-dot');
+    svg.appendChild(dot);
+
+    const number = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    number.setAttribute('x', point[0]); number.setAttribute('y', point[1] - 20);
+    number.setAttribute('class', 'marker-num');
+    number.textContent = String(index);
+    svg.appendChild(number);
+  });
+}
+
+const calibration = { active: false, points: [], size: [0, 0], world: defaultWorldPoints(4, 4) };
+
+function setCalibrationWorldFromInputs() {
+  const width = Number(document.getElementById('calib-width').value) || 4;
+  const depth = Number(document.getElementById('calib-depth').value) || 4;
+  calibration.world = defaultWorldPoints(width, depth);
+  renderCalibrationPoints(calibration);
+}
+
+function onCalibrationClick(event) {
+  if (!calibration.active) return;
+  const svg = document.getElementById('calib-overlay');
+  const rect = svg.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  // Display pixels back to frame pixels — the conversion this whole flow turns
+  // on. Clamped, because a click on the border rounds outside the frame and a
+  // negative coordinate is a calibration nobody can debug.
+  const x = Math.max(0, Math.min(calibration.size[0],
+    ((event.clientX - rect.left) / rect.width) * calibration.size[0]));
+  const y = Math.max(0, Math.min(calibration.size[1],
+    ((event.clientY - rect.top) / rect.height) * calibration.size[1]));
+
+  if (calibration.points.length >= 4) calibration.points = [];
+  calibration.points.push([x, y]);
+  renderCalibrationPoints(calibration);
+  renderCalibrationOverlay(calibration);
+
+  const save = document.getElementById('calib-save');
+  if (save) save.disabled = calibration.points.length !== 4;
+  const hint = document.getElementById('calib-hint');
+  if (hint) {
+    hint.textContent = calibration.points.length === 4
+      ? '四个点齐了，点保存'
+      : `已点 ${calibration.points.length}/4 —— 下一个是 ${CALIB_ORDER[calibration.points.length]}`;
+  }
+}
+
+async function startCalibration() {
+  const body = document.getElementById('calib-body');
+  const hint = document.getElementById('calib-hint');
+  try {
+    const spec = await api('/api/arena/calibration');
+    if (!spec.frame_size) {
+      hint.textContent = '没有画面 —— 先让相机出图再标定';
+      return;
+    }
+    calibration.size = spec.frame_size;
+    calibration.points = [];
+    calibration.active = true;
+    setCalibrationWorldFromInputs();
+    body.classList.remove('hidden');
+    document.getElementById('calib-cancel').classList.remove('hidden');
+    document.getElementById('calib-save').disabled = true;
+    // A cache-busting query, because the browser will otherwise show the frame
+    // it fetched the first time and the operator calibrates against a picture
+    // of an arena that has since been rearranged.
+    document.getElementById('calib-image').src = `/api/arena/frame?t=${Date.now()}`;
+    renderCalibrationPoints(calibration);
+    renderCalibrationOverlay(calibration);
+    hint.textContent = `已点 0/4 —— 下一个是 ${CALIB_ORDER[0]}`;
+  } catch (err) {
+    hint.textContent = '拿不到画面: ' + err.message;
+  }
+}
+
+function stopCalibration() {
+  calibration.active = false;
+  calibration.points = [];
+  document.getElementById('calib-body').classList.add('hidden');
+  document.getElementById('calib-cancel').classList.add('hidden');
+  document.getElementById('calib-hint').textContent =
+    '对着画面依次点四个角，顺序和打印的标定图一致';
+}
+
+async function saveCalibration() {
+  const hint = document.getElementById('calib-hint');
+  try {
+    const result = await api('/api/arena/calibrate', {
+      method: 'POST',
+      body: JSON.stringify({
+        image_points: calibration.points,
+        world_points: calibration.world,
+        tag_height_m: (Number(document.getElementById('calib-tag-height').value) || 0) / 100,
+        camera_height_m: (Number(document.getElementById('calib-camera-height').value) || 0) / 100,
+      }),
+    });
+    const residual = result.residual_m;
+    hint.textContent = result.adequate
+      ? `已保存 —— 视差可以忽略（${residual} m）`
+      : `已保存，但视差 ${residual} m 偏大，位置会不准；把标定靶垫到狗背高度可以消除它`;
+    stopCalibration();
+    await refreshStatus();
+  } catch (err) {
+    hint.textContent = '保存失败: ' + err.message;
+  }
+}
+
+function wireCalibration() {
+  const start = document.getElementById('calib-start');
+  const cancel = document.getElementById('calib-cancel');
+  const save = document.getElementById('calib-save');
+  const overlay = document.getElementById('calib-overlay');
+  if (start) start.addEventListener('click', startCalibration);
+  if (cancel) cancel.addEventListener('click', stopCalibration);
+  if (save) save.addEventListener('click', saveCalibration);
+  if (overlay) overlay.addEventListener('click', onCalibrationClick);
+  for (const id of ['calib-width', 'calib-depth']) {
+    const input = document.getElementById(id);
+    if (input) input.addEventListener('change', setCalibrationWorldFromInputs);
+  }
+}
+
 /* ── two-dog synchronisation ───────────────────────────────────────── */
 
 /* The numbers are each dog's *change* since the marked reference, never its
@@ -2506,6 +2685,7 @@ async function boot() {
   wireFleetBar();
   wireSync();
   wireArena();
+  wireCalibration();
   wireEditor();
   loadFleetActions();
   loadRoutines();

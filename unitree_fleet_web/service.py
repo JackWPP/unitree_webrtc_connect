@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from pathlib import Path
 import math
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -32,6 +33,22 @@ from .state import ConsoleState, EStopScope, InputMode, MotionBlocked
 from .sync import SyncMonitor
 
 logger = logging.getLogger("unitree_fleet_web.service")
+
+
+def _shoelace(points) -> float:
+    """Twice the area of a quadrilateral, unsigned.
+
+    Used to tell a real four-cornered shape from three points in a line, which
+    is the input that produces a homography rather than an error: a degenerate
+    set still solves to a matrix, and it inverts to nonsense rather than
+    failing.
+    """
+    total = 0.0
+    for index in range(len(points)):
+        x1, y1 = points[index]
+        x2, y2 = points[(index + 1) % len(points)]
+        total += x1 * y2 - x2 * y1
+    return abs(total) / 2.0
 
 #: Joystick axes are normalised; the robot applies its own limits on top.
 AXIS_LIMIT = 1.0
@@ -1758,6 +1775,124 @@ class ConsoleService:
                 abs((a["heading_deg"] - b["heading_deg"] + 180.0) % 360.0 - 180.0), 1
             ),
             "bearing_deg_from_a_to_b": round(math.degrees(math.atan2(dy, dx)), 1),
+        }
+
+    def arena_frame_jpeg(self, *, max_width: int = 960) -> Optional[bytes]:
+        """The camera's newest frame, as JPEG, for the calibration page.
+
+        Encoded here rather than sent as raw pixels because the point of the
+        page is to *see* where the four corners are, and a 1280x720 greyscale
+        array is 900 KB of JSON.
+        """
+        camera = self._camera
+        if camera is None:
+            return None
+        frame = camera.latest()
+        if frame is None:
+            return None
+        import cv2
+
+        image = frame.image
+        height, width = image.shape[:2]
+        if width > max_width:
+            scale = max_width / width
+            image = cv2.resize(
+                image, (max_width, int(height * scale)), interpolation=cv2.INTER_AREA
+            )
+        ok, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        return buffer.tobytes() if ok else None
+
+    def arena_frame_size(self) -> Optional[List[int]]:
+        """Native frame size, so the page can map a click back to a pixel.
+
+        Without this the four points are recorded in whatever coordinate system
+        the browser happened to be showing, and the calibration is wrong by the
+        ratio between the two — a mistake that produces a map which looks
+        plausible and is off by a factor.
+        """
+        camera = self._camera
+        frame = camera.latest() if camera is not None else None
+        if frame is None:
+            return None
+        height, width = frame.image.shape[:2]
+        return [width, height]
+
+    def calibrate_arena(self, document: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate a calibration from the page and start using it.
+
+        Saved to the configured path so a session does not have to be redone,
+        and reloaded into the running camera so the map appears without a
+        restart — the operator has just measured something and wants to see
+        whether it worked.
+        """
+        from unitree_robot_agent.vision import Calibration
+
+        try:
+            calibration = Calibration.from_dict(document)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AgentError(
+                f"标定数据不完整：{exc}",
+                code="bad_calibration",
+                hint="需要四个图像点和四个场地坐标点，按同一顺序。",
+            )
+
+        # **A degenerate set still produces a matrix.** Three points in a line,
+        # or a duplicate, solve to something that inverts to nonsense rather
+        # than failing — so the four points are checked as a quadrilateral
+        # before the homography is built, rather than by hoping the result looks
+        # wrong afterwards.
+        for label, points in (("画面", calibration.image_points),
+                              ("场地", calibration.world_points)):
+            if len(set(map(tuple, points))) < 4:
+                raise AgentError(
+                    f"{label}上的四个点里有重复的。",
+                    code="bad_calibration",
+                    hint="四个角必须互不相同，而且按环绕顺序给出。",
+                )
+            area = _shoelace(points)
+            span_x = max(p[0] for p in points) - min(p[0] for p in points)
+            span_y = max(p[1] for p in points) - min(p[1] for p in points)
+            # A real quadrilateral fills a decent share of its own bounding box.
+            # Three points in a line, or four in a plus shape, do not.
+            if span_x <= 0 or span_y <= 0 or area < 0.05 * span_x * span_y:
+                raise AgentError(
+                    f"{label}上的四个点几乎共线或者顺序不对（面积只占外接矩形的 "
+                    f"{area / max(span_x * span_y, 1e-9):.1%}）。",
+                    code="bad_calibration",
+                    hint="按左上、右上、右下、左下围成四边形，不要交叉。",
+                )
+
+        path = self.config.arena_calibration
+        if not path:
+            raise AgentError(
+                "没有配置标定文件路径。",
+                code="no_calibration_path",
+                hint="用 --arena-calibration 指定一个可写的路径。",
+            )
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(
+                json.dumps(calibration.as_dict(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            raise AgentError(
+                f"标定文件写不了：{exc}",
+                code="calibration_write_failed",
+                hint=f"检查 {path} 的权限。",
+            ) from exc
+
+        self._calibration = calibration
+        logger.info(
+            "arena calibration saved: residual %.2f m, scale x%.3f",
+            calibration.residual_m, calibration.scale_factor,
+        )
+        return {
+            "saved": True,
+            "path": str(path),
+            "calibration": calibration.as_dict(),
+            "adequate": calibration.adequate,
+            "residual_m": round(calibration.residual_m, 3),
         }
 
     def controls_payload(self, robot_id: str) -> Dict[str, Any]:

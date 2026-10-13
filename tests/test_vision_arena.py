@@ -370,3 +370,171 @@ def test_the_page_says_which_reason_the_map_is_blank(open_client):
     source = open_client.get("/static/console.js").text
     for state in ("camera_failed", "camera_stale", "no_markers", "starting"):
         assert state in source, f"the map does not handle {state}"
+
+
+# ─── calibrating from the page ────────────────────────────────────────
+
+
+@pytest.fixture
+def open_client(tmp_path):
+    """A console with an arena camera configured, for the calibration routes."""
+    import json as _json
+
+    from starlette.testclient import TestClient
+
+    from unitree_fleet_web.app import create_app
+
+    # A *valid* starting calibration, because the fixture is a console that is
+    # already set up. An empty file would make the console warn on every start,
+    # which is correct behaviour and the wrong thing to build the fixture on.
+    path = tmp_path / "calibration.json"
+    path.write_text(_json.dumps({
+        "image_points": [[80, 80], [720, 80], [720, 720], [80, 720]],
+        "world_points": [[0, 4], [4, 4], [4, 0], [0, 0]],
+        "tag_height_m": 0.0, "camera_height_m": 0.0,
+    }), encoding="utf-8")
+
+    from unitree_robot_agent.fleet import FleetManager, Roster
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    roster = Roster.from_mapping(
+        {"state_dir": str(tmp_path / "state"), "default": "dog1", "robots": [
+            {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+            {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"}]}
+    )
+    config = ConsoleConfig(
+        host="127.0.0.1", deadman_s=0.2,
+        arena_camera="0", arena_calibration=str(path),
+    )
+    service = ConsoleService(FleetManager(roster, backend="mock", audit_to_stderr=False),
+                             config=config)
+    app = create_app(service, config)
+    app._console_service = service
+    with TestClient(app) as client:
+        client.app = app
+        yield client
+
+
+def _a_frame():
+    markers = default_markers(["dog1"])
+    return _arena_scene([(markers[0], 2.0, 2.0, 0.0)])
+
+
+def test_a_calibration_can_be_saved_from_the_page(open_client):
+    """The last place that needed a hand-written JSON file."""
+    service = open_client.app._console_service
+    service._camera = ReplayCamera([_a_frame()] * 3, fps=30)
+    service._camera.start()
+    try:
+        for _ in range(40):
+            if service._camera.latest() is not None:
+                break
+            time.sleep(0.02)
+
+        response = open_client.post("/api/arena/calibrate", json={
+            "image_points": [[80, 80], [720, 80], [720, 720], [80, 720]],
+            "world_points": [[0, 4], [4, 4], [4, 0], [0, 0]],
+            "tag_height_m": 0.0, "camera_height_m": 0.0,
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()["saved"] is True
+        assert response.json()["adequate"] is True
+
+        # ...and it is on disk, so the next session does not have to redo it.
+        import json as _json
+
+        saved = _json.loads(Path(service.config.arena_calibration).read_text())
+        assert saved["image_points"][0] == [80, 80]
+
+        # ...and it is live, so the operator sees the map without a restart:
+        # they have just measured something and want to know whether it worked.
+        assert service._calibration.to_world((400.0, 400.0)) == pytest.approx(
+            (2.0, 2.0), abs=0.01
+        )
+    finally:
+        service._camera.close()
+
+
+def test_the_frame_size_is_reported_beside_the_frame(open_client):
+    """Without it the page records clicks in display coordinates and the
+    calibration is wrong by the ratio between the two — a mistake that produces
+    a map which looks plausible and is off by a factor."""
+    service = open_client.app._console_service
+    service._camera = ReplayCamera([_a_frame()] * 3, fps=30)
+    service._camera.start()
+    try:
+        for _ in range(40):
+            if service._camera.latest() is not None:
+                break
+            time.sleep(0.02)
+        spec = open_client.get("/api/arena/calibration").json()
+        assert spec["frame_size"] == [800, 800]
+    finally:
+        service._camera.close()
+
+
+def test_the_frame_route_serves_a_jpeg(open_client):
+    service = open_client.app._console_service
+    service._camera = ReplayCamera([_a_frame()] * 3, fps=30)
+    service._camera.start()
+    try:
+        for _ in range(40):
+            if service._camera.latest() is not None:
+                break
+            time.sleep(0.02)
+        response = open_client.get("/api/arena/frame")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/jpeg"
+        # The JPEG magic, not a multipart wrapper: a console that pasted a
+        # boundary into an <img> would show nothing and say nothing.
+        assert response.content[:2] == b"\xff\xd8"
+    finally:
+        service._camera.close()
+
+
+def test_a_degenerate_calibration_is_refused(open_client):
+    """Three points in a line still produce a matrix. It just maps everything
+    to nonsense, which is worse than failing."""
+    response = open_client.post("/api/arena/calibrate", json={
+        "image_points": [[100, 100], [200, 100], [300, 100], [100, 100]],
+        "world_points": [[0, 0], [1, 0], [0, 1], [1, 1]],
+    })
+    assert response.status_code == 400
+    assert response.json()["code"] == "bad_calibration"
+
+
+def test_an_incomplete_calibration_is_refused_with_a_reason(open_client):
+    response = open_client.post("/api/arena/calibrate", json={
+        "image_points": [[0, 0], [1, 0], [1, 1]],
+        "world_points": [[0, 0], [1, 0], [1, 1]],
+    })
+    assert response.status_code == 400
+    assert response.json()["code"] == "bad_calibration"
+
+
+def test_no_frame_yet_is_a_conflict_not_a_server_error(open_client):
+    """A camera that has not produced a frame is a state the page can explain,
+    not an exception."""
+    response = open_client.get("/api/arena/frame")
+    assert response.status_code == 409
+    assert response.json()["available"] is False
+
+
+def test_the_page_carries_the_calibration_controls(open_client):
+    html = open_client.get("/").text
+    for marker in ("calib-start", "calib-save", "calib-image", "calib-overlay",
+                   "calib-width", "calib-tag-height"):
+        assert marker in html, f"the page lost {marker}"
+
+
+def test_the_console_js_converts_clicks_back_to_frame_pixels(open_client):
+    """The conversion the whole flow turns on, asserted in the source because
+    the failure is silent: a calibration recorded in display coordinates looks
+    entirely plausible and is off by a factor."""
+    source = open_client.get("/static/console.js").text
+    assert "calibration.size[0]" in source
+    assert "getBoundingClientRect" in source
+    assert "renderCalibrationOverlay" in source
+    # The order is named, not inferred: four correct points in the wrong order
+    # produce a mirrored arena.
+    assert "CALIB_ORDER" in source

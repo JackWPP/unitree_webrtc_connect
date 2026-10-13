@@ -57,6 +57,41 @@
       <svg id="arena-map" class="arena-map" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet"></svg>
       <div class="arena-legend muted" id="arena-legend"></div>
     </div>
+
+    <!-- Calibration. The four points have to be given in the arena's own order,
+         which is why the button numbers them as they are clicked and why the
+         printed plan numbers them too — four correct points in the wrong order
+         produce a mirrored arena that looks plausible. -->
+    <div class="calib" id="calib">
+      <div class="calib-head">
+        <button id="calib-start" class="btn">标定场地</button>
+        <span id="calib-hint" class="muted">对着画面依次点四个角，顺序和打印的标定图一致</span>
+        <span class="spacer"></span>
+        <button id="calib-save" class="btn" disabled>保存标定</button>
+        <button id="calib-cancel" class="btn btn-quiet hidden">取消</button>
+      </div>
+      <div class="calib-body hidden" id="calib-body">
+        <div class="calib-photo">
+          <img id="calib-image" alt="相机画面">
+          <svg id="calib-overlay" class="calib-overlay"></svg>
+        </div>
+        <div class="calib-side">
+          <label class="calib-size">
+            场地宽度 <input id="calib-width" type="number" value="4" min="0.5" max="30" step="0.5"> 米
+            　深度 <input id="calib-depth" type="number" value="4" min="0.5" max="30" step="0.5"> 米
+          </label>
+          <label class="calib-size">
+            标记离地 <input id="calib-tag-height" type="number" value="35" min="0" max="150" step="1"> cm
+            　相机高度 <input id="calib-camera-height" type="number" value="250" min="0" max="800" step="10"> cm
+          </label>
+          <p class="muted calib-note" id="calib-note">
+            标定靶放在<strong>狗背高度</strong>时两个高度都填 0，误差从构造上就是 0；
+            放在地上量则如实填写，控制台会把偏差算出来并标在数字旁边。
+          </p>
+          <ol class="calib-points" id="calib-points"></ol>
+        </div>
+      </div>
+    </div>
   </details>
 
   <!-- Two dogs, one intent. `robot_turn(-90)` is closed loop on each robot's
