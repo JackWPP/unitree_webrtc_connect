@@ -42,9 +42,11 @@
 | P3.2 | **控制台故障面板**（逐狗） | ✅ | `134248b`；实机端口实测：dog1 显示 [System]+[Motor 1]，dog2 显示 [Emergency stop]，互不串台 |
 | P3.3 | **控制台复用 MCP 工具**（不是第二份实现） | ✅ | `21448d1`；`ToolBridge` + 19 个白名单工具；confirm/safe-mode/审计全部继承 |
 | P3.4 | 姿态与动作按钮（站立/趴下/动作下拉） | ✅ | `21448d1`；动作列表来自 `robot_list_actions`，不硬编码 |
+| P1.14 | **操作员租约** + 显式连接/断开 | ✅ | `f9d6f36`；页面打开期间不再每 45s 断链；WS 关闭即释放，且**从不主动连接** |
+| P1.15 | JS/HTML 契约测试 + JS 语法检查 | ✅ | `test_console_app.py`；`getElementById`/`data-role` 与模板比对；有 node 时 `node --check` |
+| P3.5 | **`upload_file` 修复——它一个字节都没发** | ✅ | `e33c584`；修复前实测：`publish()` 进入 0 次、`send()` 0 条、却返回 `"ok"` |
 | P0.3 | 真机固件/`data2` 探测 | ⏸ **等硬件** | 局域网扫描 Go2/G1/R1 组均无应答，狗不在线 |
 | P0.4b | 真机并发连接 + 阻塞验证 | ⏸ **等硬件** | 同上 |
-| P3.5 | `upload_file` per-chunk ack 修复 | 待做 | 现在是 fire-and-forget，永远返回 `"ok"`；损坏的上传会报成功 |
 
 **P0.4a 的实测结论（最重要的一条）**：`unitree_webrtc_connect/__init__.py:1-17` 把 ICE 凭据钉在**类属性**上，进程内所有 peer connection 共享同一组 ufrag/pwd（实测 3 条连接只有 1 个 ufrag）——**但这不构成阻塞**：3 条连接拿到 3 个独立 transport，36 个 host candidate **端口两两不同**，关掉第 0 条另两条存活。
 
@@ -74,14 +76,16 @@ unitree-robot-mcp serve                       # MCP server，工具自动带 rob
 - 键盘 `WASD` 前进/平移、`QE` 转向；`Split` 模式下第二只狗用 `IJKL+UO`——**一个操作员同时开两只**。
 - 急停是**锁存**的，必须显式解除；舰队级锁存不能被单狗解除收窄。
 - 姿态/动作按钮走的是**和 MCP 完全相同的受保护函数**（`/api/robot/{id}/tool`，19 个白名单工具），所以 `confirm`、危险动作闸门、safe mode、限流、审计全部继承。按钮发 `confirm: true`——人点按钮本身就是确认；与"人的意图"无关的闸门（safe mode、危险动作白名单）仍然会拒绝。
+- 每只狗的 **连接/断开**按钮：从官方 App 手里把链路要回来，或主动交还，都不必先发一条运动指令。
+- **页面打开期间链路不会被释放**（操作员租约）：机器人会话默认 45s 空闲就断开好让官方 App 接管，而"页面开着"不是空闲。租约只**阻止释放**，**从不主动连接**；最后一个浏览器关掉后会话照常自行释放。
 
 MCP 侧先调 `robot_roster` 拿 id；每个工具都接受 `robot_id`，省略则作用于名册默认狗。停止全部用 `robot_stop_all`，并**必须检查 `not_stopped`**——链路不通的狗会列在那里，它没有停下。
 
 ### 立刻可做的下一步
 
 1. **P0.3/P0.4b**（狗上线时，唯一的硬阻塞）：`scripts/probe_dual_connection.py --ips <dog1>,<dog2>` + 固件探测，然后 `unitree-fleet-console --backend webrtc`。
-2. **Phase 3 小赢**（不需要机器人）：unitree_ui 的故障目录 + 快照/增量 store（舰队排障必需，我们现在只会追加事件、答不了"现在到底哪坏了"），以及 `upload_file` 的 per-chunk ack 修复（现在是 fire-and-forget，损坏的上传会报成功）。
-3. **控制台增强**：手柄（Gamepad API）接入、每狗动作按钮（stand/sit/hello）、故障面板。
+2. **控制台增强**（不需要机器人）：手柄（Gamepad API）接入——`Split` 模式本来就是为"一个操作员两只狗"设计的，手柄比键盘更合适；以及审计轨迹查看面板。
+3. **驱动侧**：`upload_file` 已修，但 `request_static_file`（下载）走的是同一条 fire-and-forget 路径，值得按同样的方式核一遍。
 
 ---
 

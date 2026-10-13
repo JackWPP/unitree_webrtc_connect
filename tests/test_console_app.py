@@ -473,3 +473,46 @@ def test_an_open_websocket_arms_the_operator_lease(open_client):
             break
         time.sleep(0.05)
     assert service.watching is False
+
+
+# ─── the HTML/JS contract ─────────────────────────────────────────────
+
+
+def test_every_element_the_javascript_reaches_for_exists_in_the_page(open_client):
+    """Guards a class of bug no Python test can otherwise see.
+
+    Renaming a `data-role` in the template and forgetting the JavaScript
+    leaves the console silently half-broken — the panel just never updates —
+    and nothing here would fail. This is cheap insurance against that.
+    """
+    html = open_client.get("/").text
+    js = open_client.get("/static/console.js").text
+
+    html_ids = set(re.findall(r'id="([^"]+)"', html))
+    js_ids = set(re.findall(r"getElementById\(['\"]([^'\"]+)['\"]\)", js))
+    # `toast` is created by the script itself.
+    missing = sorted(js_ids - html_ids - {"toast"})
+    assert not missing, f"console.js looks for elements that are not there: {missing}"
+
+    html_roles = set(re.findall(r'data-role="([^"]+)"', html))
+    js_roles = set(re.findall(r'data-role="([^"]+)"', js))
+    missing_roles = sorted(js_roles - html_roles)
+    assert not missing_roles, f"console.js queries data-role values that are not there: {missing_roles}"
+
+
+def test_the_javascript_parses(open_client, tmp_path):
+    """A syntax error in the bundle would render a blank console, and every
+    other test here would still pass because they only fetch the file."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; syntax is only checked when available")
+
+    source = tmp_path / "console.js"
+    source.write_text(open_client.get("/static/console.js").text, encoding="utf-8")
+    result = subprocess.run(
+        [node, "--check", str(source)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
