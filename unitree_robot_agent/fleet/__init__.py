@@ -17,6 +17,8 @@ The per-robot machinery that already works — ``RobotSession``, ``Guard``,
 instantiated once per roster entry.
 """
 
+from typing import TYPE_CHECKING, Any
+
 from .keys import KeyEntry, KeyStore
 from .roster import (
     DEFAULT_STATE_DIR as ROSTER_DEFAULT_STATE_DIR,
@@ -26,11 +28,38 @@ from .roster import (
 )
 from .spec import RobotSpec, normalise_key
 
+if TYPE_CHECKING:  # pragma: no cover - import cycle, see __getattr__
+    from .manager import FleetManager, RobotOutcome
+
+_LAZY = ("FleetManager", "RobotOutcome")
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve :class:`FleetManager` on first use (PEP 562).
+
+    ``config.py`` imports ``fleet.keys`` to share one key-cache
+    implementation, and importing any submodule runs this file. If the
+    manager were imported eagerly here, ``manager`` → ``config`` would close
+    the cycle and the package would fail to import at all.
+
+    Keeping it lazy preserves both things we want: `config` (the core) has no
+    dependency on the fleet layer, and ``from unitree_robot_agent.fleet
+    import FleetManager`` still works.
+    """
+    if name in _LAZY:
+        from . import manager
+
+        return getattr(manager, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
+    "FleetManager",
     "KeyEntry",
     "KeyStore",
     "ROSTER_ENV_VAR",
     "ROSTER_DEFAULT_STATE_DIR",
+    "RobotOutcome",
     "RobotSpec",
     "Roster",
     "load_roster",

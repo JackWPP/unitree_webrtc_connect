@@ -51,6 +51,7 @@ def create_runtime(config: Optional[AgentConfig] = None, **overrides) -> Runtime
         path=cfg.audit_log if cfg.audit_enabled else None,
         enabled=cfg.audit_enabled,
         to_stderr=cfg.audit_to_stderr,
+        robot_id=cfg.robot_id,
     )
     auth = CloudAuth(cfg, audit)
     backend = build_backend(cfg, audit, auth)

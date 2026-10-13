@@ -102,19 +102,39 @@ def summarize_args(args: Dict[str, Any]) -> Dict[str, Any]:
 
 @dataclass
 class AuditLog:
-    """Append-only JSONL audit trail."""
+    """Append-only JSONL audit trail for **one** robot.
+
+    Each instance owns a *private* logger rather than sharing a module-level
+    one. That matters as soon as there is more than one robot: the previous
+    implementation fetched the process-wide logger by name and then added a
+    ``RotatingFileHandler`` to it per instance, so N robots meant N handlers
+    on one logger and **every record was written to all N files** — dog 1's
+    movements appearing in dog 2's trail. The shared logger was also why
+    ``to_stderr`` never took effect once a file handler existed.
+
+    ``robot_id`` is stamped onto every record. ``robot`` (the model family)
+    stays as capability context, but it cannot tell two Go2s apart, which is
+    exactly the case this field exists for.
+    """
 
     path: Optional[Path] = None
     enabled: bool = True
     to_stderr: bool = False
     max_bytes: int = 5 * 1024 * 1024
     backups: int = 3
+    #: Stable identity of the robot this trail belongs to, e.g. ``"dog1"``.
+    robot_id: str = ""
     _logger: logging.Logger = field(init=False, repr=False)
     _buffer: List[dict] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._logger = logging.getLogger(_LOGGER_NAME)
-        self._logger.setLevel(logging.INFO)
+        # Deliberately NOT `logging.getLogger(name)`: that registry is
+        # process-global, so two AuditLogs would end up configuring the same
+        # logger and cross-writing. A directly constructed Logger has no
+        # parent and no entry in the manager, which is what we want.
+        self._logger = logging.Logger(
+            f"{_LOGGER_NAME}.{id(self):x}", level=logging.INFO
+        )
         self._logger.propagate = False
         if not self.enabled:
             return
@@ -133,8 +153,13 @@ class AuditLog:
                 # Never let an unwritable log path break the tool call.
                 self.path = None
         if self.to_stderr and not any(
-            isinstance(h, logging.StreamHandler) for h in self._logger.handlers
+            isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+            for h in self._logger.handlers
         ):
+            # Note the FileHandler exclusion: RotatingFileHandler *is* a
+            # StreamHandler, so the old check saw the file handler and
+            # silently skipped stderr altogether.
             stream = logging.StreamHandler()
             stream.setFormatter(logging.Formatter("%(message)s"))
             self._logger.addHandler(stream)
@@ -162,6 +187,8 @@ class AuditLog:
         }
         if robot:
             entry["robot"] = robot
+        if self.robot_id:
+            entry["robot_id"] = self.robot_id
         if args:
             entry["args"] = summarize_args(args)
         if ok is not None:

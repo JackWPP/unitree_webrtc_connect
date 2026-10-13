@@ -140,6 +140,10 @@ class AgentConfig:
     connection: str = "sta-l"
     ip: Optional[str] = None
     serial_number: Optional[str] = None
+    #: Stable operator-facing identity, e.g. ``"dog1"``. The model family
+    #: (``robot``) says what the robot *can do*; this says *which one it is*.
+    #: Empty means a single-robot run, and is derived from the target below.
+    robot_id: str = ""
     aes_128_key: Optional[str] = None
     device_type: Optional[str] = None  # defaults to `robot`
     region: str = "auto"               # auto | global | cn
@@ -217,6 +221,11 @@ class AgentConfig:
         if self.chassis not in VALID_CHASSIS:
             self.chassis = "unknown"
         self.state_dir = Path(self.state_dir).expanduser()
+        # A single-robot run may leave robot_id empty; derive it so the audit
+        # trail and tool results still carry something better than the family
+        # name. The target is a good default precisely because it is unique
+        # per robot — it is just less pleasant to read than "dog1".
+        self.robot_id = (self.robot_id or "").strip() or self.target_label() or "default"
         if self.audit_log is None:
             self.audit_log = self.state_dir / "audit.log"
         else:
