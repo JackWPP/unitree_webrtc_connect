@@ -38,8 +38,13 @@
 | P2.1–P2.2 | 舰队急停（逐台结果）+ **锁存式** e-stop | ✅ | `aeeed6d`；舰队锁存不可被单狗解除收窄 |
 | P2.x | **切换目标自动归零** + 死手看门狗 + Split 双人键盘 | ✅ | `7cc4549`；驱动归属按 source 分键，覆盖 Both/Split |
 | P0.5 | `pyproject.toml`：aiortc 加上界、Python 提到 ≥3.10 | ✅ | `aiortc>=1.9.0,<2`；`requires-python>=3.10` |
+| P3.1 | **故障目录 + 快照/增量 store**（从 unitree_ui 借鉴） | ✅ | `134248b`；修掉"快照被当成事件流"——旧实现答不了"现在哪里坏了"；31 个新测试 |
+| P3.2 | **控制台故障面板**（逐狗） | ✅ | `134248b`；实机端口实测：dog1 显示 [System]+[Motor 1]，dog2 显示 [Emergency stop]，互不串台 |
+| P3.3 | **控制台复用 MCP 工具**（不是第二份实现） | ✅ | `21448d1`；`ToolBridge` + 19 个白名单工具；confirm/safe-mode/审计全部继承 |
+| P3.4 | 姿态与动作按钮（站立/趴下/动作下拉） | ✅ | `21448d1`；动作列表来自 `robot_list_actions`，不硬编码 |
 | P0.3 | 真机固件/`data2` 探测 | ⏸ **等硬件** | 局域网扫描 Go2/G1/R1 组均无应答，狗不在线 |
 | P0.4b | 真机并发连接 + 阻塞验证 | ⏸ **等硬件** | 同上 |
+| P3.5 | `upload_file` per-chunk ack 修复 | 待做 | 现在是 fire-and-forget，永远返回 `"ok"`；损坏的上传会报成功 |
 
 **P0.4a 的实测结论（最重要的一条）**：`unitree_webrtc_connect/__init__.py:1-17` 把 ICE 凭据钉在**类属性**上，进程内所有 peer connection 共享同一组 ufrag/pwd（实测 3 条连接只有 1 个 ufrag）——**但这不构成阻塞**：3 条连接拿到 3 个独立 transport，36 个 host candidate **端口两两不同**，关掉第 0 条另两条存活。
 
@@ -64,7 +69,11 @@ unitree-robot-mcp selftest                    # MCP 离线自检（对 roster �
 unitree-robot-mcp serve                       # MCP server，工具自动带 robot_id
 ```
 
-浏览器打开 `http://127.0.0.1:8765`。键盘 `WASD` 前进/平移、`QE` 转向；`Split` 模式下第二只狗用 `IJKL+UO`——**一个操作员同时开两只**。急停是**锁存**的，必须显式解除。
+浏览器打开 `http://127.0.0.1:8765`。每只狗一栏：实时画面、电量/状态、**故障面板**、虚拟摇杆、姿态按钮（站立/趴下/动作下拉）、停止/急停。
+
+- 键盘 `WASD` 前进/平移、`QE` 转向；`Split` 模式下第二只狗用 `IJKL+UO`——**一个操作员同时开两只**。
+- 急停是**锁存**的，必须显式解除；舰队级锁存不能被单狗解除收窄。
+- 姿态/动作按钮走的是**和 MCP 完全相同的受保护函数**（`/api/robot/{id}/tool`，19 个白名单工具），所以 `confirm`、危险动作闸门、safe mode、限流、审计全部继承。按钮发 `confirm: true`——人点按钮本身就是确认；与"人的意图"无关的闸门（safe mode、危险动作白名单）仍然会拒绝。
 
 MCP 侧先调 `robot_roster` 拿 id；每个工具都接受 `robot_id`，省略则作用于名册默认狗。停止全部用 `robot_stop_all`，并**必须检查 `not_stopped`**——链路不通的狗会列在那里，它没有停下。
 
