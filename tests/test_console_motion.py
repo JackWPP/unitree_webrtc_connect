@@ -159,11 +159,38 @@ def test_a_latched_estop_does_not_ramp():
     for _ in range(30):
         controller.tick(0.05)
 
-    controller.hard_stop()
+    controller.hard_stop(state="estopped")
 
     assert controller.commanded == (0.0, 0.0, 0.0)
     assert controller.target == (0.0, 0.0, 0.0)
     assert controller.state == "estopped"
+
+
+def test_a_plain_hard_stop_does_not_claim_to_be_an_estop():
+    """STOP ALL and an e-stop both cut, but only one latches. Reporting
+    `estopped` after a plain stop would tell the operator their robot is
+    latched when it is not, and send them looking for a release button that
+    does nothing."""
+    controller = MotionController()
+    controller.set_target(vx=1.0, vy=0.0, vyaw=0.0)
+    for _ in range(20):
+        controller.tick(0.05)
+
+    controller.hard_stop()
+
+    assert controller.state == "stopped"
+    assert controller.state != "estopped"
+
+
+def test_a_terminal_state_survives_the_next_idle_tick():
+    """`estopped` and `stand_timeout` are facts about the robot, not activities
+    that have finished. Letting the next idle tick reset them to `idle` would
+    show 空闲 a frame after the operator pressed 急停."""
+    for marker in ("estopped", "stand_timeout", "damped"):
+        controller = MotionController()
+        controller.hard_stop(state=marker)
+        controller.tick(0.05)
+        assert controller.state == marker, marker
 
 
 def test_a_stalled_loop_cannot_teleport_the_velocity():

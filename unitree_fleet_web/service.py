@@ -25,6 +25,7 @@ from unitree_robot_agent.server import build_server
 
 from .config import ConsoleConfig
 from .motion import MotionController, MotionLimits
+from .posture import PostureBelief
 from .routines import ROUTINES, validate as validate_routine
 from .state import ConsoleState, EStopScope, InputMode, MotionBlocked
 
@@ -246,6 +247,13 @@ class ConsoleService:
         #: One velocity ramp per robot. Sharing one would couple the dogs'
         #: accelerations to each other.
         self._motion: Dict[str, MotionController] = {}
+        #: What the console believes each robot's posture is, learned from its
+        #: own commands. See `posture.PostureBelief`.
+        self._posture: Dict[str, PostureBelief] = {}
+        #: The auto-stand gate's bookkeeping, per robot.
+        self._gate: Dict[str, Dict[str, float]] = {}
+        #: In-flight auto-stand requests, so shutdown can cancel them.
+        self._gate_tasks: set = set()
         self._motion_task: Optional[asyncio.Task] = None
         self._motion_limits = MotionLimits(
             accel=float(getattr(self.config, "motion_accel", MotionLimits.accel)),
@@ -324,6 +332,11 @@ class ConsoleService:
         payload["robot_id"] = robot_id
         result = await self._bridge.call(tool, payload)
         if isinstance(result, dict):
+            if result.get("ok"):
+                # Only on success: a refused `robot_lie_down` did not lie the
+                # robot down, and believing it did would make the standing gate
+                # send a pointless stand on the next drive.
+                self._note_posture(robot_id, tool, payload)
             return result
         return {"ok": True, "result": str(result)}
 
@@ -353,6 +366,13 @@ class ConsoleService:
             )
 
     async def aclose(self) -> None:
+        for task in list(self._gate_tasks):
+            task.cancel()
+        for task in list(self._gate_tasks):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._gate_tasks.clear()
+
         # A routine keeps issuing commands, so it goes before anything else —
         # including before the sessions it is driving are closed.
         if self._routine_task is not None and not self._routine_task.done():
@@ -973,6 +993,16 @@ class ConsoleService:
 
     # ── the velocity ramp ────────────────────────────────────────────
 
+    def posture(self, robot_id: str) -> PostureBelief:
+        belief = self._posture.get(robot_id)
+        if belief is None:
+            belief = PostureBelief(robot_id)
+            self._posture[robot_id] = belief
+        return belief
+
+    def _note_posture(self, robot_id: str, tool: str, args: dict) -> None:
+        self.posture(robot_id).note(tool, args)
+
     def motion(self, robot_id: str) -> MotionController:
         """The ramp for one robot, created on first use."""
         controller = self._motion.get(robot_id)
@@ -999,6 +1029,12 @@ class ConsoleService:
                 last = now
 
                 for robot_id, controller in list(self._motion.items()):
+                    if await self._standing_gate(robot_id, controller, now):
+                        # Not walkable: a stand has been asked for, and no
+                        # velocity goes out this tick. Publishing it anyway is
+                        # what produces 3201 and an operator deciding the
+                        # console is broken.
+                        continue
                     before = controller.commanded
                     vx, vy, vyaw = controller.tick(dt, now=now)
                     if not controller.moving and before == (0.0, 0.0, 0.0):
@@ -1009,6 +1045,65 @@ class ConsoleService:
                 raise
             except Exception as exc:  # noqa: BLE001 - a mover must survive
                 logger.warning("motion loop error: %r", exc)
+
+    async def _standing_gate(
+        self, robot_id: str, controller: MotionController, now: float
+    ) -> bool:
+        """Hold a drive back until the robot is standing. True means "held".
+
+        `unitree_harness` calls this `auto_stand` and it is the difference
+        between "I pressed W and it walked" and "I pressed W and nothing
+        happened, and the robot did not say why".
+
+        Bounded on purpose: after `stand_timeout_s` the target is dropped and
+        the state says why, rather than the console quietly asking a robot to
+        stand forever.
+        """
+        if not any(controller.target):
+            self._gate.pop(robot_id, None)
+            return False
+
+        belief = self.posture(robot_id)
+        if belief.walkable:
+            self._gate.pop(robot_id, None)
+            return False
+        gate = self._gate.get(robot_id)
+        if gate is None:
+            gate = {"asked_at": now, "retry_at": now}
+            self._gate[robot_id] = gate
+            logger.info(
+                "auto-stand: %s is %s, asking it to stand before driving",
+                robot_id, belief.posture,
+            )
+
+        if now - gate["asked_at"] > self.config.stand_timeout_s:
+            logger.warning("auto-stand: %s did not report standing, dropping target", robot_id)
+            controller.stop()
+            controller._state = "stand_timeout"  # noqa: SLF001
+            self._gate.pop(robot_id, None)
+            return True
+
+        # Re-ask at most once a second. A robot takes a moment, and asking on
+        # every 20 ms tick would be a flood.
+        if now >= gate["retry_at"]:
+            gate["retry_at"] = now + 1.0
+            # Deliberately **not** awaited. `robot_stand` waits a second for
+            # the firmware to acknowledge, so awaiting it here stalls the whole
+            # motion loop — every other robot's ramp stops too, which is the
+            # same fault as a blocking WebRTC handshake. It measured as a full
+            # second of frozen output before this was noticed.
+            task = asyncio.create_task(self._ask_stand(robot_id))
+            self._gate_tasks.add(task)
+            task.add_done_callback(self._gate_tasks.discard)
+        controller._state = "standing_wait"  # noqa: SLF001
+        return True
+
+    async def _ask_stand(self, robot_id: str) -> None:
+        """Ask a robot to stand, off the motion loop."""
+        try:
+            await self.call_tool(robot_id, "robot_stand", {"confirm": True})
+        except Exception as exc:  # noqa: BLE001 - a refusal is not fatal
+            logger.info("auto-stand: %s refused to stand (%r)", robot_id, exc)
 
     async def _publish_commanded(
         self, robot_id: str, controller: MotionController, vx: float, vy: float, vyaw: float
@@ -1254,6 +1349,9 @@ class ConsoleService:
         runtime = self.fleet.get(robot_id)
         self.state.release_robot(robot_id)
         await runtime.session.disconnect(reason=reason, stop_first=True)
+        # A fresh link might reach a robot somebody has since moved. Forgetting
+        # is the honest state; guessing is not.
+        self.posture(robot_id).forget()
         return {"robot_id": robot_id, "connected": runtime.session.is_connected}
 
     async def _deadman_loop(self) -> None:
@@ -1314,6 +1412,7 @@ class ConsoleService:
             "routine": self.routine_state(),
             "motion": {rid: self.motion(rid).snapshot() for rid in self.fleet.ids},
             "where": {rid: self.where(rid) for rid in self.fleet.ids},
+            "posture": {rid: self.posture(rid).as_dict() for rid in self.fleet.ids},
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a
@@ -1593,8 +1692,9 @@ class ConsoleService:
 
         self.state.stop_driving()
         # Same reasoning as STOP ALL, and more urgent: an e-stop whose velocity
-        # is re-published on the next tick is not an emergency stop.
-        await self._zero_many(targets, ramp=False)
+        # is re-published on the next tick is not an emergency stop. Named
+        # `estopped` because this one *does* latch.
+        await self._zero_many(targets, ramp=False, state="estopped")
         results = await asyncio.gather(
             *(self._damp(rid) for rid in targets), return_exceptions=True
         )
@@ -1639,6 +1739,13 @@ class ConsoleService:
         """Clear the latch. Sends nothing — the robot is already damped."""
         scope = EStopScope.ROBOT if robot_id else EStopScope.ALL
         changed = self.state.estop.release(scope=scope, robot_id=robot_id)
+        if changed:
+            # The latch is gone, so the marker it left has to go with it —
+            # otherwise the panel keeps saying 已急停 after the operator has
+            # released it.
+            for controller in self._motion.values():
+                if controller.state == "estopped":
+                    controller.hard_stop(state="idle")
         return {
             "released": changed,
             "reason": "" if changed else "no matching latch was engaged",
@@ -1871,7 +1978,9 @@ class ConsoleService:
         with contextlib.suppress(Exception):
             await runtime.session.zero_joystick()
 
-    async def _zero_many(self, robot_ids: Any, *, ramp: bool = False) -> None:
+    async def _zero_many(
+        self, robot_ids: Any, *, ramp: bool = False, state: str = "stopped"
+    ) -> None:
         """Zero several robots concurrently; never let one failure stop another.
 
         `ramp=True` drops the motion target and leaves the deceleration to the
@@ -1883,13 +1992,15 @@ class ConsoleService:
         if not targets:
             return
         for robot_id in targets:
-            controller = self._motion.get(robot_id)
-            if controller is None:
-                continue
+            # `self.motion` rather than a bare lookup: a robot that has never
+            # been driven has no controller yet, and skipping it meant an
+            # e-stop on a fresh page left nothing marked — the panel showed
+            # 空闲 a moment after the operator pressed 急停.
+            controller = self.motion(robot_id)
             if ramp:
                 controller.stop()
             else:
-                controller.hard_stop()
+                controller.hard_stop(state=state)
         if ramp:
             return
         await asyncio.gather(

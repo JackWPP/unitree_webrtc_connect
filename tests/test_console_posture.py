@@ -1,0 +1,286 @@
+"""The auto-stand gate: pressing W at a robot that is lying down.
+
+The firmware refuses to walk a robot that is not standing — code 3201, "robot
+is not standing; BalanceStand first" — and the operator sees nothing happen.
+Every operator hits it the first time.
+
+`unitree_harness` solves it with an `auto_stand` gate, but it has a DDS state
+subscription to tell it the posture and this console does not: the Go2's state
+topic is silent on at least one real firmware. It does not need one, because
+**the console knows what it told the robot to do** — every posture change goes
+through it. The belief is therefore learned, not observed, and the docstring
+says so.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from unitree_fleet_web.posture import (
+    DAMPING,
+    LYING,
+    SITTING,
+    STANDING,
+    UNKNOWN,
+    PostureBelief,
+)
+
+
+# ─── the belief ───────────────────────────────────────────────────────
+
+
+def test_a_fresh_robot_is_unknown_not_lying():
+    """Guessing "lying" would make the first drive of every session send a
+    stand the operator did not ask for."""
+    belief = PostureBelief("dog1")
+    assert belief.posture == UNKNOWN
+    assert belief.walkable is False
+    assert belief.known is False
+
+
+def test_every_posture_tool_updates_it():
+    belief = PostureBelief()
+    belief.note("robot_lie_down")
+    assert belief.posture == LYING and belief.walkable is False
+    belief.note("robot_stand")
+    assert belief.posture == STANDING and belief.walkable is True
+    belief.note("go2_recover")
+    assert belief.posture == STANDING
+    belief.note("robot_emergency_stop")
+    assert belief.posture == DAMPING and belief.walkable is False
+
+
+def test_sit_and_rise_arrive_through_the_action_tool():
+    """Posture is not only changed by posture tools: 坐下 and 从坐姿站起 are
+    actions in the catalogue, and missing them would leave the belief wrong at
+    exactly the moment the gate needs it."""
+    belief = PostureBelief()
+    belief.note("robot_play_action", {"name": "sit"})
+    assert belief.posture == SITTING
+    belief.note("robot_play_action", {"name": "rise_sit"})
+    assert belief.posture == STANDING
+
+
+def test_an_unrelated_action_does_not_change_the_belief():
+    belief = PostureBelief()
+    belief.note("robot_stand")
+    belief.note("robot_play_action", {"name": "hello"})
+    assert belief.posture == STANDING
+
+
+def test_stopping_motion_is_not_a_posture_change():
+    belief = PostureBelief()
+    belief.note("robot_stand")
+    belief.note("robot_stop")
+    assert belief.posture == STANDING
+
+
+def test_a_bounded_move_keeps_a_walking_robot_walking():
+    belief = PostureBelief()
+    belief.note("robot_stand")
+    belief.note("robot_move")
+    assert belief.posture == "moving"
+    assert belief.walkable is True
+
+
+def test_a_move_does_not_pretend_a_lying_robot_stood_up():
+    belief = PostureBelief()
+    belief.note("robot_lie_down")
+    belief.note("robot_move")
+    assert belief.posture == LYING
+
+
+def test_a_fresh_link_forgets():
+    belief = PostureBelief()
+    belief.note("robot_stand")
+    belief.forget()
+    assert belief.posture == UNKNOWN
+
+
+# ─── the gate ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def service(tmp_path):
+    from unitree_robot_agent.fleet import FleetManager, Roster
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    roster = Roster.from_mapping(
+        {
+            "state_dir": str(tmp_path / "state"),
+            "default": "dog1",
+            "robots": [
+                {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+                {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"},
+            ],
+        }
+    )
+    return ConsoleService(
+        FleetManager(roster, backend="mock", audit_to_stderr=False),
+        config=ConsoleConfig(deadman_s=5.0, motion_hz=50.0, stand_timeout_s=5.0),
+    )
+
+
+async def test_the_gate_holds_a_drive_at_a_lying_robot(service):
+    await service.connect("dog1")
+    await service.start()
+    try:
+        await service.call_tool("dog1", "robot_lie_down", {"confirm": True})
+        service.set_focus("dog1")
+
+        for _ in range(6):
+            await service.teleop_source(source="keyboard", ly=1.0)
+            await asyncio.sleep(0.05)
+
+        controller = service.motion("dog1")
+        assert controller.state == "standing_wait"
+        assert controller.commanded[0] == 0.0, "a velocity went out anyway"
+    finally:
+        for task in (service._motion_task, service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+
+
+async def test_it_eventually_stands_and_drives(service):
+    await service.connect("dog1")
+    await service.start()
+    try:
+        await service.call_tool("dog1", "robot_lie_down", {"confirm": True})
+        service.set_focus("dog1")
+
+        for _ in range(60):
+            await service.teleop_source(source="keyboard", ly=1.0)
+            await asyncio.sleep(0.05)
+            if service.motion("dog1").state == "driving":
+                break
+
+        assert service.posture("dog1").posture == STANDING
+        assert service.motion("dog1").state == "driving"
+        assert service.motion("dog1").commanded[0] > 0
+    finally:
+        for task in (service._motion_task, service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+
+
+async def test_the_estop_latch_blocks_a_drive_before_the_gate_sees_it(service):
+    """Which is why there is no "damped robot" branch in the gate.
+
+    The only tool that damps is not on the console allowlist — the console has
+    its own latching e-stop — and the latch refuses the drive while frames are
+    being resolved. A `damping` branch would be unreachable code with a
+    comforting comment on it.
+    """
+    from unitree_fleet_web.state import MotionBlocked
+
+    await service.connect("dog1")
+    await service.start()
+    try:
+        await service.estop(robot_id="dog1", reason="test")
+        service.set_focus("dog1")
+
+        with pytest.raises(MotionBlocked):
+            await service.teleop_source(source="keyboard", ly=1.0)
+
+        assert service.motion("dog1").state == "estopped"
+    finally:
+        for task in (service._motion_task, service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+
+
+async def test_the_gate_does_not_stall_the_other_robot(service):
+    """The regression this was caught by.
+
+    The gate asks the robot to stand, and `robot_stand` waits a second for the
+    firmware to acknowledge. Awaiting that inside the motion loop froze every
+    robot's ramp for a measured 1.0 s — the same fault as a blocking WebRTC
+    handshake on the shared event loop.
+    """
+    await service.connect("dog1")
+    await service.connect("dog2")
+    await service.start()
+    try:
+        # dog2 is stood up first so its posture is known: an `unknown` robot is
+        # gated too, and the ~1 s that costs is the robot actually standing,
+        # not a stall. The question here is whether dog1's gate costs dog2
+        # anything once dog2 is free to move.
+        await service.call_tool("dog2", "robot_stand", {"confirm": True})
+        await service.call_tool("dog1", "robot_lie_down", {"confirm": True})
+        await service.set_input_mode("both")
+
+        # Sampled while it happens: dog1 gets auto-stood within about a second
+        # and then drives, so a check afterwards would miss the window
+        # entirely. What matters is that dog2's ramp kept moving *during* it.
+        gated_while_ramping = 0.0
+        for _ in range(24):
+            await service.teleop_source(source="keyboard", ly=1.0)
+            await asyncio.sleep(0.05)
+            if service.motion("dog1").state == "standing_wait":
+                gated_while_ramping = max(
+                    gated_while_ramping, service.motion("dog2").commanded[0]
+                )
+
+        assert gated_while_ramping > 0, "dog1 was never gated, so nothing was measured"
+        assert gated_while_ramping > 0.2, (
+            f"dog2's ramp was stalled by dog1's auto-stand (reached only "
+            f"{gated_while_ramping:.2f} while dog1 waited)"
+        )
+    finally:
+        for task in (service._motion_task, service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+
+
+async def test_the_gate_gives_up_and_says_why(service):
+    """After the timeout the target is dropped and the state says so, rather
+    than the console quietly asking a robot to stand forever."""
+    await service.connect("dog1")
+    service.config.stand_timeout_s = 0.2
+    await service.start()
+    try:
+        await service.call_tool("dog1", "robot_lie_down", {"confirm": True})
+        # Keep it lying: re-assert the belief after every auto-stand.
+        service.set_focus("dog1")
+        for _ in range(20):
+            await service.teleop_source(source="keyboard", ly=1.0)
+            service.posture("dog1").note("robot_lie_down")
+            await asyncio.sleep(0.05)
+
+        assert service.motion("dog1").state == "stand_timeout"
+        assert service.motion("dog1").target == (0.0, 0.0, 0.0)
+    finally:
+        for task in (service._motion_task, service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+
+
+async def test_a_refused_posture_command_does_not_change_the_belief(service):
+    """A refused `robot_lie_down` did not lie the robot down. Believing it did
+    would make the gate send a pointless stand on the next drive."""
+    await service.connect("dog1")
+    await service.call_tool("dog1", "robot_stand", {"confirm": True})
+    assert service.posture("dog1").posture == STANDING
+
+    # No confirm: the tool refuses.
+    await service.call_tool("dog1", "robot_lie_down", {"confirm": False})
+
+    assert service.posture("dog1").posture == STANDING
+
+
+async def test_disconnecting_forgets_the_posture(service):
+    await service.connect("dog1")
+    await service.call_tool("dog1", "robot_stand", {"confirm": True})
+    await service.disconnect("dog1")
+    assert service.posture("dog1").posture == UNKNOWN
+
+
+async def test_the_status_payload_carries_the_posture(service):
+    await service.connect("dog1")
+    payload = await service.status()
+    assert set(payload["posture"]) == set(service.fleet.ids)
+    assert payload["posture"]["dog1"]["posture"] in (
+        UNKNOWN, STANDING, LYING, SITTING, DAMPING, "moving"
+    )

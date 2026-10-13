@@ -148,13 +148,20 @@ class MotionController:
         self.target = (0.0, 0.0, 0.0)
         self.keys = 0
 
-    def hard_stop(self) -> None:
-        """Zero the commanded value too — for a latched e-stop, where the
-        deceleration ramp is exactly the delay you do not want."""
+    def hard_stop(self, *, state: str = "stopped") -> None:
+        """Zero the commanded value too — for a stop, where the deceleration
+        ramp is exactly the delay you do not want.
+
+        `state` distinguishes the reasons, and it matters: STOP ALL and an
+        e-stop both cut, but only one of them latches. Reporting `estopped`
+        after a plain STOP ALL would tell the operator their robot is latched
+        when it is not — and they would go looking for a release button that
+        does nothing.
+        """
         self.target = (0.0, 0.0, 0.0)
         self.commanded = (0.0, 0.0, 0.0)
         self.keys = 0
-        self._state = "estopped"
+        self._state = state
 
     # ── the loop ─────────────────────────────────────────────────────
 
@@ -181,6 +188,13 @@ class MotionController:
             self._state = "driving"
         elif any(self.commanded):
             self._state = "stopping"
+        elif self._state in ("damped", "estopped", "stand_timeout"):
+            # Damped, latched, and a timed-out auto-stand persist until
+            # something changes them: they are facts about the robot, not
+            # activities that have finished. Letting the next idle tick clear
+            # them would show "空闲" a tick after the operator pressed 急停, or
+            # a frame after the console gave up waiting for a stand.
+            pass
         else:
             self._state = "idle"
 

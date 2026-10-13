@@ -1021,6 +1021,11 @@ const DRIVE_LABELS = {
   stopping: '减速中',
   watchdog: '看门狗停车',
   estopped: '已急停',
+  stopped: '已停止',
+  // The auto-stand gate, from unitree_harness: "I pressed W and nothing
+  // happened" needs an answer, and "waiting for it to stand up" is one.
+  standing_wait: '等待站立…',
+  stand_timeout: '站立超时',
 };
 
 function renderDrive(robotId) {
@@ -1033,8 +1038,9 @@ function renderDrive(robotId) {
 
   const busy = Math.abs(commanded[0]) + Math.abs(commanded[1]) + Math.abs(commanded[2]) > 0.01;
   entry.drive.textContent = DRIVE_LABELS[driveState] || driveState;
-  entry.drive.className = 'flag' + (driveState === 'watchdog' || driveState === 'estopped'
-    ? ' bad' : (busy ? ' on' : ''));
+  const stuck = driveState === 'watchdog' || driveState === 'estopped'
+    || driveState === 'stand_timeout';
+  entry.drive.className = 'flag' + (stuck ? ' bad' : (busy ? ' on' : ''));
   entry.drive.title = busy
     ? `指令 ${commanded.map((v) => v.toFixed(2)).join(' / ')}`
       + `　目标 ${target.map((v) => v.toFixed(2)).join(' / ')}`
