@@ -1,6 +1,6 @@
 ---
 name: unitree-robot-control
-description: "Control a real Unitree robot (Go2 quadruped or R1 humanoid) through the unitree-robot-mcp server - read status, battery, motor and IMU telemetry, switch FSM states, walk, play dances and gestures, toggle Go2 LEDs and obstacle avoidance, and grab camera stills. This skill should be used whenever the user asks to move, drive, stand, sit, dance, wave, inspect or debug a Unitree robot, or when a task depends on what the robot physically is doing. Trigger phrases: 控制机器人、让机器人动、让它走、跳舞、挥手、起身、躺下、机器人现在什么状态、机器人电量、宇树 Go2、宇树 R1、查看机器人. Do NOT use for simulated robots or for the Unitree mobile app UI."
+description: "Control one or more real Unitree robots (Go2 quadruped or R1 humanoid) through the unitree-robot-mcp server - read status, battery, motor and IMU telemetry, switch FSM states, walk, play dances and gestures, toggle Go2 LEDs and obstacle avoidance, and grab camera stills. Drives a whole roster: robot_roster lists the ids, every tool takes robot_id, and robot_stop_all stops the fleet. This skill should be used whenever the user asks to move, drive, stand, sit, dance, wave, inspect or debug a Unitree robot, or when a task depends on what the robot physically is doing. Trigger phrases: 控制机器人、让机器人动、让它走、跳舞、挥手、起身、躺下、机器人现在什么状态、机器人电量、宇树 Go2、宇树 R1、查看机器人、多台机器人、双狗、两只狗、机队、一起走. Do NOT use for simulated robots or for the Unitree mobile app UI."
 ---
 
 # 宇树机器人控制（Go2 / R1）
@@ -22,6 +22,7 @@ MCP 提供能力（一双手），本 skill 提供规矩（何时动手、怎么
 ## 标准工作流
 
 ```
+robot_roster            # 0. 我在驱动谁？配了几台？默认是哪台？（多机时必做）
 robot_doctor            # 1. 自检：配置/依赖/连通性/认证，所有问题一次性暴露
 robot_status            # 2. 连上了吗？现在什么状态？安全模式开着吗？
 robot_list_actions      # 3. 这台机器的动作清单（已按机型过滤）
@@ -35,6 +36,22 @@ robot_snapshot          # 8. 抓一帧确认现场
 
 **每一步都要看返回值再决定下一步。** 不要连续盲发指令。
 
+### 多台机器人
+
+`robot_roster` 返回几台，就说明这个 server 在驱动几台。**超过一台时，每个工具都要带
+`robot_id`**——省略它作用在名册的**默认那台**上，而操作者说"让另一只过来"时，默认那台
+几乎肯定不是他要的。id 不是机型名：两只 Go2 叫 `dog1` 和 `dog2`，不叫 `Go2`。
+
+```
+robot_roster            # 先看 id 和默认值，不要猜
+robot_fleet_status      # 一次拿到所有机器人的状态，不必逐台轮询
+robot_status robot_id=dog2
+robot_stop_all          # 停下所有正在移动的，逐台返回结果
+```
+
+**`robot_stop_all` 必须检查 `not_stopped`**：链路不通的机器人会列在那里——它**没有**停下。
+把 fleet 报告成"已安全"之前先看这个列表。
+
 连接不上、或提示缺密钥时：
 
 ```
@@ -43,6 +60,16 @@ robot_fetch_key         # 取并缓存 per-device AES key（安全、可重复�
 ```
 
 ## 工具地图
+
+### 舰队（多台机器人）
+
+| 工具 | 用途 |
+|---|---|
+| `robot_roster` | 我配了哪几台：id、机型、角色、地址、默认是哪台。**多机时先调这个** |
+| `robot_fleet_status` | 所有机器人的状态一次拿全（`live=true` 会真的去读机器人） |
+| `robot_preflight` | 每台可达吗？固件要不要 per-device key（`data2=3`）？手上的 key 对不对？**只读**：发 `con_notify` 但从不发 SDP，**不占用机器人唯一的 WebRTC 客户端槽**，官方 App 连着时也能跑 |
+| `robot_stop_all` | 停下所有正在移动的机器人，保持姿态。逐台返回结果 |
+| `robot_emergency_stop_all` | 让所有已连接机器人阻尼（会瘫倒）。需要 `confirm=true` |
 
 ### 只读（随时可调，零风险）
 
@@ -110,6 +137,8 @@ robot_fetch_key         # 取并缓存 per-device AES key（安全、可重复�
    主动释放链路，好让操作者用官方 App 接管。**不要试图长时间占住连接。**
 5. **任何异常路径都会回落到软停**（速度归零），而不是 Damping——因为 Damping 会让
    站立的机器人直接倒下，比「站着不动」更糟。
+6. **多机时 `robot_id` 不是可选项**。省略它 = 作用于名册默认那台。要动"另一只"却省略
+   id，就是动了错的那只。名字认不出来时先 `robot_roster`，**不要猜**。
 
 ## 关键语义陷阱（最容易误判的四件事）
 

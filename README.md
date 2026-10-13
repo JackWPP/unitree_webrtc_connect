@@ -376,6 +376,65 @@ Docs: [`docs/MCP_SETUP.md`](docs/MCP_SETUP.md) ·
 > [`references/safety.md`](skills/unitree-robot-control/references/safety.md),
 > and start with `UNITREE_AGENT_SAFE_MODE=true` (read-only) on a new robot.
 
+## Dual-dog web console
+
+A browser console for driving **two robots at once** — live video per dog,
+per-dog telemetry and faults, four input modes, a latching emergency stop, and
+a fleet-wide stop that tells you which dogs it could *not* reach.
+
+```sh
+pip install -e ".[console]"
+```
+
+Write a roster (one JSON document drives both the console and the MCP server):
+
+```json
+{
+  "default": "dog1",
+  "robots": [
+    {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "B42D2000AAAA", "role": "lead"},
+    {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B42D2000BBBB", "role": "wing"}
+  ]
+}
+```
+
+Then, **before pointing it at hardware**:
+
+```sh
+export UNITREE_AGENT_ROSTER=$PWD/fleet.json
+
+# Read-only: is each robot reachable, does its firmware need a per-device
+# AES-128 key (data2=3), and is the key we hold accepted by *that* robot?
+unitree-fleet-console --preflight
+
+unitree-fleet-console --backend mock     # try the UI with no robot at all
+unitree-fleet-console                    # the real thing -> http://127.0.0.1:8765
+```
+
+Bound to `127.0.0.1` by default; binding anywhere else requires `--token`. The
+console drives the same guarded functions the MCP server exposes, so `confirm`,
+the dangerous-action gate, safe mode, rate limiting and the audit trail apply
+identically.
+
+| Feature | Behaviour |
+|---|---|
+| **Input modes** | `Focus` (the selected dog), `Both` (identical), `Split` (**WASD+QE** drives dog 1, **IJKL+UO** drives dog 2 — one operator, both dogs), `Per-source` (bind a device to a dog) |
+| **Gamepad** | A standard-mapping pad is a source like any other, so every mode applies to it |
+| **E-stop** | *Latches.* Motion is refused with `409 motion_blocked` until explicitly released; a fleet latch cannot be narrowed by a per-dog release |
+| **Stop** | Per-dog and fleet-wide. `not_stopped` names the dogs it could **not** reach — an unreachable dog is never reported as stopped |
+| **Dead-man** | Frames stop arriving → whatever is driving is zeroed. A closed tab cannot leave a dog walking |
+| **Lease** | Connected links are held while a browser is watching (socket or HTTP), and released when the last one goes |
+
+Two measurement tools for the first hardware session:
+
+```sh
+python scripts/probe_dual_connection.py --ips <dog1>,<dog2>          # N connections, independent transports?
+python scripts/measure_connect_interference.py --ips <dog1>,<dog2>   # does connecting one stall the others?
+```
+
+Full design notes, findings and what remains:
+[`docs/DUAL_DOG_CONSOLE_PLAN.md`](docs/DUAL_DOG_CONSOLE_PLAN.md).
+
 ## Imports
 
 All public classes, helpers and exception types are exported from the package root:

@@ -611,3 +611,50 @@ def test_the_console_js_explains_a_missing_picture(open_client):
     source = open_client.get("/static/console.js").text
     for marker in ("videoHealth", "stalled", "无画面"):
         assert marker in source, f"console.js no longer explains {marker}"
+
+
+# ─── discoverability ──────────────────────────────────────────────────
+
+
+def test_the_readme_documents_the_console():
+    """The work is only delivered if someone can find it.
+
+    The README carried the MCP section but nothing at all about the console or
+    the roster, so the console was undiscoverable from the repo's front door.
+    """
+    from pathlib import Path
+
+    readme = Path(__file__).resolve().parent.parent / "README.md"
+    text = readme.read_text(encoding="utf-8")
+
+    assert "unitree-fleet-console" in text
+    assert "UNITREE_AGENT_ROSTER" in text
+    assert "--preflight" in text
+    # The fields a reader must not have to guess.
+    for field in ('"id"', '"ip"', '"sn"', '"role"'):
+        assert field in text, f"README roster example is missing {field}"
+    # And the two things that behave unlike a naive reader would expect.
+    assert "not_stopped" in text
+    assert "Latch" in text or "latches" in text
+
+
+def test_the_skill_documents_the_fleet_surface():
+    """The skill is the other entry point an agent may load instead of the
+    server's own instructions. Without this it would omit `robot_id` — which
+    means acting on the roster default, i.e. possibly the wrong dog."""
+    from pathlib import Path
+
+    skill = (
+        Path(__file__).resolve().parent.parent
+        / "skills" / "unitree-robot-control" / "SKILL.md"
+    )
+    text = skill.read_text(encoding="utf-8")
+
+    for tool in ("robot_roster", "robot_fleet_status", "robot_stop_all",
+                 "robot_preflight", "robot_emergency_stop_all"):
+        assert tool in text, f"SKILL.md does not document {tool}"
+    assert "robot_id" in text
+    assert "not_stopped" in text
+    # The trigger description has to mention multi-robot, or the skill will not
+    # load when someone asks about two dogs.
+    assert "双狗" in text or "多台机器人" in text
