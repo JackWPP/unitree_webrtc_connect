@@ -951,3 +951,13 @@ select, input[type="range"] { accent-color: var(--accent); }
 .sync-pair.drifting { border-left-color: var(--warn); }
 .sync-pair.diverged { border-left-color: var(--danger); }
 .sync-pair b { font-variant-numeric: tabular-nums; }
+
+/* A routine that corrected itself says so, rather than quietly turning a
+   robot. Amber, because it is an action the operator did not ask for. */
+.step-fix {
+  color: var(--warn);
+  border: 1px solid #6b4a12;
+  border-radius: 999px;
+  padding: 0 5px;
+  white-space: nowrap;
+}

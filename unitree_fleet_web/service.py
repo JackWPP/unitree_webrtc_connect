@@ -818,6 +818,15 @@ class ConsoleService:
                         record["state"] = "done" if satisfied else "failed"
                         record["ended_at"] = time.time()
 
+                    # A turn is where two dogs come apart, because each one is
+                    # closed-loop on its own gyro. Measure the spread the step
+                    # left behind and nudge the laggard back — once, bounded.
+                    correction = None
+                    if satisfied and self._sync.marked:
+                        correction = await self._correct_turn(step, result)
+                        if record is not None and correction:
+                            record["correction"] = correction
+
                     # Wait in slices, so a stop lands within a fraction of a
                     # second instead of after the whole step. A routine that
                     # cannot be interrupted mid-step is not really stoppable.
@@ -1108,6 +1117,71 @@ class ConsoleService:
             await self.call_tool(robot_id, "robot_stand", {"confirm": True})
         except Exception as exc:  # noqa: BLE001 - a refusal is not fatal
             logger.info("auto-stand: %s refused to stand (%r)", robot_id, exc)
+
+    async def _correct_turn(
+        self, step, result: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Nudge the laggard after a turn step, once.
+
+        Only for turns. A straight-line step can be corrected the same way in
+        principle, but the only reference available is each dog's own odometry
+        and a distance error is as likely to be a wheel slipping as a dog
+        lagging — turning is where the divergence is both real and cheap to
+        fix, because the correction is a turn of a few degrees.
+
+        Returns what it did, or None. The caller records it on the step so the
+        timeline can show that a routine corrected itself rather than silently
+        doing something the operator did not ask for.
+        """
+        if step.tool != "robot_turn":
+            return None
+        if not all((result.get("results") or {}).get(rid, {}).get("ok")
+                   for rid in result.get("targets") or []):
+            # A dog that refused the turn did not under-turn; turning it again
+            # would be acting on a number that is not about what happened.
+            return None
+
+        summary = self.sync_state()
+        if summary.get("state") in ("unmarked", "unknown", "aligned"):
+            return None
+
+        applied: List[Dict[str, Any]] = []
+        for pair in summary.get("pairs") or []:
+            from .sync import Pair
+
+            nudge = SyncMonitor.correction(Pair(
+                a=pair["a"], b=pair["b"],
+                yaw_spread_deg=pair["yaw_spread_deg"],
+                distance_spread_m=pair["distance_spread_m"],
+                state=pair["state"],
+                leader=pair["leader"], laggard=pair["laggard"],
+                detail=pair["detail"],
+            ))
+            if not nudge:
+                continue
+            logger.info(
+                "sync: correcting %s by %s° after %s",
+                nudge["robot_id"], nudge["degrees"], step.label,
+            )
+            try:
+                response = await self.call_tool(
+                    nudge["robot_id"], "robot_turn",
+                    {"degrees": nudge["degrees"], "confirm": True},
+                )
+            except Exception as exc:  # noqa: BLE001 - a failed nudge is not fatal
+                logger.info("sync: correction for %s failed (%r)", nudge["robot_id"], exc)
+                continue
+            applied.append({**nudge, "ok": bool(response.get("ok", True))})
+            # One nudge per step, whatever the pair count: a second one would
+            # be chasing a number this cannot verify it reached.
+            break
+
+        if not applied:
+            return None
+        return {
+            "applied": applied,
+            "spread_before": summary.get("worst", {}).get("yaw_spread_deg"),
+        }
 
     async def _publish_commanded(
         self, robot_id: str, controller: MotionController, vx: float, vy: float, vyaw: float

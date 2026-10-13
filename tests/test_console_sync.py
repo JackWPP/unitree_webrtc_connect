@@ -354,3 +354,108 @@ def test_the_console_js_renders_the_sync_state(open_client):
     for marker in ("renderSync", "SYNC_LABELS", "markSync", "refreshStatus"):
         assert marker in source, f"console.js lost {marker}"
     assert "pushOnce" not in source, "a function that does not exist is still called"
+
+
+# ─── self-correction inside a routine ─────────────────────────────────
+
+
+async def _marked_service(service, dog1_yaw_deg: float, dog2_yaw_deg: float):
+    """Two connected dogs with a marked reference and a given heading each."""
+    await service.connect("dog1")
+    await service.connect("dog2")
+    await service.refresh_telemetry("dog1")
+    await service.refresh_telemetry("dog2")
+    service.mark_sync()
+    service._telemetry["dog1"]["sport_state"]["position"] = [  # noqa: SLF001
+        0.0, 0.0, math.radians(dog1_yaw_deg)
+    ]
+    service._telemetry["dog2"]["sport_state"]["position"] = [  # noqa: SLF001
+        0.0, 0.0, math.radians(dog2_yaw_deg)
+    ]
+    return service
+
+
+def _turn_step():
+    from unitree_fleet_web.routines import Step
+
+    return Step(label="右转 90°", tool="robot_turn", args={"degrees": -90})
+
+
+async def test_a_drifted_turn_is_corrected_once(service):
+    """The concrete case the whole module exists for: two dogs told to turn,
+    one getting 88° and the other 72°."""
+    await _marked_service(service, 88.0, 72.0)
+    targets = ["dog1", "dog2"]
+
+    result = await service._correct_turn(  # noqa: SLF001
+        _turn_step(), {"results": {t: {"ok": True} for t in targets}, "targets": targets}
+    )
+
+    assert result is not None
+    applied = result["applied"]
+    assert len(applied) == 1, "more than one nudge is a loop, not a correction"
+    assert applied[0]["robot_id"] == "dog2"
+    assert applied[0]["degrees"] == pytest.approx(12.0), "the cap did not hold"
+    assert result["spread_before"] == pytest.approx(16.0, abs=0.5)
+
+
+async def test_a_straight_step_is_not_corrected(service):
+    """A distance error is as likely to be a wheel slipping as a dog lagging,
+    and the only reference available is each dog's own odometry."""
+    from unitree_fleet_web.routines import Step
+
+    await _marked_service(service, 0.0, 0.0)
+    service._telemetry["dog1"]["sport_state"]["position"] = [1.0, 0.0, 0.0]  # noqa: SLF001
+    service._telemetry["dog2"]["sport_state"]["position"] = [0.4, 0.0, 0.0]  # noqa: SLF001
+    targets = ["dog1", "dog2"]
+
+    result = await service._correct_turn(  # noqa: SLF001
+        Step(label="前进", tool="robot_move"),
+        {"results": {t: {"ok": True} for t in targets}, "targets": targets},
+    )
+    assert result is None
+
+
+async def test_a_turn_a_dog_refused_is_not_corrected(service):
+    """A dog that refused the turn did not under-turn. Turning it again would
+    be acting on a number that is not about what happened."""
+    await _marked_service(service, 88.0, 72.0)
+    targets = ["dog1", "dog2"]
+
+    result = await service._correct_turn(  # noqa: SLF001
+        _turn_step(),
+        {"results": {"dog1": {"ok": True}, "dog2": {"ok": False}}, "targets": targets},
+    )
+    assert result is None
+
+
+async def test_an_unmarked_pair_is_not_corrected(service):
+    await service.connect("dog1")
+    await service.connect("dog2")
+    await service.refresh_telemetry("dog1")
+    await service.refresh_telemetry("dog2")
+    targets = ["dog1", "dog2"]
+
+    result = await service._correct_turn(  # noqa: SLF001
+        _turn_step(), {"results": {t: {"ok": True} for t in targets}, "targets": targets}
+    )
+    assert result is None
+
+
+async def test_an_aligned_pair_is_not_corrected(service):
+    await _marked_service(service, 90.0, 90.5)
+    targets = ["dog1", "dog2"]
+
+    result = await service._correct_turn(  # noqa: SLF001
+        _turn_step(), {"results": {t: {"ok": True} for t in targets}, "targets": targets}
+    )
+    assert result is None
+
+
+def test_the_timeline_shows_a_correction(open_client):
+    """A step that nudged a dog back into formation says so. Silence would
+    mean the console turned a robot without telling the operator."""
+    source = open_client.get("/static/console.js").text
+    assert "step-fix" in source
+    assert "已纠正" in source
+    assert "spread_before" in source

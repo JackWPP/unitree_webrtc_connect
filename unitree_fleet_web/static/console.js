@@ -2094,6 +2094,18 @@ function renderTimeline(steps) {
     }
     meta.appendChild(lanes);
 
+    // A step that nudged a dog back into formation says so. Silence here would
+    // mean the console turned a robot without the operator being told.
+    if (step.correction && (step.correction.applied || []).length) {
+      const fix = document.createElement('span');
+      fix.className = 'step-fix';
+      const nudge = step.correction.applied[0];
+      fix.textContent = `已纠正 ${nudge.robot_id} ${nudge.degrees > 0 ? '+' : ''}${nudge.degrees}°`;
+      fix.title = nudge.reason
+        + `　（纠正前朝向差 ${step.correction.spread_before}°）`;
+      meta.appendChild(fix);
+    }
+
     card.appendChild(index);
     card.appendChild(text);
     card.appendChild(meta);
