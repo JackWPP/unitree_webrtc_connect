@@ -374,6 +374,14 @@ function renderStatus(payload) {
     entry.battery.title = battery.power_voltage_v
       ? `${battery.power_voltage_v} V` : '';
 
+    // When the panels have nothing, say why. An empty panel and a robot that
+    // reports nothing look identical, and they want different reactions.
+    const health = (state.telemetryHealth && state.telemetryHealth[robot.robot_id]) || {};
+    if (!telemetry.battery && health.error) {
+      entry.battery.title = health.error;
+      entry.state.title = health.error;
+    }
+
     const posture = telemetry.posture || {};
     const sport = telemetry.sport_state || {};
     const parts = [];
@@ -398,6 +406,7 @@ function renderStatus(payload) {
   // Named `videoHealth` rather than `video`: `focusMap[id].video` is the
   // <img> element, and two things called video would invite a mix-up.
   state.videoHealth = payload.video || {};
+  state.telemetryHealth = payload.telemetry_health || {};
   document.getElementById('fleet-summary').textContent =
     `${online}/${payload.robots.length} 在线`;
   document.getElementById('watching').textContent =

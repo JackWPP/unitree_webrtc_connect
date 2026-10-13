@@ -662,3 +662,18 @@ def test_the_skill_documents_the_fleet_surface():
     # The trigger description has to mention multi-robot, or the skill will not
     # load when someone asks about two dogs.
     assert "双狗" in text or "多台机器人" in text
+
+
+def test_the_status_payload_carries_telemetry_health(open_client):
+    """The page needs the *reason* a panel is empty, not just that it is."""
+    payload = open_client.get("/api/fleet/status").json()
+    assert "telemetry_health" in payload
+    for robot_id, health in payload["telemetry_health"].items():
+        assert health["state"] in ("ok", "starting", "degraded", "failed", "offline")
+        assert "error" in health and "has_data" in health
+
+
+def test_the_console_js_surfaces_a_telemetry_failure(open_client):
+    source = open_client.get("/static/console.js").text
+    assert "telemetryHealth" in source
+    assert "health.error" in source

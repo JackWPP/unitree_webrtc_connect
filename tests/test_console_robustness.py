@@ -378,3 +378,97 @@ async def test_a_refresh_does_not_drop_the_link(service):
     await _run_lease(service, 1.5)   # still inside the grace period
 
     assert service.fleet.get("dog1").session.is_connected is True
+
+
+# ─── the telemetry budget ─────────────────────────────────────────────
+
+
+def test_the_telemetry_timeout_clears_the_collector_own_budget():
+    """A regression guard with a specific bug behind it.
+
+    `collect_lowstate` waits per topic and silently omits what did not arrive,
+    so its worst case is the sum of its own timeouts. The console wrapped it in
+    a 2 s ceiling — shorter than either model's sum — so on a real Go2 whose
+    `rt/sportmodestate` never publishes, every refresh timed out and the panels
+    stayed empty. The mock answers every topic instantly, so nothing caught it.
+
+    This reads the collector's source rather than restating the numbers, so
+    adding a topic to it fails here instead of in the field.
+    """
+    import re
+    import inspect
+
+    from unitree_robot_agent.core import telemetry
+    from unitree_fleet_web.service import TELEMETRY_TIMEOUT_S
+
+    source = inspect.getsource(telemetry.collect_lowstate)
+    per_call = [float(n) for n in re.findall(r"timeout=([0-9.]+)", source)]
+    assert per_call, "could not find any per-topic timeouts to check against"
+
+    def branch_sum(start: str, end: str) -> float:
+        if start not in source:
+            return 0.0
+        chunk = source.split(start, 1)[1]
+        if end in chunk:
+            chunk = chunk.split(end, 1)[0]
+        return sum(float(n) for n in re.findall(r"timeout=([0-9.]+)", chunk))
+
+    # The model branches are alternatives, so the worst case is whichever waits
+    # the most — not their total, which is what a naive scan of the whole
+    # function would give.
+    go2 = branch_sum("# Go2", "async def ")
+    r1 = branch_sum('robot == "R1"', "# Go2")
+    worst = max(go2, r1)
+    assert worst > 0.0, "could not isolate either model branch"
+
+    assert TELEMETRY_TIMEOUT_S > worst, (
+        f"telemetry ceiling {TELEMETRY_TIMEOUT_S}s does not clear "
+        f"collect_lowstate's own worst case of {worst}s — every refresh would "
+        f"time out on a robot with a silent topic"
+    )
+
+
+async def test_a_telemetry_timeout_is_reported_not_swallowed(service):
+    """An empty panel and a robot that reports nothing look identical, and
+    they want different reactions. The reason has to reach the page."""
+    await service.connect("dog1")
+
+    async def hang(*args, **kwargs):
+        raise asyncio.TimeoutError
+
+    import unitree_fleet_web.service as service_module
+
+    original = service_module.collect_lowstate
+    service_module.collect_lowstate = hang
+    try:
+        await service.refresh_telemetry("dog1")
+        health = service.telemetry_health("dog1")
+    finally:
+        service_module.collect_lowstate = original
+
+    assert health["state"] == "failed"
+    assert "timed out" in health["error"]
+    assert health["has_data"] is False
+
+
+async def test_a_partial_read_is_degraded_not_failed(service):
+    """A robot reporting battery but not its gait is still useful — the panel
+    should show what it has and say the rest is missing."""
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    service._telemetry_error["dog1"] = "sport state unavailable"  # noqa: SLF001
+    health = service.telemetry_health("dog1")
+
+    assert health["state"] == "degraded"
+    assert health["has_data"] is True
+
+
+async def test_a_good_refresh_clears_a_previous_error(service):
+    await service.connect("dog1")
+    service._telemetry_error["dog1"] = "stale reason"  # noqa: SLF001
+
+    await service.refresh_telemetry("dog1")
+
+    assert service.telemetry_health("dog1")["state"] == "ok"
+    assert service.telemetry_health("dog1")["error"] == ""

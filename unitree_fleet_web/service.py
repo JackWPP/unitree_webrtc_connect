@@ -30,9 +30,20 @@ logger = logging.getLogger("unitree_fleet_web.service")
 #: Joystick axes are normalised; the robot applies its own limits on top.
 AXIS_LIMIT = 1.0
 
-#: A telemetry read may wait for a topic's first frame. Bounded so a robot
-#: that has gone quiet cannot hold the sampler.
-TELEMETRY_TIMEOUT_S = 2.0
+#: Ceiling on one robot's telemetry refresh.
+#:
+#: This has to clear `collect_lowstate`'s *own* worst case, because that
+#: function waits per topic and silently omits whatever did not arrive:
+#: Go2 reads three topics (2 + 1 + 1 s) and R1 four (2 + 2 + 1 + 1 s), so six
+#: seconds before a model that answers nothing has finished answering.
+#:
+#: The first version of this was 2.0 s, which was wrong for both models and
+#: wrong in the worst way: on a real Go2 whose `rt/sportmodestate` never
+#: publishes — which is the case for the fleet this was built for — every
+#: refresh timed out, the panel stayed empty, and the failure was logged at
+#: DEBUG. The mock answers every topic instantly, so no test could have caught
+#: it. There is now a test pinning this above the collector's budget.
+TELEMETRY_TIMEOUT_S = 8.0
 
 #: How long without a video frame before the panel stops pretending.
 #:
@@ -174,6 +185,10 @@ class ConsoleService:
         self._telemetry_task: Optional[asyncio.Task] = None
         #: Monotonic time of the last status request, socket or HTTP.
         self._last_watch_at = 0.0
+        #: Why the last telemetry refresh failed, per robot. An empty panel is
+        #: indistinguishable from a robot that reports nothing, and those want
+        #: different reactions from the operator.
+        self._telemetry_error: Dict[str, str] = {}
         #: Per-robot video health, so a stream that never produces frames can
         #: say so instead of showing an empty box.
         self._video: Dict[str, Dict[str, Any]] = {}
@@ -395,6 +410,7 @@ class ConsoleService:
             # Freshness is meaningless for a link we no longer hold.
             for robot_id in released:
                 self._telemetry.pop(robot_id, None)
+                self._telemetry_error.pop(robot_id, None)
 
     # ── telemetry ────────────────────────────────────────────────────
 
@@ -408,6 +424,7 @@ class ConsoleService:
         runtime = self.fleet.get(robot_id)
         if not runtime.session.is_connected:
             self._telemetry.pop(robot_id, None)
+            self._telemetry_error.pop(robot_id, None)
             return None
         try:
             snapshot = await asyncio.wait_for(
@@ -415,8 +432,17 @@ class ConsoleService:
                 timeout=TELEMETRY_TIMEOUT_S,
             )
         except Exception as exc:  # noqa: BLE001 - a quiet robot is not an error
-            logger.debug("telemetry(%s) failed: %r", robot_id, exc)
+            detail = (
+                f"timed out after {TELEMETRY_TIMEOUT_S:.0f}s"
+                if isinstance(exc, asyncio.TimeoutError)
+                else f"{type(exc).__name__}: {exc}"
+            )
+            # Warning, not debug: this is why a panel is empty, and it is the
+            # one thing the operator cannot deduce from the page.
+            logger.warning("telemetry(%s) failed: %s", robot_id, detail)
+            self._telemetry_error[robot_id] = detail
             return self._telemetry.get(robot_id)
+        self._telemetry_error.pop(robot_id, None)
         # The FSM view is a separate topic and is what says "standing" on a
         # humanoid. On a Go2 it reports n/a, where the gait below carries it.
         with contextlib.suppress(Exception):
@@ -425,6 +451,32 @@ class ConsoleService:
             )
         self._telemetry[robot_id] = snapshot
         return snapshot
+
+    def telemetry_health(self, robot_id: str) -> Dict[str, Any]:
+        """Whether the panels have real data, and why not if they do not."""
+        try:
+            connected = self.fleet.get(robot_id).session.is_connected
+        except Exception:  # noqa: BLE001
+            connected = False
+        snapshot = self._telemetry.get(robot_id)
+        error = self._telemetry_error.get(robot_id, "")
+
+        if not connected:
+            state = "offline"
+        elif error and not snapshot:
+            state = "failed"
+        elif error:
+            state = "degraded"
+        elif snapshot:
+            state = "ok"
+        else:
+            state = "starting"
+        return {
+            "state": state,
+            "error": error,
+            "has_data": bool(snapshot),
+            "battery": bool((snapshot or {}).get("battery")),
+        }
 
     async def _telemetry_loop(self) -> None:
         interval = 1.0 / max(0.1, self.config.telemetry_hz)
@@ -527,6 +579,9 @@ class ConsoleService:
         return {
             "robots": await self.fleet.status_all(live=live),
             "telemetry": dict(self._telemetry),
+            "telemetry_health": {
+                rid: self.telemetry_health(rid) for rid in self.fleet.ids
+            },
             "video": {rid: self.video_status(rid) for rid in self.fleet.ids},
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
