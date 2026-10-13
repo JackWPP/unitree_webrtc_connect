@@ -635,3 +635,62 @@ select, input[type="range"] { accent-color: var(--accent); }
   background: var(--warn);
   box-shadow: 0 0 6px -1px var(--warn);
 }
+
+/* ── routine timeline ─────────────────────────────────────────────── */
+
+.routine-run { flex-direction: column; align-items: stretch; gap: 8px; }
+.routine-head { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+/* One card per step, in order. The state is carried by the left border so a
+   completed run reads at a glance without matching colours to a legend. */
+.step-card {
+  flex: 0 0 auto;
+  min-width: 96px;
+  max-width: 150px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  padding: 5px 8px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.step-card .step-index { color: var(--muted); font-size: 10px; }
+.step-card .step-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-card .step-meta { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.step-card .policy {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+/* One dot per dog: the same card says which dogs did it, not just whether the
+   step "passed" — which is the whole difference from a boolean. */
+.step-card .lanes { display: flex; gap: 3px; }
+.step-card .lane {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--panel-3);
+  border: 1px solid var(--line);
+}
+.step-card .lane.ok { background: var(--ok); border-color: var(--ok); }
+.step-card .lane.bad { background: var(--danger); border-color: var(--danger); }
+.step-card .lane.skipped { background: transparent; border-style: dashed; }
+
+.step-card.running { border-left-color: var(--accent); background: #172234; }
+.step-card.done { border-left-color: var(--ok); }
+.step-card.failed { border-left-color: var(--danger); }
+.step-card.cancelled { border-left-color: var(--warn); opacity: 0.6; }
+.step-card.pending { opacity: 0.62; }

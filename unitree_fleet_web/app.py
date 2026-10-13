@@ -37,6 +37,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from unitree_robot_agent.errors import AgentError, UnknownRobot
 
 from .config import ConsoleConfig
+from .routines import POLICIES
 from .service import ConsoleService
 from .state import MotionBlocked
 
@@ -368,9 +369,48 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
             return _error_response(exc)
 
     async def get_routines(request) -> Response:
-        from .routines import catalogue
+        try:
+            return JSONResponse(
+                {
+                    "routines": service.all_routines(),
+                    "policies": list(POLICIES),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
 
-        return JSONResponse({"routines": catalogue()})
+    async def post_routine_save(request) -> Response:
+        body = await _read_body(request)
+        try:
+            return JSONResponse(service.save_routine(body or {}))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
+    async def post_routine_insert(request) -> Response:
+        """Queue one extra action for after the current step."""
+        body = await _read_body(request)
+        tool = str((body or {}).get("tool") or "")
+        if not tool:
+            return JSONResponse(
+                {"ok": False, "error": "bad_request", "message": "缺少 tool"}, status_code=400
+            )
+        try:
+            return JSONResponse(
+                service.queue_insert(
+                    tool=tool,
+                    args=(body or {}).get("args") or {},
+                    label=str((body or {}).get("label") or ""),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
+    async def delete_routine(request) -> Response:
+        routine_id = request.path_params["routine_id"]
+        try:
+            return JSONResponse(service.delete_routine(routine_id))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
 
     async def post_routine_start(request) -> Response:
         body = await _read_body(request)
@@ -507,6 +547,9 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/fleet/routines", get_routines),
         Route("/api/fleet/routine", post_routine_start, methods=["POST"]),
         Route("/api/fleet/routine/stop", post_routine_stop, methods=["POST"]),
+        Route("/api/fleet/routine/insert", post_routine_insert, methods=["POST"]),
+        Route("/api/fleet/routines/save", post_routine_save, methods=["POST"]),
+        Route("/api/fleet/routines/{routine_id}", delete_routine, methods=["DELETE"]),
         Route("/api/fleet/action", post_fleet_action, methods=["POST"]),
         Route("/api/robot/{robot_id}/teleop", post_robot_teleop, methods=["POST"]),
         Route("/api/robot/{robot_id}/move", post_robot_move, methods=["POST"]),

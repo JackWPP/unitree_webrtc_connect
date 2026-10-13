@@ -959,3 +959,89 @@ def test_the_console_js_surfaces_routine_progress_and_a_stop(open_client):
     html = open_client.get("/").text
     assert "routine-stop" in html
     assert "停止编排" in html
+
+
+# ─── the routine timeline ─────────────────────────────────────────────
+
+
+def test_the_routine_list_advertises_policies(open_client):
+    payload = open_client.get("/api/fleet/routines").json()
+    assert set(payload["policies"]) == {"all", "any", "best_effort"}
+    for routine in payload["routines"]:
+        assert routine["builtin"] is True
+        for step in routine["steps"]:
+            assert step["policy"] in payload["policies"]
+
+
+def test_a_routine_can_be_saved_run_and_deleted(open_client):
+    document = {
+        "id": "bow",
+        "label": "一起鞠躬",
+        "steps": [
+            {"tool": "robot_stand", "args": {"confirm": True}, "label": "站好", "seconds": 0.5},
+            {"tool": "robot_play_action", "args": {"name": "scrape", "confirm": True},
+             "label": "鞠躬", "policy": "any"},
+        ],
+    }
+    saved = open_client.post("/api/fleet/routines/save", json=document)
+    assert saved.status_code == 200
+    assert saved.json()["label"] == "一起鞠躬"
+
+    ids = [r["id"] for r in open_client.get("/api/fleet/routines").json()["routines"]]
+    assert "bow" in ids
+    assert "greet" in ids, "a custom routine must not hide the built-ins"
+
+    open_client.post("/api/robot/dog1/connect")
+    started = open_client.post("/api/fleet/routine", json={"id": "bow"})
+    assert started.status_code == 200
+    timeline = started.json()["steps"]
+    assert [step["state"] for step in timeline] == ["pending", "pending"]
+    assert timeline[1]["policy"] == "any"
+    open_client.post("/api/fleet/routine/stop")
+
+    assert open_client.request(
+        "DELETE", "/api/fleet/routines/bow"
+    ).status_code == 200
+    ids = [r["id"] for r in open_client.get("/api/fleet/routines").json()["routines"]]
+    assert "bow" not in ids
+
+
+def test_saving_a_document_with_an_unavailable_tool_is_refused(open_client):
+    response = open_client.post(
+        "/api/fleet/routines/save",
+        json={"id": "bad", "steps": [{"tool": "robot_fetch_key"}]},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_routine"
+    assert "not available" in response.text
+
+
+def test_saving_over_a_builtin_is_refused(open_client):
+    response = open_client.post(
+        "/api/fleet/routines/save", json={"id": "greet", "steps": [{"tool": "robot_stand"}]}
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "reserved_routine_id"
+
+
+def test_deleting_a_builtin_is_refused(open_client):
+    response = open_client.request("DELETE", "/api/fleet/routines/greet")
+    assert response.status_code == 400
+    assert response.json()["code"] == "unknown_routine"
+
+
+def test_inserting_while_nothing_runs_is_refused(open_client):
+    open_client.post("/api/robot/dog1/connect")
+    response = open_client.post(
+        "/api/fleet/routine/insert", json={"tool": "robot_stand", "args": {"confirm": True}}
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "no_routine_running"
+
+
+def test_the_console_js_renders_a_timeline_with_per_dog_lanes(open_client):
+    source = open_client.get("/static/console.js").text
+    for marker in ("renderTimeline", "step-card", "per_dog", "POLICY_LABELS"):
+        assert marker in source, f"console.js lost {marker}"
+    html = open_client.get("/").text
+    assert "routine-timeline" in html

@@ -1407,10 +1407,17 @@ async function stopRoutine() {
   }
 }
 
+const STEP_STATES = {
+  pending: '待执行', running: '执行中', done: '完成',
+  failed: '失败', cancelled: '已取消',
+};
+const POLICY_LABELS = { all: '全部', any: '任一', best_effort: '尽力' };
+
 function renderRoutine(routine) {
   const wrap = document.getElementById('routine-run');
   const label = document.getElementById('routine-label');
   const bar = document.querySelector('[data-role="routine-progress"]');
+  const pending = document.getElementById('routine-pending');
   if (!wrap) return;
 
   if (!routine || !routine.running) {
@@ -1422,6 +1429,69 @@ function renderRoutine(routine) {
   const total = routine.total || 1;
   bar.style.width = `${Math.round((done / total) * 100)}%`;
   label.textContent = `${routine.label} · ${done + 1}/${total} ${routine.step_label}`;
+
+  const queued = (routine.pending || []).length;
+  if (pending) {
+    pending.textContent = queued ? `已排队 ${queued} 个动作，将在当前步骤结束后执行` : '';
+    pending.className = queued ? 'muted warn' : 'muted';
+  }
+  renderTimeline(routine.steps || []);
+}
+
+/* Every step, its policy, and one dot per dog. The dots are the point: a card
+ * that says "done" while one dog did nothing is exactly the reading the branch
+ * this came from produced from `sum(results) > 0`, and it is wrong. */
+function renderTimeline(steps) {
+  const host = document.getElementById('routine-timeline');
+  if (!host) return;
+  host.textContent = '';
+
+  for (const step of steps) {
+    const card = document.createElement('li');
+    card.className = `step-card ${step.state || 'pending'}`;
+
+    const index = document.createElement('span');
+    index.className = 'step-index';
+    index.textContent = `${(step.index ?? 0) + 1} · ${STEP_STATES[step.state] || step.state}`;
+
+    const text = document.createElement('span');
+    text.className = 'step-label';
+    text.textContent = step.label;
+    text.title = `${step.label}（${step.tool}，${step.seconds}s）`;
+
+    const meta = document.createElement('span');
+    meta.className = 'step-meta';
+    const policy = document.createElement('span');
+    policy.className = 'policy';
+    policy.textContent = POLICY_LABELS[step.policy] || step.policy;
+    policy.title = step.policy === 'all'
+      ? '每一只都必须做到，否则这一步算失败'
+      : (step.policy === 'any' ? '任意一只做到即可' : '不因失败而中断');
+    meta.appendChild(policy);
+
+    const lanes = document.createElement('span');
+    lanes.className = 'lanes';
+    const perDog = step.per_dog || {};
+    const names = Object.keys(perDog).length
+      ? Object.keys(perDog)
+      : (step.skipped || []).map((id) => id);
+    for (const id of names) {
+      const dot = document.createElement('span');
+      const outcome = perDog[id];
+      dot.className = 'lane ' + (outcome === undefined
+        ? 'skipped' : (outcome && outcome.ok ? 'ok' : 'bad'));
+      dot.title = outcome === undefined
+        ? `${id}：未参与`
+        : `${id}：${outcome.ok ? '成功' : (outcome.error || '失败')}`;
+      lanes.appendChild(dot);
+    }
+    meta.appendChild(lanes);
+
+    card.appendChild(index);
+    card.appendChild(text);
+    card.appendChild(meta);
+    host.appendChild(card);
+  }
 }
 
 async function loadFleetActions() {

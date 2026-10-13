@@ -44,10 +44,16 @@
        stop button are always on screen while it runs. -->
   <div class="fleet-row routines" id="fleet-routines"></div>
   <div id="routine-run" class="routine-run hidden">
-    <span class="routine-bar"><i data-role="routine-progress"></i></span>
-    <span id="routine-label" class="routine-label"></span>
-    <span class="spacer"></span>
-    <button id="routine-stop" class="btn btn-estop-sm">停止编排</button>
+    <div class="routine-head">
+      <span class="routine-bar"><i data-role="routine-progress"></i></span>
+      <span id="routine-label" class="routine-label"></span>
+      <span class="spacer"></span>
+      <span id="routine-pending" class="muted"></span>
+      <button id="routine-stop" class="btn btn-estop-sm">停止编排</button>
+    </div>
+    <!-- The whole sequence, not a progress bar. A timeline you cannot see
+         ahead of the playhead is a log with a label on it. -->
+    <ol id="routine-timeline" class="timeline"></ol>
   </div>
 </section>
 

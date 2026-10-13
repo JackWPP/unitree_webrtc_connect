@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -24,6 +25,7 @@ from unitree_robot_agent.server import build_server
 
 from .config import ConsoleConfig
 from .motion import MotionController, MotionLimits
+from .routines import ROUTINES, validate as validate_routine
 from .state import ConsoleState, EStopScope, InputMode, MotionBlocked
 
 logger = logging.getLogger("unitree_fleet_web.service")
@@ -503,6 +505,116 @@ class ConsoleService:
                 self._telemetry.pop(robot_id, None)
                 self._telemetry_error.pop(robot_id, None)
 
+    # ── routine documents ────────────────────────────────────────────
+
+    def _resolve_routine(self, routine_id: str):
+        """A built-in first, then the operator's own. None if neither.
+
+        Returning None rather than raising keeps the caller's error message in
+        one place — and an unbound local in a `try/except` is exactly how the
+        first version of this turned "no such routine" into `internal_error`.
+        """
+        from .routines import routine_by_id
+
+        try:
+            return routine_by_id(routine_id)
+        except KeyError:
+            pass
+        document = next(
+            (item for item in self.custom_routines() if item["id"] == routine_id), None
+        )
+        if document is None:
+            return None
+        try:
+            return validate_routine(document, known_tools=CONSOLE_TOOLS)
+        except ValueError as exc:
+            # It validated when it was saved; a tool has since gone away.
+            raise AgentError(
+                f"编排 {routine_id!r} 已失效：{exc}",
+                code="invalid_routine",
+                hint="重新保存它，或删掉它。",
+            )
+
+
+    @property
+    def _routine_file(self):
+        from pathlib import Path
+
+        return Path(self.fleet.roster.state_dir) / "routines.json"
+
+    def custom_routines(self) -> List[Dict[str, Any]]:
+        """Operator-authored routines, from disk.
+
+        A routine is a document so it can be authored, saved, diffed and
+        rendered — the branch this idea came from kept its sequences as Python
+        lists, which is why none was ever written by anyone but its author.
+        """
+        try:
+            raw = json.loads(self._routine_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        stored = raw.get("routines") if isinstance(raw, dict) else raw
+        if not isinstance(stored, list):
+            return []
+        out = []
+        for document in stored:
+            try:
+                out.append(validate_routine(document, known_tools=CONSOLE_TOOLS).as_dict())
+            except ValueError as exc:
+                # A saved routine that no longer validates is reported, not
+                # silently dropped: the operator wrote it and deserves to know
+                # which tool disappeared.
+                logger.warning("stored routine rejected: %s", exc)
+        return out
+
+    def all_routines(self) -> List[Dict[str, Any]]:
+        theirs = {routine["id"] for routine in self.custom_routines()}
+        builtin = [r.as_dict() for r in ROUTINES if r.id not in theirs]
+        return builtin + self.custom_routines()
+
+    def save_routine(self, document: Dict[str, Any]) -> Dict[str, Any]:
+        # `validate` raises ValueError, which the error mapper would turn into
+        # a 500. A rejected document is the operator's mistake, not the
+        # server's, so it is translated into a typed refusal.
+        try:
+            routine = validate_routine(document, known_tools=CONSOLE_TOOLS)
+        except ValueError as exc:
+            raise AgentError(
+                str(exc),
+                code="invalid_routine",
+                hint="每一步都需要一个控制台可用的 tool，以及 all / any / best_effort 之一的 policy。",
+            )
+        if routine.id in {builtin.id for builtin in ROUTINES}:
+            raise AgentError(
+                f"{routine.id!r} 是内置编排的名字。",
+                code="reserved_routine_id",
+                hint="换一个 id；内置编排不能被覆盖。",
+            )
+        stored = self.custom_routines()
+        stored = [item for item in stored if item["id"] != routine.id]
+        stored.append(routine.as_dict())
+        self._routine_file.parent.mkdir(parents=True, exist_ok=True)
+        self._routine_file.write_text(
+            json.dumps({"routines": stored}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return routine.as_dict()
+
+    def delete_routine(self, routine_id: str) -> Dict[str, Any]:
+        stored = self.custom_routines()
+        remaining = [item for item in stored if item["id"] != routine_id]
+        if len(remaining) == len(stored):
+            raise AgentError(
+                f"没有名为 {routine_id!r} 的自定义编排。",
+                code="unknown_routine",
+                hint="内置编排不能删除。",
+            )
+        self._routine_file.write_text(
+            json.dumps({"routines": remaining}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return {"deleted": routine_id, "remaining": len(remaining)}
+
     # ── routines ─────────────────────────────────────────────────────
 
     async def start_routine(self, routine_id: str) -> Dict[str, Any]:
@@ -513,11 +625,8 @@ class ConsoleService:
         that most needs to be stoppable. Three things abort it: the stop button,
         a latched e-stop, and the console closing.
         """
-        from .routines import routine_by_id
-
-        try:
-            routine = routine_by_id(routine_id)
-        except KeyError:
+        routine = self._resolve_routine(routine_id)
+        if routine is None:
             raise AgentError(
                 f"没有名为 {routine_id!r} 的编排。",
                 code="unknown_routine",
@@ -557,7 +666,30 @@ class ConsoleService:
             "dangerous_allowed": self._dangerous_allowed(),
             "seconds": round(routine.seconds, 1),
             "started_at": time.time(),
-            "logs": [],
+            # The whole sequence, before any of it runs. A timeline has to be
+            # visible ahead of the playhead or it is just a log with a label.
+            "steps": [
+                {
+                    "index": index,
+                    "label": step.label,
+                    "tool": step.tool,
+                    "policy": step.policy,
+                    "seconds": step.seconds,
+                    "dangerous": step.dangerous,
+                    "state": "pending",
+                    "ok_count": 0,
+                    "total": len(targets),
+                    "per_dog": {},
+                    "started_at": None,
+                    "ended_at": None,
+                }
+                for index, step in enumerate(routine.steps)
+            ],
+            # Things the operator asked for mid-run, to be performed after the
+            # current step. The branch this came from had the right instinct
+            # (`dance_triggered`) but hid it in a bool that leaked across
+            # restarts and was honoured by only one of its two loops.
+            "pending": [],
         }
         self._routine_task = asyncio.create_task(
             self._run_routine(routine), name=f"console-routine-{routine.id}"
@@ -589,6 +721,32 @@ class ConsoleService:
             "robots": [o.as_dict() for o in stopped],
         }
 
+    def queue_insert(self, *, tool: str, args: Optional[Dict[str, Any]] = None,
+                     label: str = "") -> Dict[str, Any]:
+        """Ask for one more action after the current step finishes.
+
+        The operator's ad-hoc "both dogs bow now" wants to land inside the
+        running sequence rather than replace it. It waits for a step boundary
+        because there is nowhere else safe to put it — a command in the middle
+        of a dance is a command in the middle of a dance.
+        """
+        if tool not in CONSOLE_TOOLS:
+            raise AgentError(
+                f"{tool!r} is not available from the console.",
+                code="tool_not_allowed",
+                hint="Only the operations an operator needs are exposed here.",
+            )
+        state = self._routine
+        if state is None or not state.get("running"):
+            raise AgentError(
+                "没有正在运行的编排。",
+                code="no_routine_running",
+                hint="直接执行这个动作即可，不需要排队。",
+            )
+        state["pending"].append({"tool": tool, "args": dict(args or {}), "label": label})
+        return {"queued": True, "pending": len(state["pending"]),
+                "routine": self.routine_state()}
+
     def routine_state(self) -> Dict[str, Any]:
         return dict(self._routine) if self._routine else {"running": False}
 
@@ -615,17 +773,26 @@ class ConsoleService:
 
                     state["step"] = index
                     state["step_label"] = step.label
+                    record = state["steps"][index] if index < len(state["steps"]) else None
+                    if record is not None:
+                        record["state"] = "running"
+                        record["started_at"] = time.time()
+
                     result = await self.fleet_action(step.tool, dict(step.args))
-                    state["logs"].append({
-                        "step": index,
-                        "label": step.label,
-                        "ok_count": result["ok_count"],
-                        "total": len(result["targets"]),
-                        "failed": result["failed"],
-                        "skipped": result["skipped"],
-                        "at": time.time(),
-                    })
-                    state["logs"] = state["logs"][-40:]
+                    ok_count = result["ok_count"]
+                    total = len(result["targets"])
+                    # The policy decides whether a partial result is a success.
+                    # `sum(results) > 0` — what the branch this came from used —
+                    # silently turns a two-dog routine into a one-dog routine
+                    # and reports success either way.
+                    satisfied = step.satisfied(ok_count, total)
+                    if record is not None:
+                        record["ok_count"] = ok_count
+                        record["total"] = total
+                        record["per_dog"] = result["results"]
+                        record["skipped"] = result["skipped"]
+                        record["state"] = "done" if satisfied else "failed"
+                        record["ended_at"] = time.time()
 
                     # Wait in slices, so a stop lands within a fraction of a
                     # second instead of after the whole step. A routine that
@@ -640,6 +807,16 @@ class ConsoleService:
                         await asyncio.sleep(min(0.2, remaining))
                         remaining -= 0.2
 
+                # Anything the operator asked for while that step was running,
+                # performed now — at a step boundary, which is the only safe
+                # place to insert into a sequence.
+                while state["pending"] and state["running"]:
+                    pending = state["pending"].pop(0)
+                    state["step_label"] = pending.get("label") or "插入的动作"
+                    await self.fleet_action(
+                        pending.get("tool", ""), dict(pending.get("args") or {})
+                    )
+
                 if not routine.loop:
                     break
             state["running"] = False
@@ -648,6 +825,10 @@ class ConsoleService:
         except asyncio.CancelledError:
             state["running"] = False
             state["step_label"] = "已取消"
+            for record in state["steps"]:
+                if record["state"] == "running":
+                    record["state"] = "cancelled"
+                    record["ended_at"] = time.time()
             raise
         except Exception as exc:  # noqa: BLE001 - a routine must not kill the console
             logger.warning("routine %s failed: %r", routine.id, exc)
