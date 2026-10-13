@@ -23,7 +23,7 @@ from unitree_robot_agent.fleet import FleetManager
 from unitree_robot_agent.server import build_server
 
 from .config import ConsoleConfig
-from .state import ConsoleState, EStopScope, InputMode
+from .state import ConsoleState, EStopScope, InputMode, MotionBlocked
 
 logger = logging.getLogger("unitree_fleet_web.service")
 
@@ -277,6 +277,18 @@ class ConsoleService:
                 hint="Install the `agent` extra, or use the dedicated endpoints.",
             )
 
+        # A latched emergency stop has to cover the panel, not just the
+        # sticks. Without this the operator could hit 急停 and then press 站立
+        # or 打招呼 and the robot would move: `call_tool` went straight to the
+        # tool, which knows nothing about the console's latch. The tools have
+        # their own guards (safe mode, confirm, the dangerous gate) but none of
+        # them is this.
+        if tool in MOTION_GATED_TOOLS and self.state.estop.covers(robot_id):
+            raise MotionBlocked(
+                f"急停已锁存，{tool} 被拒绝。",
+                detail={"tool": tool, "robot_id": robot_id, "estop": self.state.estop.as_dict()},
+            )
+
         payload = dict(arguments or {})
         # The binding wrapper reads robot_id from the call arguments, so the
         # tool acts on the robot the operator clicked.
@@ -445,6 +457,139 @@ class ConsoleService:
             for robot_id in released:
                 self._telemetry.pop(robot_id, None)
                 self._telemetry_error.pop(robot_id, None)
+
+    # ── fleet-wide actions ───────────────────────────────────────────
+
+    async def fleet_action(self, tool: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Run one tool on every *connected* robot at once.
+
+        The second of the two things this console is for. Driving two dogs is
+        per-dog by nature — one operator, one set of sticks, one target — but
+        "make them both dance" is a single intent that has no per-dog form, and
+        doing it by clicking two buttons a second apart is not the same thing
+        as doing it together.
+
+        The calls go out concurrently rather than in a loop, so they land as
+        close together as the network allows; a sequential loop would finish
+        dog 1's dance before starting dog 2's.
+
+        Robots that are **not connected** are named in ``skipped`` rather than
+        silently omitted: an operator who clicked "一起站立" and sees two dogs
+        standing needs to know a third was asleep, not nothing at all.
+        """
+        if tool not in CONSOLE_TOOLS:
+            raise AgentError(
+                f"{tool!r} is not available from the console.",
+                code="tool_not_allowed",
+                hint="Only the operations an operator needs are exposed here.",
+            )
+        targets = [
+            rid for rid in self.fleet.ids if self.fleet.get(rid).session.is_connected
+        ]
+        skipped = [rid for rid in self.fleet.ids if rid not in targets]
+        if not targets:
+            raise AgentError(
+                "没有已连接的机器狗。",
+                code="no_connected_robots",
+                hint="先连接至少一只，再执行舰队动作。",
+            )
+
+        args = dict(arguments or {})
+
+        async def one(robot_id: str):
+            try:
+                return robot_id, await self.call_tool(robot_id, tool, args)
+            except AgentError as exc:
+                # A per-robot refusal is a result, not a failure of the whole
+                # action — the other dogs may well have done it.
+                return robot_id, {
+                    "ok": False, "error": getattr(exc, "code", "error"),
+                    "message": str(exc),
+                }
+            except Exception as exc:  # noqa: BLE001
+                return robot_id, {
+                    "ok": False, "error": type(exc).__name__, "message": str(exc),
+                }
+
+        pairs = await asyncio.gather(*(one(rid) for rid in targets))
+        results = dict(pairs)
+        succeeded = [rid for rid, value in results.items() if value.get("ok")]
+        failed = [rid for rid, value in results.items() if not value.get("ok")]
+        return {
+            "tool": tool,
+            "args": args,
+            "targets": targets,
+            "skipped": skipped,
+            "results": results,
+            "ok_count": len(succeeded),
+            "failed": failed,
+            "skipped_count": len(skipped),
+            "all_ok": not failed,
+        }
+
+    async def fleet_actions(self) -> Dict[str, Any]:
+        """The fleet-wide actions worth offering, and what they will run on.
+
+        Built from the live catalogues rather than a hardcoded list, so a
+        firmware that does not support 跳舞 simply does not get the button.
+        """
+        targets = [
+            rid for rid in self.fleet.ids if self.fleet.get(rid).session.is_connected
+        ]
+        actions: List[Dict[str, Any]] = []
+
+        # Posture first: standing a fleet up is the thing you reach for after
+        # something went wrong, and it should not be below the dances.
+        if "robot_stand" in self.tools_available:
+            actions.append({
+                "id": "stand", "tool": "robot_stand", "args": {"confirm": True},
+                "label": "一起站立", "title": "BalanceStand：让所有已连接的狗站好",
+            })
+        if "go2_recover" in self.tools_available:
+            actions.append({
+                "id": "recover", "tool": "go2_recover",
+                "args": {"mode": "recovery_stand", "confirm": True},
+                "label": "一起恢复", "title": "摔倒恢复：侧翻/仰翻后翻身站起",
+            })
+        if "robot_lie_down" in self.tools_available:
+            actions.append({
+                "id": "lie_down", "tool": "robot_lie_down", "args": {"confirm": True},
+                "label": "一起趴下", "title": "StandDown：所有狗一起趴下并收腿",
+            })
+
+        named: List[Dict[str, Any]] = []
+        if targets and "robot_list_actions" in self.tools_available:
+            try:
+                from .controls import action_label
+
+                listed = await self.call_tool(
+                    targets[0], "robot_list_actions", {"include_dangerous": False}
+                )
+                for row in (listed or {}).get("actions") or []:
+                    name = row.get("name")
+                    if not name:
+                        continue
+                    # The catalogue descriptions are English debug text
+                    # ("Wave hello (1016)."). On a button that is noise, and it
+                    # would not match what the per-dog picker calls the same
+                    # action — so both go through one label table.
+                    label = action_label(name)
+                    named.append({
+                        "id": f"action_{name}", "tool": "robot_play_action",
+                        "args": {"name": name, "confirm": True},
+                        "label": label,
+                        "key": name,
+                        "title": row.get("description") or f"所有狗一起执行 {name}",
+                    })
+            except Exception as exc:  # noqa: BLE001 - an empty bar beats a broken page
+                logger.info("fleet actions: catalogue unavailable (%r)", exc)
+
+        return {
+            "targets": targets,
+            "skipped": [rid for rid in self.fleet.ids if rid not in targets],
+            "posture": actions,
+            "named": named,
+        }
 
     # ── telemetry ────────────────────────────────────────────────────
 

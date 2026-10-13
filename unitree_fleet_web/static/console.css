@@ -524,3 +524,73 @@ select, input[type="range"] { accent-color: var(--accent); }
   .hint { max-width: none; text-align: left; }
   .pen-actions { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ── fleet action bar ─────────────────────────────────────────────── */
+
+/* Given its own band rather than a tab: "make them all do X" is one of the
+   two things this console exists for, and burying it inside a per-dog card
+   would make it look like a per-dog feature. */
+.fleet-bar {
+  margin: 14px 14px 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 11px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.fleet-bar-head { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.fleet-bar-title { font-weight: 650; font-size: 13px; }
+.fleet-result { font-size: 12px; }
+.fleet-result.ok { color: var(--ok); }
+.fleet-result.partial { color: var(--warn); }
+.fleet-result.bad { color: #ffb4b4; }
+
+.fleet-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.fleet-row:empty { display: none; }
+.fleet-row .btn { padding: 6px 11px; font-size: 13px; }
+/* Posture first and slightly louder: standing a fleet up is what you reach
+   for after something went wrong. */
+.fleet-row.posture .btn { border-color: #35507a; background: #172234; }
+.fleet-row.posture .btn:hover:not(:disabled) { background: #1d2c44; }
+
+/* ── trim + stick ─────────────────────────────────────────────────── */
+
+.trim-label { color: var(--muted); font-size: 12px; }
+.trim-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  color: var(--muted);
+}
+#trim { width: 96px; }
+
+/* A small picture of what is actually being sent, so a held key, a gamepad
+   stick and a stuck axis all look different. */
+.stick {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  flex: none;
+}
+.stick::before, .stick::after {
+  content: '';
+  position: absolute;
+  background: var(--line);
+}
+.stick::before { left: 50%; top: 6px; bottom: 6px; width: 1px; }
+.stick::after { top: 50%; left: 6px; right: 6px; height: 1px; }
+.stick > i {
+  position: absolute;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  transition: transform 0.08s linear;
+  box-shadow: 0 0 6px -1px var(--accent);
+}

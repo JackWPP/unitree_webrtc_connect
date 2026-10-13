@@ -769,3 +769,128 @@ def test_every_motion_gated_tool_named_in_the_service_is_real(open_client):
     assert MOTION_GATED_TOOLS, "the motion-gated list is empty"
     for tool in MOTION_GATED_TOOLS | DANGEROUS_GATED_TOOLS:
         assert tool in CONSOLE_TOOLS, f"{tool} is not in the console allowlist"
+
+
+# ─── the e-stop latch covers the panel, not just the sticks ───────────
+
+
+def test_a_latched_estop_refuses_panel_actions(open_client):
+    """The hole this closes: `call_tool` went straight to the tool, and no tool
+    knows about the console's latch. So an operator could hit 急停 and then
+    press 站立 and the robot would move — the latch only stopped the sticks."""
+    open_client.post("/api/robot/dog1/connect")
+    assert open_client.post(
+        "/api/robot/dog1/tool", json={"tool": "robot_stand", "args": {"confirm": True}}
+    ).status_code == 200
+
+    open_client.post("/api/fleet/estop", json={"reason": "test"})
+    try:
+        refused = open_client.post(
+            "/api/robot/dog1/tool", json={"tool": "robot_stand", "args": {"confirm": True}}
+        )
+        # 409, matching what the teleop endpoint already returns when the
+        # latch refuses a frame — one status for one condition.
+        assert refused.status_code == 409
+        assert refused.json()["code"] == "motion_blocked"
+
+        # ...and every other motion control with it.
+        for tool, args in (
+            ("go2_recover", {"mode": "stand_up", "confirm": True}),
+            ("robot_move", {"vx": 0.1, "confirm": True}),
+            ("robot_play_action", {"name": "hello", "confirm": True}),
+        ):
+            response = open_client.post(
+                "/api/robot/dog1/tool", json={"tool": tool, "args": args}
+            )
+            assert response.json().get("code") == "motion_blocked", tool
+    finally:
+        open_client.post("/api/fleet/estop/release")
+
+    # Reads are not motion and must keep working with the latch engaged.
+    assert open_client.post(
+        "/api/robot/dog1/tool", json={"tool": "go2_get_state", "args": {}}
+    ).status_code == 200
+
+
+# ─── fleet actions ────────────────────────────────────────────────────
+
+
+def test_a_fleet_action_runs_on_every_connected_robot(open_client):
+    open_client.post("/api/robot/dog1/connect")
+    open_client.post("/api/robot/dog2/connect")
+
+    result = open_client.post(
+        "/api/fleet/action", json={"tool": "robot_stand", "args": {"confirm": True}}
+    ).json()
+
+    assert result["targets"] == ["dog1", "dog2"]
+    assert result["ok_count"] == 2
+    assert result["all_ok"] is True
+    assert set(result["results"]) == {"dog1", "dog2"}
+
+
+def test_a_fleet_action_names_the_robots_it_skipped(open_client):
+    """An operator who clicks 一起站立 and sees one dog stand has to be told the
+    other was asleep, not left to notice."""
+    open_client.post("/api/robot/dog1/connect")
+
+    result = open_client.post(
+        "/api/fleet/action", json={"tool": "robot_stand", "args": {"confirm": True}}
+    ).json()
+
+    assert result["targets"] == ["dog1"]
+    assert result["skipped"] == ["dog2"]
+    assert result["skipped_count"] == 1
+
+
+def test_a_fleet_action_with_nothing_connected_is_refused(open_client):
+    response = open_client.post(
+        "/api/fleet/action", json={"tool": "robot_stand", "args": {"confirm": True}}
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "no_connected_robots"
+
+
+def test_a_fleet_action_respects_the_latch_for_the_whole_fleet(open_client):
+    open_client.post("/api/robot/dog1/connect")
+    open_client.post("/api/robot/dog2/connect")
+    open_client.post("/api/fleet/estop", json={"reason": "test"})
+    try:
+        result = open_client.post(
+            "/api/fleet/action", json={"tool": "robot_stand", "args": {"confirm": True}}
+        ).json()
+        assert result["ok_count"] == 0
+        assert result["all_ok"] is False
+        assert set(result["failed"]) == {"dog1", "dog2"}
+    finally:
+        open_client.post("/api/fleet/estop/release")
+
+
+def test_a_fleet_action_is_still_an_allowlist(open_client):
+    open_client.post("/api/robot/dog1/connect")
+    response = open_client.post("/api/fleet/action", json={"tool": "robot_fetch_key"})
+    assert response.json()["code"] == "tool_not_allowed"
+
+
+def test_the_fleet_action_list_uses_the_same_labels_as_the_panel(open_client):
+    """The catalogue descriptions are English debug text ("Wave hello (1016).").
+    On a button that is noise, and it would disagree with what the per-dog
+    picker calls the same action."""
+    open_client.post("/api/robot/dog1/connect")
+    spec = open_client.get("/api/fleet/actions").json()
+
+    labels = [action["label"] for action in spec["posture"]]
+    assert "一起站立" in labels and "一起恢复" in labels
+
+    named = {action["key"]: action["label"] for action in spec["named"]}
+    assert named.get("hello") == "打招呼"
+    assert named.get("stretch") == "伸懒腰"
+    for label in named.values():
+        assert not label.endswith("."), f"{label!r} is still an English description"
+
+
+def test_the_console_js_has_the_fleet_bar_and_the_drive_aids(open_client):
+    source = open_client.get("/static/console.js").text
+    for marker in ("loadFleetActions", "runFleetAction", "renderStick",
+                   "renderPadKeys", "state.trim"):
+        assert marker in source, f"console.js lost {marker}"

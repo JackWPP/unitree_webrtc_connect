@@ -24,6 +24,22 @@
   <span id="estop-text">急停已锁存 —— 所有运动指令被拒绝</span>
 </div>
 
+<!-- The second of the two things this console is for. Driving is per-dog by
+     nature; "make them both dance" is a single intent with no per-dog form,
+     and clicking two buttons a second apart is not the same as together.
+     Given its own band above the pens, not a tab inside one of them. -->
+<section id="fleet-bar" class="fleet-bar">
+  <div class="fleet-bar-head">
+    <span class="fleet-bar-title">一起做动作</span>
+    <span id="fleet-targets" class="muted"></span>
+    <span class="spacer"></span>
+    <span id="fleet-result" class="fleet-result"></span>
+    <button id="fleet-repeat" class="btn hidden" title="再执行一次">再来一次</button>
+  </div>
+  <div id="fleet-posture" class="fleet-row"></div>
+  <div id="fleet-named" class="fleet-row"></div>
+</section>
+
 <main id="pens" class="pens"></main>
 
 <footer class="bar footer">
@@ -38,6 +54,9 @@
     <span id="mode-hint" class="muted"></span>
   </div>
   <div class="bar-right">
+    <label for="trim" class="trim-label" title="缩放所有摇杆输出。第一次驱动一只真狗时把它调低。">速度</label>
+    <input id="trim" type="range" min="10" max="100" step="5" value="100">
+    <output id="trim-value" class="trim-value">100%</output>
     <span id="gamepad" class="muted"></span>
     <span id="watching" class="muted"></span>
     <span id="link-state" class="muted">—</span>
@@ -95,6 +114,9 @@
           <button class="pad-key" data-axis="ly-" title="后退 (S)">↓</button>
           <button class="pad-key" data-axis="lx-" title="左移 (A)">←</button>
           <button class="pad-key" data-axis="lx+" title="右移 (D)">→</button>
+        </div>
+        <div class="stick" data-role="stick" title="当前摇杆输出">
+          <i data-role="stick-dot"></i>
         </div>
         <p class="hint" data-role="keys"></p>
       </div>

@@ -679,6 +679,21 @@ def _family(model: str) -> str:
     return "R1" if "r1" in key else "Go2"
 
 
+def action_label(name: str) -> str:
+    """A Chinese label for a catalogued action name, or the name itself.
+
+    Shared with the fleet action bar so "打招呼" means the same action in both
+    places. The catalogues in `robots/go2.py` are English descriptions —
+    "Wave hello (1016)." — which read as debug output on a control button.
+    """
+    key = str(name or "").strip().lower().replace(" ", "_")
+    for table in (_GO2_SAFE_ACTIONS, _GO2_GAIT_MOVES):
+        for value, label in table:
+            if value == key:
+                return label
+    return str(name or "")
+
+
 def controls_for(model: str, available_tools: Iterable[str]) -> List[Control]:
     """The controls ``model`` can actually honour, in display order.
 

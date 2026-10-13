@@ -146,6 +146,7 @@ function buildPens(fleet) {
       panels: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="panels"]`),
       batteryBar: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="battery-bar"]`),
       faultBadge: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="fault-badge"]`),
+      stickDot: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="stick-dot"]`),
       auditWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-wrap"]`),
       audit: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit"]`),
       auditCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-count"]`),
@@ -272,6 +273,38 @@ function renderFaults(robotId, robot) {
     entry.faultBadge.title = faults.length
       ? `${faults.length} 条故障 —— 点击查看` : '';
     entry.faultBadge.onclick = () => showTab(robot.robot_id, 'sense');
+  }
+}
+
+/* The pad, the keys and a gamepad all end up as the same four numbers. Drawing
+ * those numbers is the only way an operator can tell "my key is stuck" from
+ * "the robot is not listening". */
+function renderStick(robotId, axes) {
+  const entry = state.focusMap[robotId];
+  if (!entry) return;
+  const lx = Math.max(-1, Math.min(1, axes.lx || 0));
+  const ly = Math.max(-1, Math.min(1, axes.ly || 0));
+  if (entry.stickDot) {
+    entry.stickDot.style.transform =
+      `translate(calc(-50% + ${(lx * 15).toFixed(1)}px), calc(-50% + ${(-ly * 15).toFixed(1)}px))`;
+  }
+  renderPadKeys(robotId, axes);
+}
+
+/* The on-screen pad is a control, so it should also be a readout: a key held
+ * down lights the same arrow the mouse would. Without this there is no way to
+ * tell "my key is stuck" from "the robot is ignoring me". */
+function renderPadKeys(robotId, axes) {
+  const entry = state.focusMap[robotId];
+  if (!entry) return;
+  const sticky = state.sticky[robotId] || {};
+  for (const key of entry.pen.querySelectorAll('.pad-key')) {
+    const axis = key.dataset.axis || '';
+    const value = axes[axis.slice(0, 2)] || 0;
+    const lit = axis.endsWith('+') ? value > 0.01 : value < -0.01;
+    // Never clear a key the pointer is holding — that press owns the class.
+    if (lit) key.classList.add('active');
+    else if (!sticky[axis]) key.classList.remove('active');
   }
 }
 
@@ -429,6 +462,7 @@ function renderStatus(payload) {
     renderVideoHealth(robot.robot_id);
     renderFlags(robot.robot_id);
     renderFaults(robot.robot_id, robot);
+    renderPadKeys(robot.robot_id, axesNow(robot.robot_id));
   }
 
   state.connecting = payload.connecting || [];
@@ -436,6 +470,8 @@ function renderStatus(payload) {
   // Named `videoHealth` rather than `video`: `focusMap[id].video` is the
   // <img> element, and two things called video would invite a mix-up.
   state.videoHealth = payload.video || {};
+  state.lastStatus = payload;
+  renderFleetTargets();
   state.flags = payload.flags || state.flags || {};
   state.telemetryHealth = payload.telemetry_health || {};
   document.getElementById('fleet-summary').textContent =
@@ -1035,13 +1071,17 @@ function isIdle(axes) {
 async function sendFrame(source, frame) {
   state.wasDriving = state.wasDriving || {};
   state.wasDriving[source] = true;
+  // Trim scales every source, so it is the one place to make the whole console
+  // gentler — which is what you want the first time you drive a real dog.
+  const trim = state.trim === undefined ? 1 : state.trim;
+  const scaled = (value) => Math.max(-1, Math.min(1, (value || 0) * trim));
   try {
     await api('/api/fleet/teleop', {
       method: 'POST',
       body: JSON.stringify({
         source,
-        lx: frame.lx, ly: frame.ly, rx: frame.rx,
-        ry: frame.ry || 0, keys: frame.keys || 0,
+        lx: scaled(frame.lx), ly: scaled(frame.ly), rx: scaled(frame.rx),
+        ry: scaled(frame.ry), keys: frame.keys || 0,
       }),
     });
   } catch (err) {
@@ -1091,6 +1131,13 @@ async function tick() {
     return;
   }
   await releaseSource('gamepad:0');
+
+  // Show the live axes on every pen the current mode is driving, so "Both"
+  // makes both sticks move and "Split" makes each follow its own keys.
+  const shown = state.mode === 'both'
+    ? Object.keys(state.focusMap)
+    : [state.focused].filter(Boolean);
+  for (const id of shown) renderStick(id, axesNow(id));
 
   const sources = state.mode === 'split' ? ['wasd', 'ijkl'] : ['keyboard'];
 
@@ -1219,11 +1266,123 @@ function wireSocket() {
   socket.addEventListener('error', () => socket.close());
 }
 
+/* ── fleet actions ─────────────────────────────────────────────────── */
+
+/* "Make them both do X" is one intent, so it is one click. The calls go out
+ * concurrently server-side; doing it by clicking two per-dog buttons a second
+ * apart is not the same thing as doing it together. */
+async function loadFleetActions() {
+  const host = document.getElementById('fleet-posture');
+  const named = document.getElementById('fleet-named');
+  const targets = document.getElementById('fleet-targets');
+  let spec;
+  try {
+    spec = await api('/api/fleet/actions');
+  } catch (_) {
+    document.getElementById('fleet-bar').classList.add('hidden');
+    return;
+  }
+  state.fleetActions = spec;
+
+  targets.textContent = spec.targets.length
+    ? `作用于 ${spec.targets.join('、')}`
+      + (spec.skipped.length ? ` · 未连接：${spec.skipped.join('、')}` : '')
+    : '没有已连接的机器狗';
+
+  host.textContent = '';
+  host.classList.toggle('posture', true);
+  for (const action of spec.posture || []) {
+    host.appendChild(fleetButton(action));
+  }
+  named.textContent = '';
+  for (const action of spec.named || []) {
+    named.appendChild(fleetButton(action));
+  }
+}
+
+function fleetButton(action) {
+  const button = document.createElement('button');
+  button.className = 'btn';
+  button.textContent = action.label;
+  button.title = action.title || action.label;
+  button.addEventListener('click', () => runFleetAction(action, button));
+  return button;
+}
+
+async function runFleetAction(action, button) {
+  const out = document.getElementById('fleet-result');
+  const repeat = document.getElementById('fleet-repeat');
+  button.disabled = true;
+  out.className = 'fleet-result';
+  out.textContent = `${action.label}…`;
+  try {
+    const result = await api('/api/fleet/action', {
+      method: 'POST',
+      body: JSON.stringify({ tool: action.tool, args: action.args || {} }),
+    });
+    const skipped = result.skipped_count
+      ? ` · 跳过 ${result.skipped.join('、')}（未连接）` : '';
+    if (result.all_ok) {
+      out.className = 'fleet-result ok';
+      out.textContent = `${action.label}：${result.ok_count}/${result.targets.length} 成功${skipped}`;
+    } else {
+      // Name the dogs that did not do it. "Done" over a partial result is the
+      // one lie this console must not tell.
+      out.className = 'fleet-result partial';
+      out.textContent = `${action.label}：${result.ok_count}/${result.targets.length} 成功`
+        + ` · 失败 ${result.failed.join('、')}${skipped}`;
+    }
+    state.lastFleetAction = action;
+    repeat.classList.remove('hidden');
+  } catch (err) {
+    out.className = 'fleet-result bad';
+    out.textContent = `${action.label} 失败：${err.message}`;
+  } finally {
+    button.disabled = false;
+    renderFleetTargets();
+  }
+}
+
+function renderFleetTargets() {
+  const spec = state.fleetActions;
+  const targets = document.getElementById('fleet-targets');
+  if (!spec || !targets) return;
+  const connected = (state.lastStatus && state.lastStatus.robots || [])
+    .filter((r) => r.connected).map((r) => r.robot_id);
+  spec.targets = connected;
+  spec.skipped = Object.keys(state.focusMap).filter((id) => !connected.includes(id));
+  targets.textContent = connected.length
+    ? `作用于 ${connected.join('、')}`
+      + (spec.skipped.length ? ` · 未连接：${spec.skipped.join('、')}` : '')
+    : '没有已连接的机器狗（先点「连接」）';
+}
+
 /* ── boot ──────────────────────────────────────────────────────────── */
+
+function wireFleetBar() {
+  const trim = document.getElementById('trim');
+  const value = document.getElementById('trim-value');
+  if (trim) {
+    const apply = () => {
+      state.trim = Number(trim.value) / 100;
+      value.textContent = `${trim.value}%`;
+    };
+    trim.addEventListener('input', apply);
+    apply();
+  }
+  const repeat = document.getElementById('fleet-repeat');
+  if (repeat) {
+    repeat.addEventListener('click', () => {
+      if (state.lastFleetAction) runFleetAction(state.lastFleetAction, repeat);
+    });
+  }
+}
 
 async function boot() {
   wireButtons();
   wireInput();
+  wireFleetBar();
+  loadFleetActions();
   try {
     const snapshot = await api('/api/fleet');
     state.fleet = snapshot.fleet;
@@ -1238,6 +1397,7 @@ async function boot() {
       state.tools = (await api('/api/console/tools')).tools || [];
     } catch (_) { /* read-only console */ }
     await Promise.all(snapshot.fleet.robots.map((robot) => loadControls(robot.robot_id)));
+    renderFleetTargets();
   } catch (err) {
     toast('无法读取机队信息: ' + err.message, 'bad');
     return;

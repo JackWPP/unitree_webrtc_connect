@@ -367,6 +367,24 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 
+    async def get_fleet_actions(request) -> Response:
+        try:
+            return JSONResponse(await service.fleet_actions())
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
+    async def post_fleet_action(request) -> Response:
+        body = await _read_body(request)
+        tool = (body or {}).get("tool")
+        if not tool:
+            return JSONResponse(
+                {"ok": False, "error": "bad_request", "message": "缺少 tool"}, status_code=400
+            )
+        try:
+            return JSONResponse(await service.fleet_action(tool, (body or {}).get("args") or {}))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
     async def get_console_controls(request) -> Response:
         robot_id = request.query_params.get("robot_id") or ""
         try:
@@ -466,6 +484,8 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/robot/{robot_id}/tool", post_robot_tool, methods=["POST"]),
         Route("/api/robot/{robot_id}/audit", get_robot_audit),
         Route("/api/console/controls", get_console_controls),
+        Route("/api/fleet/actions", get_fleet_actions),
+        Route("/api/fleet/action", post_fleet_action, methods=["POST"]),
         Route("/api/robot/{robot_id}/teleop", post_robot_teleop, methods=["POST"]),
         Route("/api/robot/{robot_id}/move", post_robot_move, methods=["POST"]),
         Route("/api/robot/{robot_id}/stop", post_robot_stop, methods=["POST"]),
