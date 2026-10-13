@@ -124,9 +124,10 @@ def test_deadman_is_quiet_when_nothing_is_driving():
     [
         (InputMode.FOCUS, "keyboard", ["dog1"]),
         (InputMode.BOTH, "keyboard", ["dog1", "dog2"]),
+        # Split works with no configuration: first group -> first robot.
         (InputMode.SPLIT, "wasd", ["dog1"]),
         (InputMode.SPLIT, "ijkl", ["dog2"]),
-        (InputMode.SPLIT, "unbound", []),          # unbound drives nothing
+        (InputMode.SPLIT, "unbound", []),          # an unknown group drives nothing
         (InputMode.PER_SOURCE, "gamepad", ["dog2"]),
         (InputMode.PER_SOURCE, "unknown", []),
     ],
@@ -135,9 +136,24 @@ def test_input_arbitration(mode, source, expected):
     state = ConsoleState(
         input_mode=mode,
         focused="dog1",
-        source_bindings={"wasd": "dog1", "ijkl": "dog2", "gamepad": "dog2"},
+        source_bindings={"gamepad": "dog2"},
     )
     assert state.targets_for(source=source, robot_ids=["dog1", "dog2"]) == expected
+
+
+def test_an_explicit_split_binding_overrides_the_default():
+    state = ConsoleState(
+        input_mode=InputMode.SPLIT, source_bindings={"ijkl": "dog1", "wasd": "dog2"}
+    )
+    ids = ["dog1", "dog2"]
+    assert state.targets_for(source="wasd", robot_ids=ids) == ["dog2"]
+    assert state.targets_for(source="ijkl", robot_ids=ids) == ["dog1"]
+
+
+def test_split_with_a_single_robot_leaves_the_second_group_dead():
+    state = ConsoleState(input_mode=InputMode.SPLIT)
+    assert state.targets_for(source="wasd", robot_ids=["dog1"]) == ["dog1"]
+    assert state.targets_for(source="ijkl", robot_ids=["dog1"]) == []
 
 
 def test_focus_mode_with_an_unknown_focus_drives_nothing():
@@ -219,53 +235,122 @@ async def test_switching_targets_zeroes_the_previous_robot(service):
 
     second = await service.teleop("dog2", ly=1.0)
     assert second["zeroed"] == ["dog1"]
-    assert list(service.state.driving) == ["dog2"]
+    assert sorted(service.state.driven_robots()) == ["dog2"]
 
 
-async def test_both_mode_drives_two_and_zeroes_both_on_switch(service):
+async def test_both_mode_drives_two_and_the_switch_releases_both(service):
     await service.fleet.get("dog1").session.ensure_connected()
     await service.fleet.get("dog2").session.ensure_connected()
 
-    service.set_input_mode("both")
+    await service.set_input_mode("both")
     both = await service.teleop_source(source="keyboard", ly=1.0)
     assert sorted(both["targets"]) == ["dog1", "dog2"]
-    assert sorted(service.state.driving) == ["dog1", "dog2"]
+    assert sorted(service.state.driven_robots()) == ["dog1", "dog2"]
 
-    # Switching to focus on dog1 must zero dog2, not leave it walking.
-    service.set_input_mode("focus")
+    # Switching to focus must not leave dog2 walking. The release happens at
+    # the mode change — earlier than the next frame — so the window between
+    # "operator let go" and "robot zeroed" is as small as it can be.
+    switched = await service.set_input_mode("focus")
+    assert sorted(switched["zeroed"]) == ["dog1", "dog2"]
+    assert service.state.driven_robots() == set()
+
     service.set_focus("dog1")
     focused = await service.teleop_source(source="keyboard", ly=1.0)
     assert focused["targets"] == ["dog1"]
-    assert focused["zeroed"] == ["dog2"]
+
+
+async def test_split_mode_drives_both_dogs_at_once(service):
+    """The point of split mode: one operator, two dogs, simultaneously.
+
+    Regression: drive ownership used to be a single flat set, so the second
+    key group's frame cancelled the first one's robot and the mode could
+    never actually drive two dogs at the same time.
+    """
+    await service.fleet.get("dog1").session.ensure_connected()
+    await service.fleet.get("dog2").session.ensure_connected()
+    await service.set_input_mode("split")
+
+    left = await service.teleop_source(source="wasd", ly=1.0)
+    assert left["targets"] == ["dog1"]
+    assert left["zeroed"] == []
+
+    right = await service.teleop_source(source="ijkl", ly=1.0)
+    assert right["targets"] == ["dog2"]
+    assert right["zeroed"] == [], "the other hand's dog must not be zeroed"
+
+    # Both dogs are under command at the same time.
+    assert sorted(service.state.driven_robots()) == ["dog1", "dog2"]
+    state = service.state.as_dict()
+    assert state["driving_by_source"]["wasd"] == ["dog1"]
+    assert state["driving_by_source"]["ijkl"] == ["dog2"]
+
+
+async def test_releasing_one_source_leaves_the_other_driving(service):
+    await service.set_input_mode("split")
+    await service.teleop_source(source="wasd", ly=1.0)
+    await service.teleop_source(source="ijkl", ly=1.0)
+
+    released = await service.release_drive(source="wasd")
+    assert released["zeroed"] == ["dog1"]
+    assert sorted(service.state.driven_robots()) == ["dog2"]
+
+
+async def test_changing_mode_releases_whatever_was_being_driven(service):
+    """A mode change changes what the held keys mean, so release the sticks.
+
+    Otherwise a dog stays under command until the dead-man notices, which is
+    a window that does not need to exist.
+    """
+    await service.set_input_mode("both")
+    await service.teleop_source(source="keyboard", ly=1.0)
+    assert sorted(service.state.driven_robots()) == ["dog1", "dog2"]
+
+    result = await service.set_input_mode("focus")
+    assert sorted(result["zeroed"]) == ["dog1", "dog2"]
+    assert service.state.driven_robots() == set()
+
+
+async def test_the_deadman_only_stops_the_source_that_went_quiet(service):
+    """One hand resting must not stop the other hand's dog."""
+    await service.set_input_mode("split")
+    await service.teleop_source(source="wasd", ly=1.0)
+    await service.teleop_source(source="ijkl", ly=1.0)
+
+    # IJKL keeps sending; WASD goes quiet.
+    service.state.last_teleop_at["wasd"] = time.monotonic() - 10.0
+    stale = service.state.deadman_expired(now=time.monotonic(), timeout_s=0.5)
+
+    assert stale == {"dog1"}
+    assert sorted(service.state.driven_robots()) == ["dog2"]
 
 
 async def test_release_drive_zeroes_everyone_driving(service):
-    service.set_input_mode("both")
+    await service.set_input_mode("both")
     await service.teleop_source(source="keyboard", ly=1.0)
 
     released = await service.release_drive()
     assert sorted(released["zeroed"]) == ["dog1", "dog2"]
-    assert service.state.driving == set()
+    assert service.state.driven_robots() == set()
 
 
 async def test_deadman_zeroes_a_driver_that_goes_quiet(service):
     """A closed tab must not leave a dog walking."""
     await service.fleet.get("dog1").session.ensure_connected()
     await service.teleop("dog1", ly=1.0)
-    assert service.state.driving == {"dog1"}
+    assert service.state.driven_robots() == {"dog1"}
 
     await service.start()
     try:
         for _ in range(40):
             await asyncio.sleep(0.05)
-            if not service.state.driving:
+            if not service.state.driven_robots():
                 break
     finally:
         service._deadman.cancel()  # noqa: SLF001 - deliberate white-box
         with contextlib.suppress(asyncio.CancelledError):
             await service._deadman
 
-    assert service.state.driving == set(), "dead-man did not release the sticks"
+    assert service.state.driven_robots() == set(), "dead-man did not release the sticks"
 
 
 async def test_teleop_clamps_hostile_axis_values(service):
@@ -292,12 +377,12 @@ async def test_stop_all_names_the_robots_it_could_not_stop(service):
 
 
 async def test_stop_all_clears_drive_ownership(service):
-    service.set_input_mode("both")
+    await service.set_input_mode("both")
     await service.teleop_source(source="keyboard", ly=1.0)
-    assert service.state.driving
+    assert service.state.driven_robots()
 
     await service.stop_all()
-    assert service.state.driving == set()
+    assert service.state.driven_robots() == set()
 
 
 async def test_snapshot_never_leaks_keys_and_lists_robots(service):
@@ -328,4 +413,4 @@ async def test_aclose_never_leaves_a_robot_driving(service):
     await service.fleet.get("dog1").session.ensure_connected()
     await service.teleop("dog1", ly=1.0)
     await service.aclose()
-    assert service.state.driving == set()
+    assert service.state.driven_robots() == set()

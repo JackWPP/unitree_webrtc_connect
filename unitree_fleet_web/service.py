@@ -150,7 +150,7 @@ class ConsoleService:
         self.fleet.get(robot_id)  # validate
         self.state.require_motion_allowed(robot_id)
 
-        stale = self.state.begin_driving([robot_id])
+        stale = self.state.begin_driving([robot_id], source=source or "explicit")
         zeroed = sorted(stale)
         if zeroed:
             await self._zero_many(zeroed)
@@ -177,7 +177,9 @@ class ConsoleService:
         for robot_id in targets:
             self.state.require_motion_allowed(robot_id)
 
-        stale = self.state.begin_driving(targets)
+        # Scoped to this source, so in split mode one hand cannot cancel the
+        # other hand's robot.
+        stale = self.state.begin_driving(targets, source=source or "keyboard")
         zeroed = sorted(stale)
         if zeroed:
             await self._zero_many(zeroed)
@@ -204,9 +206,13 @@ class ConsoleService:
         )
         return bool(delivered)
 
-    async def release_drive(self) -> Dict[str, Any]:
-        """Operator let go: zero everyone who was driving."""
-        previous = self.state.stop_driving()
+    async def release_drive(self, *, source: str = "") -> Dict[str, Any]:
+        """Operator let go: zero whoever that source was driving.
+
+        With no source named, every source is released — which is what a
+        window blur or a mode change wants.
+        """
+        previous = self.state.stop_driving(source or None)
         await self._zero_many(previous)
         return {"zeroed": sorted(previous)}
 
@@ -226,7 +232,7 @@ class ConsoleService:
         ceiling = float(getattr(runtime.config, "max_move_duration_s", 10.0) or 10.0)
         duration = max(0.05, min(float(duration or 1.0), ceiling))
 
-        stale = self.state.begin_driving([robot_id])
+        stale = self.state.begin_driving([robot_id], source="move")
         zeroed = sorted(stale)
         if zeroed:
             await self._zero_many(zeroed)
@@ -236,14 +242,14 @@ class ConsoleService:
                 lx=_clamp(lx), ly=_clamp(ly), rx=_clamp(rx), duration=duration
             )
         finally:
-            self.state.stop_driving()
+            self.state.stop_driving("move")
         return {"robot_id": robot_id, "zeroed": zeroed, "motion": result}
 
     # ── stops ────────────────────────────────────────────────────────
 
     async def stop(self, robot_id: str, *, reason: str = "console_stop") -> Dict[str, Any]:
         runtime = self.fleet.get(robot_id)
-        self.state.driving.discard(robot_id)
+        self.state.release_robot(robot_id)
         try:
             delivered = await runtime.session.safe_stop(reason=reason)
         except Exception as exc:  # noqa: BLE001
@@ -344,7 +350,14 @@ class ConsoleService:
 
     # ── operator settings ────────────────────────────────────────────
 
-    def set_input_mode(self, mode: str) -> Dict[str, Any]:
+    async def set_input_mode(self, mode: str) -> Dict[str, Any]:
+        """Change how input maps, and release whatever was being driven.
+
+        A mode change is a change of control context: the keys the operator
+        was holding no longer mean what they meant. Leaving the previous
+        source's robots claimed would keep them travelling until the dead-man
+        noticed, so release them here and say which were zeroed.
+        """
         try:
             self.state.input_mode = InputMode(mode)
         except ValueError:
@@ -354,7 +367,9 @@ class ConsoleService:
                 code="bad_input_mode",
                 hint="Use focus, both, split or per_source.",
             ) from None
-        return self.state.as_dict()
+        stale = self.state.stop_driving()
+        await self._zero_many(stale)
+        return {**self.state.as_dict(), "zeroed": sorted(stale)}
 
     def set_focus(self, robot_id: str) -> Dict[str, Any]:
         self.fleet.get(robot_id)

@@ -54,6 +54,14 @@ class InputMode(str, Enum):
     PER_SOURCE = "per_source"
 
 
+#: Key groups that ``SPLIT`` mode uses, in the order they map onto the roster.
+#: Split mode works with no configuration at all — first group to first robot,
+#: second to second — because the console advertises exactly that mapping on
+#: screen, and a mode whose documented behaviour requires an undocumented setup
+#: step is a mode that looks broken.
+DEFAULT_SPLIT_SOURCES = ("wasd", "ijkl")
+
+
 class EStopScope(str, Enum):
     ALL = "all"
     ROBOT = "robot"
@@ -122,14 +130,16 @@ class ConsoleState:
     estop: EStop = field(default_factory=EStop)
     input_mode: InputMode = InputMode.FOCUS
     focused: str = ""
-    #: Which robots the operator's sticks are currently commanding. A *set*,
-    #: because ``BOTH`` mode drives two at once; tracking only one would leave
-    #: the other travelling on its last frame after a mode change. Tracked so
-    #: a switched-away robot can be zeroed, and so the dead-man timeout knows
-    #: what to stop.
-    driving: Set[str] = field(default_factory=set)
+    #: Which robots each *input source* is currently commanding. Keyed by
+    #: source because the sources are independent: in ``SPLIT`` mode the WASD
+    #: group and the IJKL group drive different robots **at the same time**,
+    #: so a single flat set would make each group cancel the other and the
+    #: mode could never drive two dogs at once.
+    driving: Dict[str, Set[str]] = field(default_factory=dict)
+    #: Per-source timestamp of the last frame, so a source that goes quiet is
+    #: zeroed even while another source is still active.
+    last_teleop_at: Dict[str, float] = field(default_factory=dict)
     driving_since: float = 0.0
-    last_teleop_at: float = 0.0
     #: Per-robot video switches, so two streams do not both have to be live.
     video_enabled: Dict[str, bool] = field(default_factory=dict)
     #: source name -> robot_id, used by ``PER_SOURCE``.
@@ -152,38 +162,76 @@ class ConsoleState:
 
     # ── drive ownership ──────────────────────────────────────────────
 
-    def begin_driving(
-        self, robot_ids: Iterable[str], *, now: Optional[float] = None
-    ) -> Set[str]:
-        """Claim the sticks for *robot_ids*; return the robots to zero first.
+    def driven_robots(self) -> Set[str]:
+        """Every robot currently under command, from any source."""
+        if not self.driving:
+            return set()
+        return set().union(*self.driving.values())
 
-        The returned set is every robot that was being driven and is not any
-        more. It still holds a non-zero velocity, so the caller must zero it.
+    def begin_driving(
+        self,
+        robot_ids: Iterable[str],
+        *,
+        source: str = "keyboard",
+        now: Optional[float] = None,
+    ) -> Set[str]:
+        """Record that *source* is commanding *robot_ids*.
+
+        Returns every robot that is no longer commanded by **any** source and
+        therefore still holds a non-zero velocity. The caller must zero those.
         """
         now = time.monotonic() if now is None else now
         wanted = {r for r in robot_ids if r}
-        stale = self.driving - wanted
-        if wanted != self.driving:
-            self.driving = wanted
-            self.driving_since = now
-        self.last_teleop_at = now
-        return stale
 
-    def stop_driving(self) -> Set[str]:
-        """Give up the sticks; return everyone who needs zeroing."""
-        previous = set(self.driving)
-        self.driving = set()
-        self.driving_since = 0.0
-        self.last_teleop_at = 0.0
-        return previous
+        before = self.driven_robots()
+        self.driving[source] = wanted
+        self.last_teleop_at[source] = now
+        after = self.driven_robots()
+
+        if after != before:
+            self.driving_since = now
+        return before - after
+
+    def stop_driving(self, source: Optional[str] = None) -> Set[str]:
+        """Release one source, or all of them; return who needs zeroing."""
+        before = self.driven_robots()
+        if source is None:
+            self.driving.clear()
+            self.last_teleop_at.clear()
+            self.driving_since = 0.0
+        else:
+            self.driving.pop(source, None)
+            self.last_teleop_at.pop(source, None)
+        return before - self.driven_robots()
+
+    def release_robot(self, robot_id: str) -> Set[str]:
+        """Drop one robot from every source — used when it is stopped."""
+        before = self.driven_robots()
+        for source, robots in list(self.driving.items()):
+            remaining = robots - {robot_id}
+            if remaining:
+                self.driving[source] = remaining
+            else:
+                self.driving.pop(source, None)
+                self.last_teleop_at.pop(source, None)
+        return before - self.driven_robots()
 
     def deadman_expired(self, *, now: float, timeout_s: float) -> Set[str]:
-        """Who must be zeroed because the operator stopped sending frames."""
-        if not self.driving or not self.last_teleop_at:
-            return set()
-        if now - self.last_teleop_at < timeout_s:
-            return set()
-        return set(self.driving)
+        """Robots whose source stopped sending, so they must be zeroed.
+
+        Per source rather than global: in split mode one hand can go quiet
+        while the other keeps driving, and only the quiet one is stale.
+        """
+        stale: Set[str] = set()
+        for source, robots in list(self.driving.items()):
+            last = self.last_teleop_at.get(source, 0.0)
+            if last and now - last >= timeout_s:
+                stale |= robots
+                self.driving.pop(source, None)
+                self.last_teleop_at.pop(source, None)
+        if not self.driving:
+            self.driving_since = 0.0
+        return stale
 
     # ── input arbitration ────────────────────────────────────────────
 
@@ -192,9 +240,11 @@ class ConsoleState:
     ) -> List[str]:
         """Which robots an input frame from *source* should drive.
 
-        Mirrors the four modes the console offers. ``SPLIT`` and
-        ``PER_SOURCE`` need a binding; an unbound source drives nothing,
-        which is the safe default (better a dead key than an unintended dog).
+        Mirrors the four modes the console offers. ``SPLIT`` falls back to a
+        positional default (first key group to first robot) so it works with
+        no setup; ``PER_SOURCE`` drives nothing when unbound, because a named
+        device with no binding is far more likely to be a mistake than an
+        implied default.
         """
         ids = list(robot_ids)
         if not ids:
@@ -204,7 +254,12 @@ class ConsoleState:
             return ids
         if self.input_mode is InputMode.SPLIT:
             bound = self.source_bindings.get(source)
-            return [bound] if bound in ids else []
+            if bound in ids:
+                return [bound]
+            if source not in DEFAULT_SPLIT_SOURCES:
+                return []
+            index = DEFAULT_SPLIT_SOURCES.index(source)
+            return [ids[index]] if index < len(ids) else []
         if self.input_mode is InputMode.PER_SOURCE:
             bound = self.source_bindings.get(source)
             return [bound] if bound in ids else []
@@ -217,15 +272,21 @@ class ConsoleState:
 
     def as_dict(self, *, now: Optional[float] = None) -> Dict[str, object]:
         now = time.monotonic() if now is None else now
+        ages = [
+            now - stamp for stamp in self.last_teleop_at.values() if stamp
+        ]
         return {
             "estop": self.estop.as_dict(),
             "input_mode": self.input_mode.value,
             "focused": self.focused,
-            "driving": sorted(self.driving),
-            "driving_for_s": round(now - self.driving_since, 2) if self.driving else 0.0,
-            "last_teleop_age_s": (
-                round(now - self.last_teleop_at, 2) if self.last_teleop_at else None
+            "driving": sorted(self.driven_robots()),
+            "driving_by_source": {
+                source: sorted(robots) for source, robots in self.driving.items()
+            },
+            "driving_for_s": (
+                round(now - self.driving_since, 2) if self.driving else 0.0
             ),
+            "last_teleop_age_s": round(min(ages), 2) if ages else None,
             "video_enabled": dict(self.video_enabled),
             "source_bindings": dict(self.source_bindings),
         }

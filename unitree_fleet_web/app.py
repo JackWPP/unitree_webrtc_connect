@@ -200,7 +200,9 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
     async def post_mode(request) -> Response:
         body = await _read_body(request)
         try:
-            return JSONResponse(service.set_input_mode(str(body.get("mode") or "")))
+            return JSONResponse(
+                await service.set_input_mode(str(body.get("mode") or ""))
+            )
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 
@@ -266,8 +268,11 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
             return _error_response(exc)
 
     async def post_fleet_release(request) -> Response:
+        body = await _read_body(request)
         try:
-            return JSONResponse(await service.release_drive())
+            return JSONResponse(
+                await service.release_drive(source=str(body.get("source") or ""))
+            )
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 

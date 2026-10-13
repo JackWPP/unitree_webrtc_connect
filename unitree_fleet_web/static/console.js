@@ -380,7 +380,12 @@ async function tick() {
       if (state.wasDriving && state.wasDriving[source]) {
         state.wasDriving[source] = false;
         try {
-          await api('/api/fleet/release', { method: 'POST' });
+          // Scoped to this source. Releasing everything here would zero the
+          // other hand's dog in split mode.
+          await api('/api/fleet/release', {
+            method: 'POST',
+            body: JSON.stringify({ source }),
+          });
         } catch (_) { /* the dead-man will catch it */ }
       }
       continue;
