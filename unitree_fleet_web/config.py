@@ -66,6 +66,14 @@ class ConsoleConfig:
     lease_s: float = DEFAULT_LEASE_S
     #: Serve the built-in single-page console.
     serve_ui: bool = True
+    #: Whether fetching a video frame may bring a robot up.
+    #:
+    #: True means opening the console connects the dogs, which is what "both
+    #: visible in the browser" requires — and if the official app already
+    #: holds the slot the connect fails with `robot_busy` and the pen shows
+    #: offline, so nobody is kicked off. False makes the console a pure
+    #: observer until the operator presses 连接.
+    video_autoconnect: bool = True
     static_dir: Optional[Path] = None
 
     @property

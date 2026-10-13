@@ -680,6 +680,9 @@ class ConsoleService:
         lock = self._frame_locks.setdefault(robot_id, asyncio.Lock())
         runtime = self.fleet.get(robot_id)
         async with lock:
+            if not runtime.session.is_connected and not self.config.video_autoconnect:
+                # Observing only: the operator decides when to take the slot.
+                return None
             try:
                 await runtime.session.ensure_connected()
             except Exception as exc:  # noqa: BLE001

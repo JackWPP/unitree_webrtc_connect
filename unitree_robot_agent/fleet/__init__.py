@@ -19,6 +19,11 @@ instantiated once per roster entry.
 
 from typing import TYPE_CHECKING, Any
 
+from .interference import (
+    InterferenceReport,
+    Timing,
+    measure_connect_impact,
+)
 from .keys import KeyEntry, KeyStore
 from .preflight import PreflightResult, probe_robot, run_preflight, summarise
 from .roster import (
@@ -56,8 +61,11 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "FleetManager",
+    "InterferenceReport",
     "KeyEntry",
     "KeyStore",
+    "Timing",
+    "measure_connect_impact",
     "PreflightResult",
     "probe_robot",
     "run_preflight",

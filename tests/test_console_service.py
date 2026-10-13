@@ -648,3 +648,38 @@ def _slow_connect(delay: float = 10.0):
     async def _connect():
         await asyncio.sleep(delay)
     return _connect
+
+
+# ─── video and the WebRTC client slot ─────────────────────────────────
+
+
+async def test_fetching_a_frame_brings_a_robot_up_by_default(service):
+    """"Both dogs visible in the browser" means the video path may connect."""
+    assert service.config.video_autoconnect is True
+    assert service.fleet.get("dog1").session.is_connected is False
+
+    await service.frame("dog1")
+
+    assert service.fleet.get("dog1").session.is_connected is True
+
+
+async def test_the_console_can_be_a_pure_observer(service):
+    """With autoconnect off, watching must not claim the robot's only slot."""
+    service.config.video_autoconnect = False
+
+    assert await service.frame("dog1") is None
+    assert service.fleet.get("dog1").session.is_connected is False
+
+    # And an explicit connect still works — that is the whole point of the
+    # mode: the operator decides when to take the link.
+    await service.connect("dog1")
+    assert service.fleet.get("dog1").session.is_connected is True
+
+
+async def test_observer_mode_still_serves_frames_for_a_connected_robot(service):
+    """The flag is about whether video may *connect*, not whether it works."""
+    await service.connect("dog1")
+    service.config.video_autoconnect = False
+
+    frame = await service.frame("dog1")
+    assert frame is not None and frame[:2] == b"\xff\xd8"  # JPEG SOI

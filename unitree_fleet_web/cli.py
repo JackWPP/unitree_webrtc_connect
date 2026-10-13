@@ -44,6 +44,12 @@ def _parse_args(argv) -> argparse.Namespace:
                              "with no robot attached")
     parser.add_argument("--state-dir", default=None,
                         help="override the roster's per-robot state directory")
+    parser.add_argument("--no-video-autoconnect", action="store_true",
+                        help="do not let fetching a video frame connect a "
+                             "robot. The console becomes a pure observer "
+                             "until 连接 is pressed, instead of taking the "
+                             "robot's single WebRTC client slot as soon as "
+                             "the page loads")
     parser.add_argument("--no-ui", action="store_true",
                         help="serve the API only, not the built-in page")
     parser.add_argument("--preflight", action="store_true",
@@ -74,6 +80,8 @@ def _config_from_args(args) -> ConsoleConfig:
         overrides["token"] = args.token
     config = ConsoleConfig.from_env(**overrides)
     config.serve_ui = not args.no_ui
+    if args.no_video_autoconnect:
+        config.video_autoconnect = False
     return config
 
 
