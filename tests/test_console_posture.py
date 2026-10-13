@@ -294,11 +294,19 @@ async def test_disconnecting_forgets_the_posture(service):
     assert service.posture("dog1").posture == UNKNOWN
 
 
-async def test_the_status_payload_carries_the_posture(service):
+async def test_the_posture_belief_is_not_in_the_status_payload(service):
+    """It used to be, four times a second, and **nothing read it** — the page's
+    posture display comes from `body().fsm`, and the belief itself is internal.
+
+    The payload budget test cannot catch that: it checks the total, and a key
+    with no reader is a slice of it nobody would notice growing. The wiring
+    audit found it by grepping the JavaScript for the name.
+    """
     await service.connect("dog1")
     payload = await service.status()
-    assert set(payload["posture"]) == set(service.fleet.ids)
-    assert payload["posture"]["dog1"]["posture"] in (
+    assert "posture" not in payload
+    # ...and the belief is still maintained, because the standing gate needs it.
+    assert service.posture("dog1").posture in (
         UNKNOWN, STANDING, LYING, SITTING, DAMPING, "moving"
     )
 

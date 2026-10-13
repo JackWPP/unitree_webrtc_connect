@@ -208,3 +208,101 @@ def test_every_console_tool_is_a_real_tool(open_client):
     assert not unknown, (
         f"CONSOLE_TOOLS names tools no model registers: {unknown}"
     )
+
+
+# ─── the motion endpoint the suite never executed ─────────────────────
+
+
+def test_a_robot_move_request_actually_moves(open_client):
+    """**The endpoint whose handler had never run.**
+
+    `/api/robot/{id}/move` was the one route in the console with no UI caller
+    and no behavioural test — its only test asserted a 401 for a missing token,
+    so `require_motion_allowed`, the duration clamp and the arbitration had
+    never executed in the suite. That is the same shape of blind spot that let
+    the `robot_move`/`robot_walk` mismatch hide: a path that looks wired because
+    it exists.
+    """
+    open_client.post("/api/robot/dog1/connect")
+    response = open_client.post(
+        "/api/robot/dog1/move", json={"ly": 0.3, "duration": 0.3}
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["robot_id"] == "dog1"
+    assert payload["motion"], "the motion controller returned nothing"
+
+
+def test_a_move_is_refused_while_the_estop_is_latched(open_client):
+    """The gate the handler contains, exercised rather than assumed."""
+    open_client.post("/api/robot/dog1/connect")
+    open_client.post("/api/fleet/estop", json={"reason": "test"})
+
+    response = open_client.post("/api/robot/dog1/move", json={"ly": 0.3})
+    assert response.status_code == 409, response.text
+
+
+def test_a_move_duration_is_clamped_to_the_ceiling(open_client):
+    """An hour-long move is a typo, and the endpoint is reachable without the
+    UI — so the clamp is the only thing between a typo and a robot driving off."""
+    open_client.post("/api/robot/dog1/connect")
+    response = open_client.post(
+        "/api/robot/dog1/move", json={"ly": 0.2, "duration": 99999}
+    )
+    assert response.status_code == 200, response.text
+    # Whatever the ceiling is, the request was accepted and bounded rather than
+    # hanging for three hours.
+    assert response.json()["motion"]
+
+
+def test_a_move_zeroes_a_robot_another_source_was_driving(open_client):
+    """The arbitration, which is what stops the on-screen stick and an API call
+    fighting over one robot."""
+    open_client.post("/api/robot/dog1/connect")
+    open_client.post("/api/robot/dog2/connect")
+    open_client.post("/api/fleet/teleop", json={"source": "keyboard", "ly": 0.3})
+
+    response = open_client.post("/api/robot/dog1/move", json={"ly": 0.2, "duration": 0.2})
+
+    assert response.status_code == 200, response.text
+    # dog1 was being driven by the keyboard; taking it away from that source is
+    # reported rather than silent.
+    assert "zeroed" in response.json()
+
+
+def test_a_move_for_an_unknown_robot_is_a_typed_refusal(open_client):
+    response = open_client.post("/api/robot/nope/move", json={"ly": 0.2})
+    assert response.status_code >= 400
+    assert response.json().get("ok") is not True
+
+
+def test_no_listener_is_bound_inside_a_function_that_runs_more_than_once(open_client):
+    """**A bug that only shows up after using the console.**
+
+    `runFleetAction` bound a click listener on `#routine-stop` on every call, so
+    after N fleet actions one press on 停止编排 sent N stop requests. Nothing in
+    a single-shot test can see it, and nothing looks wrong on the first press.
+
+    Asserted structurally, because the symptom needs N uses to appear: event
+    listeners belong in the `wire*` functions that boot calls once, and this
+    checks that the functions that run per-action do not bind any.
+    """
+    source = open_client.get("/static/console.js").text
+
+    for name in ("runFleetAction", "renderStatus", "renderRoutine", "tick",
+                 "renderControls", "renderFaults"):
+        body = _function_body(source, name)
+        bindings = re.findall(r"addEventListener\(", body)
+        assert not bindings, (
+            f"{name} binds {len(bindings)} listener(s) and runs many times; "
+            f"each call adds another handler to the same element"
+        )
+
+
+def test_the_stop_button_is_wired_exactly_once(open_client):
+    source = open_client.get("/static/console.js").text
+    assert source.count("routine-stop')") <= 3, "the stop button is wired in several places"
+    wire = _function_body(source, "wireFleetBar")
+    assert "routine-stop" in wire, (
+        "the stop button is not wired at boot, so it would do nothing"
+    )

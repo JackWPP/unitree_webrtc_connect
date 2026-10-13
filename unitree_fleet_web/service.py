@@ -2056,7 +2056,9 @@ class ConsoleService:
         self,
         target: "Formation",
         *,
-        max_steps: int = 6,
+        # The default lives in `formation.py` with the reasoning for the number;
+        # a second copy here was dead and would have drifted.
+        max_steps: int = 0,
         tolerance_m: float = 0.10,
         tolerance_deg: float = 8.0,
         settle_s: float = 0.6,
@@ -2084,14 +2086,14 @@ class ConsoleService:
         Every step is recorded, so the operator can see what it did and why it
         stopped rather than being told "not converged".
         """
-        from .formation import Formation, converged, plan
+        from .formation import DEFAULT_MAX_STEPS, Formation, converged, plan
 
         if not isinstance(target, Formation):
             target = Formation(**target)
 
         steps: List[Dict[str, Any]] = []
 
-        for index in range(max(1, max_steps)):
+        for index in range(max(1, max_steps or DEFAULT_MAX_STEPS)):
             if self.state.estop.engaged:
                 return self._formation_result(steps, target, "estopped",
                                               "急停锁存，编队中止")
@@ -2424,7 +2426,12 @@ class ConsoleService:
             "routine": self.routine_state(),
             "motion": {rid: self.motion(rid).snapshot() for rid in self.fleet.ids},
             "where": {rid: self.where(rid) for rid in self.fleet.ids},
-            "posture": {rid: self.posture(rid).as_dict() for rid in self.fleet.ids},
+            # `posture` is deliberately absent: the belief is internal, and the
+            # page's posture display reads `body().fsm` instead. It was sent
+            # four times a second to nobody, which the payload budget test
+            # cannot see — that only checks the total, and a key with no reader
+            # is a slice of it nobody would notice growing.
+            # "where" and "body" carry everything the pens draw.
             "body": {rid: self.body(rid) for rid in self.fleet.ids},
             "sources": {rid: self.source_status(rid) for rid in self.fleet.ids},
             "sync": self.sync_state(),

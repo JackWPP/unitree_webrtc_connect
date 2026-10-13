@@ -2436,10 +2436,6 @@ function wireFormation() {
   if (start) start.addEventListener('click', startFormation);
   if (stop) stop.addEventListener('click', stopFormation);
 
-  const host = document.getElementById('form-steps');
-  if (host && !host.parentElement) {
-    document.getElementById('formation').appendChild(host);
-  }
 }
 
 /* ── two-dog synchronisation ───────────────────────────────────────── */
@@ -2730,12 +2726,44 @@ function fleetButton(action) {
 }
 
 async function runFleetAction(action, button) {
+  // **Not here.** Binding `#routine-stop` in this function registered a new
+  // click listener on every fleet action, so after N of them one press on
+  // 停止编排 sent N stop requests. Listeners belong in a `wire*` function that
+  // runs once at boot; anything bound here runs once per call.
   const out = document.getElementById('fleet-result');
-  const routineStop = document.getElementById('routine-stop');
-  if (routineStop) routineStop.addEventListener('click', stopRoutine);
   const repeat = document.getElementById('fleet-repeat');
   button.disabled = true;
   out.className = 'fleet-result';
+
+  // **A routine that is running gets queued into, not interrupted.**
+  //
+  // The server has had `/api/fleet/routine/insert` since the timeline work, and
+  // the page has displayed `routine.pending` since the same commit — but
+  // nothing could ever put anything in it, so the indicator could only light up
+  // for an API client. Pressing 一起鞠躬 mid-sequence means "after this step",
+  // not "throw away the rest of the run", and that is what this does.
+  const running = state.lastStatus && state.lastStatus.routine
+    && state.lastStatus.routine.running;
+  if (running) {
+    out.textContent = `排队中 · ${action.label}…`;
+    try {
+      const queued = await api('/api/fleet/routine/insert', {
+        method: 'POST',
+        body: JSON.stringify({
+          tool: action.tool, args: action.args || {}, label: action.label,
+        }),
+      });
+      out.className = 'fleet-result ok';
+      out.textContent = `已排队 · ${action.label}（第 ${queued.pending} 个）—— 当前步骤结束后执行`;
+    } catch (err) {
+      out.className = 'fleet-result bad';
+      out.textContent = `排队失败: ${err.message}`;
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
+
   out.textContent = `${action.label}…`;
   try {
     const result = await api('/api/fleet/action', {
@@ -2798,6 +2826,8 @@ function wireFleetBar() {
       if (state.lastFleetAction) runFleetAction(state.lastFleetAction, repeat);
     });
   }
+  const routineStop = document.getElementById('routine-stop');
+  if (routineStop) routineStop.addEventListener('click', stopRoutine);
 }
 
 async function boot() {
