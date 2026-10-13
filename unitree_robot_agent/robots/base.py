@@ -148,7 +148,15 @@ class RobotProfile(ABC):
     #: Topics that should be subscribed once per connection to keep a local
     #: view of the robot. First one is the primary state topic.
     report_topics: Tuple[str, ...] = ()
+    #: The state topic this model is known to publish.
     state_topic: Optional[str] = None
+    #: Every topic worth trying for the state, best first. Firmware differs on
+    #: which one it answers — `rt/lf/sportmodestate` and `rt/sportmodestate`
+    #: are both in the wild for the *same* robot family, and at least one real
+    #: Go2 publishes only the `lf` variant. Kept in step with
+    #: `telemetry.GO2_STATE_TOPICS` so the read budget matches the attempt
+    #: count.
+    state_topics: Tuple[str, ...] = ()
 
     # ── capability surface ───────────────────────────────────────────
 
@@ -208,6 +216,16 @@ class RobotProfile(ABC):
     def reported_posture(self, payload: dict) -> Optional[str]:
         """Optional human-readable posture from a state payload."""
         return None
+
+    @property
+    def state_candidates(self) -> Tuple[str, ...]:
+        """Topics to try for the state, in order, without duplicates."""
+        ordered = self.state_topics or ((self.state_topic,) if self.state_topic else ())
+        seen = []
+        for topic in ordered:
+            if topic and topic not in seen:
+                seen.append(topic)
+        return tuple(seen)
 
     def classify(self, fsm_id: Optional[int]) -> dict:
         """Normalize a state id into a model-friendly dict."""
@@ -353,5 +371,6 @@ class RobotProfile(ABC):
             "device_type": self.device_type,
             "chassis": self.chassis,
             "capabilities": sorted(self.capabilities()),
-            "state_topics": list(self.report_topics),
+            "state_topics": list(self.state_candidates),
+            "report_topics": list(self.report_topics),
         }

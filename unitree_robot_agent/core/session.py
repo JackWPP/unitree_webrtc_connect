@@ -332,19 +332,23 @@ class RobotSession:
 
     async def reported_state(self, *, timeout: Optional[float] = None) -> Optional[int]:
         """The state the robot says it is in, or None when it isn't reporting."""
-        topic = self.profile.state_topic
-        if not topic:
+        candidates = self.profile.state_candidates
+        if not candidates:
             return None
         # A stale cached frame is fine here: freezing is a known firmware
         # behaviour, and `classify()` already tells the model the report
         # cannot be trusted in those states.
-        payload = await self.read_topic(topic, timeout=timeout, subscribe=True)
-        if payload is None:
-            return None
-        try:
-            return self.profile.reported_state(topic, payload)
-        except Exception:
-            return None
+        for topic in candidates:
+            payload = await self.read_topic(topic, timeout=timeout, subscribe=True)
+            if payload is None:
+                continue
+            try:
+                state = self.profile.reported_state(topic, payload)
+            except Exception:
+                continue
+            if state is not None:
+                return state
+        return None
 
     async def state_view(self) -> dict:
         """State + posture + a confidence note, for the status tools."""

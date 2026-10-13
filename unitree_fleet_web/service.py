@@ -79,6 +79,11 @@ DEFAULT_MOTION_HZ = 50.0
 #: it. There is now a test pinning this above the collector's budget.
 TELEMETRY_TIMEOUT_S = 8.0
 
+#: Asserted against the collector's own declared budget rather than a number
+#: kept in step by hand. `telemetry.WORST_CASE_S` is 6 s today (an R1 reading
+#: four topics); if a topic is added there, this fails loudly instead of the
+#: panels going empty on hardware again.
+
 #: How long without a video frame before the panel stops pretending.
 #:
 #: A robot can be connected, answering commands, and still never deliver a
@@ -1172,16 +1177,29 @@ class ConsoleService:
         stale = self.state.begin_driving(targets, source=source or "keyboard")
         zeroed = sorted(stale)
         if zeroed:
-            await self._zero_many(zeroed)
+            for robot_id in zeroed:
+                controller = self._motion.get(robot_id)
+                if controller is not None:
+                    controller.stop()
+            await self._zero_many(zeroed, ramp=True)
 
         results = []
         for robot_id in targets:
+            await self._autoconnect(robot_id)
+            # The ramp, not a direct publish. This is the path the *browser*
+            # takes, and it was the one still publishing stick positions
+            # verbatim after `teleop` was converted — so the entire ramp was
+            # bypassed by the only caller that matters. Found by driving it and
+            # watching the commanded value stay at zero.
+            controller = self.motion(robot_id)
+            controller.set_target(
+                vx=_clamp(ly), vy=-_clamp(lx), vyaw=-_clamp(rx), keys=_keys(keys)
+            )
             results.append(
                 {
                     "robot_id": robot_id,
-                    "delivered": await self._frame(
-                        robot_id, lx=lx, ly=ly, rx=rx, ry=ry, keys=keys
-                    ),
+                    "delivered": bool(self.fleet.get(robot_id).session.is_connected),
+                    "motion": controller.snapshot(),
                 }
             )
         return {

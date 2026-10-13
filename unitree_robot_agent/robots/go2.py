@@ -98,7 +98,18 @@ class Go2Profile(RobotProfile):
     name = "Go2"
     device_type = "Go2"
     state_topic = RTC_TOPIC["SPORT_MOD_STATE"]
-    report_topics = (RTC_TOPIC["SPORT_MOD_STATE"], RTC_TOPIC["MULTIPLE_STATE"])
+    #: The low-frequency topic first. A real Go2 (`B42N6000Q3UC1M8C`, firmware
+    #: requiring `data2=3`) answered neither for eight seconds — but only
+    #: `rt/sportmodestate` was ever tried before this, and the sibling project
+    #: `unitree_harness` prefers `rt/lf/sportmodestate` and falls back the
+    #: other way. Trying both costs one extra read slot on a silent topic and
+    #: is the difference between a gait readout and none.
+    state_topics = (RTC_TOPIC["LF_SPORT_MOD_STATE"], RTC_TOPIC["SPORT_MOD_STATE"])
+    report_topics = (
+        RTC_TOPIC["LF_SPORT_MOD_STATE"],
+        RTC_TOPIC["SPORT_MOD_STATE"],
+        RTC_TOPIC["MULTIPLE_STATE"],
+    )
     telemetry_topics = (RTC_TOPIC["LOW_STATE"],)
 
     def capabilities(self) -> frozenset:

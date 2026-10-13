@@ -147,6 +147,7 @@ function buildPens(fleet) {
       batteryBar: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="battery-bar"]`),
       faultBadge: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="fault-badge"]`),
       stickDot: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="stick-dot"]`),
+      drive: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="drive"]`),
       auditWrap: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-wrap"]`),
       audit: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit"]`),
       auditCount: host.querySelector(`.pen[data-robot="${CSS.escape(robot.robot_id)}"] [data-role="audit-count"]`),
@@ -461,6 +462,7 @@ function renderStatus(payload) {
     entry.pen.classList.toggle('driving', state.driving ? state.driving.has(robot.robot_id) : false);
     renderVideoHealth(robot.robot_id);
     renderFlags(robot.robot_id);
+    renderDrive(robot.robot_id);
     renderFaults(robot.robot_id, robot);
     renderPadKeys(robot.robot_id, axesNow(robot.robot_id));
   }
@@ -471,6 +473,7 @@ function renderStatus(payload) {
   // <img> element, and two things called video would invite a mix-up.
   state.videoHealth = payload.video || {};
   state.lastStatus = payload;
+  state.motion = payload.motion || {};
   renderFleetTargets();
   renderRoutine(payload.routine);
   state.flags = payload.flags || state.flags || {};
@@ -1016,6 +1019,48 @@ async function loadControls(robotId) {
    status, so a setting changed elsewhere is still visible here. */
 const FLAG_ORDER = ['motion_mode', 'obstacle_avoid', 'brightness', 'volume', 'led'];
 
+/* The server's ramp knows why a robot is or is not moving, and "I pressed W
+ * and nothing happened" is the single most common thing an operator needs
+ * answered. One word beats a toast. */
+const DRIVE_LABELS = {
+  idle: '空闲',
+  driving: '行驶中',
+  stopping: '减速中',
+  watchdog: '看门狗停车',
+  estopped: '已急停',
+};
+
+function renderDrive(robotId) {
+  const entry = state.focusMap[robotId];
+  if (!entry || !entry.drive) return;
+  const motion = (state.motion && state.motion[robotId]) || {};
+  const driveState = motion.state || 'idle';
+  const commanded = motion.commanded || [0, 0, 0];
+  const target = motion.target || [0, 0, 0];
+
+  const busy = Math.abs(commanded[0]) + Math.abs(commanded[1]) + Math.abs(commanded[2]) > 0.01;
+  entry.drive.textContent = DRIVE_LABELS[driveState] || driveState;
+  entry.drive.className = 'flag' + (driveState === 'watchdog' || driveState === 'estopped'
+    ? ' bad' : (busy ? ' on' : ''));
+  entry.drive.title = busy
+    ? `指令 ${commanded.map((v) => v.toFixed(2)).join(' / ')}`
+      + `　目标 ${target.map((v) => v.toFixed(2)).join(' / ')}`
+    : '没有速度指令';
+
+  // A stick pushed hard while the commanded value stays near zero is a stall,
+  // and it is invisible if only one of the two numbers is shown. Mark the dot
+  // rather than printing both: the tooltip has the numbers, the colour has the
+  // verdict.
+  const asked = Math.hypot(target[0], target[1]);
+  const sending = Math.hypot(commanded[0], commanded[1]);
+  const stalled = asked > 0.25 && sending < asked * 0.35
+    && driveState !== 'stopping' && driveState !== 'idle';
+  if (entry.stickDot) {
+    entry.stickDot.classList.toggle('stalled', stalled);
+    if (stalled) entry.drive.title += '　—— 目标远大于实际指令，可能是卡住';
+  }
+}
+
 function renderFlags(robotId) {
   const entry = state.focusMap[robotId];
   if (!entry || !entry.flags) return;
@@ -1082,13 +1127,36 @@ function isIdle(axes) {
  * two halves independently. In the other modes both groups collapse into one
  * logical operator source. */
 /* Send one already-resolved frame for a named source. */
+/* ── response shaping ──────────────────────────────────────────────── */
+
+/* Two shaping stages sit between the key and the robot: this one, and the
+ * server's ramp. They do different jobs and both are needed. This one makes a
+ * small stick movement mean a *small* speed — a squared curve is the difference
+ * between fine control and a robot that is either stopped or sprinting, and
+ * low speed is exactly where you manoeuvre two dogs in a room. The server's
+ * ramp then bounds how fast any of it can change.
+ *
+ * The deadzone is not just noise rejection: real keys and real sticks are
+ * digital-ish at the low end, and a robot that creeps when nobody is touching
+ * anything is worse than one that ignores the first few percent of travel.
+ */
+const DEADZONE = 0.08;
+
+function curve(value) {
+  const magnitude = Math.abs(value || 0);
+  if (magnitude < DEADZONE) return 0;
+  const scaled = (magnitude - DEADZONE) / (1 - DEADZONE);
+  return Math.sign(value) * scaled * scaled;
+}
+
 async function sendFrame(source, frame) {
   state.wasDriving = state.wasDriving || {};
   state.wasDriving[source] = true;
   // Trim scales every source, so it is the one place to make the whole console
   // gentler — which is what you want the first time you drive a real dog.
   const trim = state.trim === undefined ? 1 : state.trim;
-  const scaled = (value) => Math.max(-1, Math.min(1, (value || 0) * trim));
+  const scaled = (value) =>
+    Math.max(-1, Math.min(1, curve(value) * trim));
   try {
     await api('/api/fleet/teleop', {
       method: 'POST',

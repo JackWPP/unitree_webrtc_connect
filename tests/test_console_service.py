@@ -1002,3 +1002,37 @@ async def test_the_stick_mapping_matches_the_one_robot_joystick_documents(servic
     # Forward is +ly, and a left turn is +rx.
     assert ly > 0, f"forward mapped to ly={ly}"
     assert rx > 0, f"left turn mapped to rx={rx}"
+
+
+async def test_the_browser_path_goes_through_the_ramp_too(service):
+    """`/api/fleet/teleop` is what the page actually calls, and it was the one
+    caller still publishing stick positions verbatim after `teleop` was
+    converted — so the whole ramp was bypassed by the only path that matters.
+
+    Caught by driving it and watching `commanded` stay at zero. Nothing in the
+    unit tests would have noticed, because they exercised `teleop`.
+    """
+    service.client_connected()
+    await service.connect("dog1")
+    service.set_focus("dog1")
+
+    await service.teleop_source(source="keyboard", ly=1.0)
+    controller = service.motion("dog1")
+
+    assert controller.target[0] == pytest.approx(1.0), "the intent never arrived"
+    assert controller.commanded[0] == 0.0, "it published the stick position directly"
+
+    for _ in range(4):
+        controller.tick(0.05)
+    assert 0.0 < controller.commanded[0] < 1.0, "no ramp on the browser path"
+
+
+async def test_the_browser_path_reports_the_ramp_state(service):
+    service.client_connected()
+    await service.connect("dog1")
+    service.set_focus("dog1")
+
+    result = await service.teleop_source(source="keyboard", ly=1.0)
+
+    assert result["results"][0]["motion"]["state"] in ("driving", "idle")
+    assert "commanded" in result["results"][0]["motion"]

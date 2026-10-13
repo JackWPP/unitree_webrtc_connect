@@ -389,42 +389,33 @@ def test_the_telemetry_timeout_clears_the_collector_own_budget():
     `collect_lowstate` waits per topic and silently omits what did not arrive,
     so its worst case is the sum of its own timeouts. The console wrapped it in
     a 2 s ceiling — shorter than either model's sum — so on a real Go2 whose
-    `rt/sportmodestate` never publishes, every refresh timed out and the panels
-    stayed empty. The mock answers every topic instantly, so nothing caught it.
+    state topic never publishes, every refresh timed out and the panels stayed
+    empty. The mock answers every topic instantly, so nothing caught it.
 
-    This reads the collector's source rather than restating the numbers, so
-    adding a topic to it fails here instead of in the field.
+    Against an exported constant now, not a scan of the collector's source: the
+    source-scanning version silently under-counted as soon as a read sat in a
+    loop, and the state read does exactly that.
     """
-    import re
-    import inspect
-
-    from unitree_robot_agent.core import telemetry
+    from unitree_robot_agent.core.telemetry import WORST_CASE_S
     from unitree_fleet_web.service import TELEMETRY_TIMEOUT_S
 
-    source = inspect.getsource(telemetry.collect_lowstate)
-    per_call = [float(n) for n in re.findall(r"timeout=([0-9.]+)", source)]
-    assert per_call, "could not find any per-topic timeouts to check against"
-
-    def branch_sum(start: str, end: str) -> float:
-        if start not in source:
-            return 0.0
-        chunk = source.split(start, 1)[1]
-        if end in chunk:
-            chunk = chunk.split(end, 1)[0]
-        return sum(float(n) for n in re.findall(r"timeout=([0-9.]+)", chunk))
-
-    # The model branches are alternatives, so the worst case is whichever waits
-    # the most — not their total, which is what a naive scan of the whole
-    # function would give.
-    go2 = branch_sum("# Go2", "async def ")
-    r1 = branch_sum('robot == "R1"', "# Go2")
-    worst = max(go2, r1)
-    assert worst > 0.0, "could not isolate either model branch"
-
-    assert TELEMETRY_TIMEOUT_S > worst, (
+    assert WORST_CASE_S > 0
+    assert TELEMETRY_TIMEOUT_S > WORST_CASE_S, (
         f"telemetry ceiling {TELEMETRY_TIMEOUT_S}s does not clear "
-        f"collect_lowstate's own worst case of {worst}s — every refresh would "
-        f"time out on a robot with a silent topic"
+        f"collect_lowstate's declared worst case of {WORST_CASE_S}s — every "
+        f"refresh would time out on a robot with a silent topic"
+    )
+
+
+def test_the_declared_budget_matches_the_topics_actually_read():
+    """The constant is only trustworthy while it describes the code. A Go2
+    tries one state topic per entry in `state_candidates`, so the two have to
+    agree or the ceiling is computed from fiction."""
+    from unitree_robot_agent.core.telemetry import GO2_STATE_TOPICS
+    from unitree_robot_agent.robots.go2 import Go2Profile
+
+    assert len(Go2Profile().state_candidates) <= GO2_STATE_TOPICS, (
+        "the Go2 tries more state topics than the read budget accounts for"
     )
 
 

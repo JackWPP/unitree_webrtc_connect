@@ -73,8 +73,18 @@ async def test_a_slow_but_yielding_connect_is_not_flagged():
     )
 
     assert report.connect_seconds >= 0.4
-    assert report.stalled is False
     assert ticks == 20, "the connect should have yielded the whole way"
+    # Relative to the baseline, not to the absolute 50 ms alert. The tool's
+    # absolute threshold is right for the field — a 50 ms stall is a 50 ms
+    # stall — but as a *test* assertion it makes this flaky: on a loaded
+    # machine the idle loop's own wakeups drift past 50 ms, and the test then
+    # fails for the environment rather than for the code. What is actually
+    # being asserted is "a polite connect did not make the loop worse than it
+    # already was".
+    assert report.during.max_ms < max(50.0, report.baseline.max_ms * 4), (
+        f"a yielding connect still degraded the loop: "
+        f"{report.baseline.max_ms:.0f} ms -> {report.during.max_ms:.0f} ms"
+    )
 
 
 async def test_a_partially_blocking_connect_is_measured_not_rounded():

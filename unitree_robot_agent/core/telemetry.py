@@ -27,6 +27,69 @@ from unitree_webrtc_connect.constants import (
 #: Motor array slots that carry real data on the 29-slot humanoid layout.
 R1_SLOTS = list(R1_MOTOR_INDICES)
 
+# ── read budgets ──────────────────────────────────────────────────────
+#
+# Named, because the console wraps this call in a timeout of its own and that
+# ceiling has to clear the real worst case. It used to be derived by parsing
+# this file's source for `timeout=` literals, which silently under-counts the
+# moment a read sits in a loop — and the state read below does exactly that.
+
+#: `lowstate` is the one that must arrive; it gets the longest.
+LOW_TIMEOUT_S = 2.0
+#: Secondary topics: worth waiting for, not worth stalling the call over.
+AUX_TIMEOUT_S = 1.0
+#: State topics are tried in order, so a silent first candidate costs a full
+#: slot before the fallback is even attempted.
+SPORT_TIMEOUT_S = 1.0
+
+#: How many state topics a Go2 will try. Keep in step with
+#: `Go2Profile.state_topics`.
+GO2_STATE_TOPICS = 2
+
+#: Worst case for one full read, per model.
+GO2_WORST_CASE_S = LOW_TIMEOUT_S + SPORT_TIMEOUT_S * GO2_STATE_TOPICS + AUX_TIMEOUT_S
+R1_WORST_CASE_S = LOW_TIMEOUT_S * 2 + AUX_TIMEOUT_S * 2
+
+#: The largest of them. A caller's own ceiling must exceed this or every read
+#: times out on a robot with one silent topic — which is a real Go2, and was a
+#: real bug.
+WORST_CASE_S = max(GO2_WORST_CASE_S, R1_WORST_CASE_S)
+
+
+async def first_topic(session, topics, *, timeout: float):
+    """The first of `topics` that answers, or `(None, None)`.
+
+    For scalar reads — the FSM id is one number and any topic carrying it will
+    do — so the first answer ends the search.
+    """
+    for topic in topics:
+        payload = await session.read_topic(topic, timeout=timeout)
+        if payload is not None:
+            return topic, payload
+    return None, None
+
+
+async def merge_topics(session, topics, *, timeout: float):
+    """Read every candidate and merge them, earlier topics winning conflicts.
+
+    They are **not alternatives**. `rt/lf/sportmodestate` carries `fsm_id`,
+    which is what a humanoid reads, and `rt/sportmodestate` carries
+    `gait_type`, `foot_raise_height` and `position`, which is what a quadruped
+    reads. Taking the first topic that answers therefore silently drops the
+    other's fields — on the mock that cost the gait readout entirely, and the
+    only reason it was noticed is that a test asserted the field existed.
+
+    Costs one read slot per topic, which is why the budget below counts them.
+    """
+    merged: Dict[str, Any] = {}
+    for topic in topics:
+        payload = await session.read_topic(topic, timeout=timeout)
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            merged.setdefault(key, value)
+    return merged or None
+
 
 def _num(value: Any, default: Optional[float] = None) -> Optional[float]:
     try:
@@ -166,10 +229,10 @@ async def collect_lowstate(session, profile, *, include_motors: bool = True) -> 
     robot = profile.name
 
     if robot == "R1":
-        low = await session.read_topic(RTC_TOPIC["LOW_STATE"], timeout=2.0)
-        bms = await session.read_topic(RTC_TOPIC["BMS_STATE"], timeout=2.0)
-        pelvis = await session.read_topic(RTC_TOPIC["SECONDARY_IMU"], timeout=1.0)
-        board = await session.read_topic(RTC_TOPIC["MAIN_BOARD_STATE"], timeout=1.0)
+        low = await session.read_topic(RTC_TOPIC["LOW_STATE"], timeout=LOW_TIMEOUT_S)
+        bms = await session.read_topic(RTC_TOPIC["BMS_STATE"], timeout=LOW_TIMEOUT_S)
+        pelvis = await session.read_topic(RTC_TOPIC["SECONDARY_IMU"], timeout=AUX_TIMEOUT_S)
+        board = await session.read_topic(RTC_TOPIC["MAIN_BOARD_STATE"], timeout=AUX_TIMEOUT_S)
 
         result: Dict[str, Any] = {
             "robot": robot,
@@ -191,9 +254,11 @@ async def collect_lowstate(session, profile, *, include_motors: bool = True) -> 
         return result
 
     # Go2
-    low = await session.read_topic(RTC_TOPIC["LOW_STATE"], timeout=2.0)
-    multi = await session.read_topic(RTC_TOPIC["MULTIPLE_STATE"], timeout=1.0)
-    sport = await session.read_topic(profile.state_topic, timeout=1.0)
+    low = await session.read_topic(RTC_TOPIC["LOW_STATE"], timeout=LOW_TIMEOUT_S)
+    multi = await session.read_topic(RTC_TOPIC["MULTIPLE_STATE"], timeout=AUX_TIMEOUT_S)
+    sport = await merge_topics(
+        session, profile.state_candidates, timeout=SPORT_TIMEOUT_S
+    )
     result = {
         "robot": robot,
         "battery": go2_battery(low),

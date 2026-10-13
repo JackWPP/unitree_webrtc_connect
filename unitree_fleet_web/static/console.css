@@ -628,3 +628,10 @@ select, input[type="range"] { accent-color: var(--accent); }
   transition: width 0.25s linear;
 }
 .routine-label { font-variant-numeric: tabular-nums; }
+
+.flag.bad { color: #ffb4b4; border-color: #7f1d1d; }
+/* Target far ahead of what is being sent = the robot is not keeping up. */
+.stick > i.stalled {
+  background: var(--warn);
+  box-shadow: 0 0 6px -1px var(--warn);
+}
