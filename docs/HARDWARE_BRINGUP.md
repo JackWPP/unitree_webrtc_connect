@@ -173,6 +173,62 @@ Two things are designed-around rather than verified, and both matter:
 
 ---
 
+---
+
+## First real session — results
+
+Run on a Go2, serial `B42N6000Q3UC1M8C`, firmware requiring `data2=3`
+(the case this project was built for). Roster: one dog at `192.168.31.188`,
+key from `unitree-fetch-aes-key --region cn --device-type Go2`.
+
+**Worked, first try:**
+
+| | |
+|---|---|
+| `--preflight` | `[OK] data2=3: per-device key accepted` |
+| Connect | 3.39 s, `STA-L`, data channel verified |
+| Telemetry | battery 94–98 % / 32.0–32.3 V, IMU, foot forces `[106, 102, 94, 101]`, obstacle-avoid, volume |
+| Video | **1280×720**, ~4 fps, real camera view |
+| `robot_stand` | `code: 0` — stood up |
+| `robot_move(vx=0.08, duration_s=0.4)` | ~3 cm forward, `code: 0` |
+| `robot_move(omega=0.5, duration_s=0.5)` | ~14° left turn |
+| `robot_stop` | `soft_stop` |
+| Console teleop frame | `{"delivered": true}` |
+| Hand-back | released ~10 s after the last status read |
+
+**Findings only real hardware could produce:**
+
+1. **`rt/sportmodestate` is never published** on this firmware. `rt/lf/lowstate`
+   and `rt/multiplestate` answer normally; `sportmodestate` is silent for 8 s,
+   before *and* after standing up. Consequences: `go2_get_state` returns
+   `sport_state: null` on this dog, and there is **no gait/mode source at all** —
+   the console's posture cell can only fall back to "已连接". The tool's note
+   ("has not published that topic yet") is honest but the operator would wait
+   forever. Not fixed: the data does not exist.
+
+2. **The telemetry ceiling was shorter than the read it wrapped** (2 s over a
+   `collect_lowstate` whose own worst case is 4 s for a Go2 and 6 s for an R1).
+   With a silent topic, every refresh timed out and the panels stayed empty —
+   silently, at DEBUG. Fixed, with a test that derives the collector's worst
+   case from its own source.
+
+3. The console's tool allowlist **correctly refused `robot_move`**: the console
+   drives with joystick frames, not discrete move commands.
+
+4. `robot_move` notes are accurate — Go2's `Move` (1008) has no duration, so
+   `StopMove` (1003) is sent after the window. Observed working.
+
+5. aiortc logs a burst of `H264Decoder() failed to decode … avcodec_send_packet`
+   warnings while the stream starts. Frames flow regardless.
+
+6. Closing a connection logs `Task was destroyed but it is pending:
+   RTCPeerConnection.close()`. Cosmetic, but it means shutdown is not fully
+   awaited.
+
+**Still untested:** two dogs at once (only one was on the network), the
+emergency stop (it damps the robot, so it drops the dog), and whether a Go2
+halts when the link drops.
+
 ## What to send back
 
 For each step: the command, the full output, and what the dogs physically did.
