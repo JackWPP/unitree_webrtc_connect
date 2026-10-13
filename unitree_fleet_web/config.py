@@ -40,6 +40,14 @@ DEFAULT_STREAM_FPS = 10.0
 #: 0 disables the lease.
 DEFAULT_LEASE_S = 5.0
 
+#: How often to refresh battery/IMU/gait per robot.
+#:
+#: Deliberately slower than the status push. Battery does not move at 4 Hz, and
+#: doing topic reads on the push path would put robot I/O on a loop that is
+#: otherwise pure memory. `0` disables telemetry, and the panels fall back to
+#: the connection state alone.
+DEFAULT_TELEMETRY_HZ = 1.0
+
 
 def _env(name: str) -> Optional[str]:
     raw = os.environ.get(name)
@@ -64,6 +72,8 @@ class ConsoleConfig:
     #: least one browser is watching. Zero disables the lease, so links
     #: release themselves when idle.
     lease_s: float = DEFAULT_LEASE_S
+    #: Battery/IMU/gait refresh rate. See DEFAULT_TELEMETRY_HZ.
+    telemetry_hz: float = DEFAULT_TELEMETRY_HZ
     #: Serve the built-in single-page console.
     serve_ui: bool = True
     #: Whether fetching a video frame may bring a robot up.

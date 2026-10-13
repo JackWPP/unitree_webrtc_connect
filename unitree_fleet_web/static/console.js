@@ -333,14 +333,30 @@ function renderStatus(payload) {
       entry.linkToggle.classList.toggle('btn-estop-sm', !connected);
     }
 
-    const session = robot.session || {};
-    entry.state.textContent = session.state !== undefined && session.state !== null
-      ? String(session.state) : (connected ? '已连接' : '—');
+    // Battery and posture come from the telemetry sampler, which runs far
+    // slower than this push. Reading them off the session (as this used to)
+    // meant both fields sat on "—" forever: `session` carries connection
+    // counters, not robot state.
+    const telemetry = (state.telemetry && state.telemetry[robot.robot_id]) || {};
+    const battery = telemetry.battery || {};
+    const percent = battery.soc_percent;
+    entry.battery.textContent = (percent === undefined || percent === null)
+      ? '—' : `${percent}%`;
+    entry.battery.title = battery.power_voltage_v
+      ? `${battery.power_voltage_v} V` : '';
 
-    const st = robot.state || {};
-    const battery = st.battery !== undefined && st.battery !== null
-      ? `${st.battery}%` : '—';
-    entry.battery.textContent = battery;
+    const posture = telemetry.posture || {};
+    const sport = telemetry.sport_state || {};
+    const parts = [];
+    if (posture.state && posture.state !== 'n/a' && posture.state !== 'unknown') {
+      parts.push(posture.state);
+    }
+    if (sport.gait_type) parts.push(sport.gait_type);
+    if (posture.reporting === 'frozen') parts.push('状态停更');
+    entry.state.textContent = parts.length
+      ? parts.join(' · ')
+      : (connected ? '已连接' : '—');
+    entry.state.title = posture.note || '';
 
     entry.pen.classList.toggle('focused', robot.robot_id === state.focused);
     entry.pen.classList.toggle('driving', state.driving ? state.driving.has(robot.robot_id) : false);
@@ -348,6 +364,7 @@ function renderStatus(payload) {
   }
 
   state.connecting = payload.connecting || [];
+  state.telemetry = payload.telemetry || {};
   document.getElementById('fleet-summary').textContent =
     `${online}/${payload.robots.length} 在线`;
   document.getElementById('watching').textContent =

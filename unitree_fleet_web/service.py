@@ -17,6 +17,7 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from unitree_robot_agent.bridge import ToolBridge
+from unitree_robot_agent.core.telemetry import collect_lowstate
 from unitree_robot_agent.errors import AgentError, UnknownRobot
 from unitree_robot_agent.fleet import FleetManager
 from unitree_robot_agent.server import build_server
@@ -28,6 +29,20 @@ logger = logging.getLogger("unitree_fleet_web.service")
 
 #: Joystick axes are normalised; the robot applies its own limits on top.
 AXIS_LIMIT = 1.0
+
+#: A telemetry read may wait for a topic's first frame. Bounded so a robot
+#: that has gone quiet cannot hold the sampler.
+TELEMETRY_TIMEOUT_S = 2.0
+
+#: How long a status request keeps counting as "someone is watching".
+#:
+#: The WebSocket is the fast path, but the console polls `/api/fleet/status`
+#: whenever the socket is down — behind a proxy that blocks upgrades, for
+#: instance. Counting only sockets meant that in exactly that case the operator
+#: got no telemetry *and* no lease: the panels stayed dead and the links were
+#: free to drop under them. A status request is a browser watching just as much
+#: as a socket is. Comfortably longer than the 1 s poll interval.
+WATCH_WINDOW_S = 5.0
 
 #: The tools the console may invoke, by name.
 #:
@@ -139,6 +154,13 @@ class ConsoleService:
         #: Robots with an auto-connect already in flight, so a held key cannot
         #: start a connect storm.
         self._connecting: set = set()
+        #: Latest battery/IMU/gait snapshot per robot, refreshed by a slow
+        #: loop. Kept here so the 4 Hz status push stays pure memory: doing
+        #: topic reads on that path would put robot I/O inside a UI loop.
+        self._telemetry: Dict[str, dict] = {}
+        self._telemetry_task: Optional[asyncio.Task] = None
+        #: Monotonic time of the last status request, socket or HTTP.
+        self._last_watch_at = 0.0
         if not self.state.focused and fleet.ids:
             self.state.focused = fleet.roster.default_id or fleet.ids[0]
         for rid in fleet.ids:
@@ -211,15 +233,22 @@ class ConsoleService:
             self._lease is None or self._lease.done()
         ):
             self._lease = asyncio.create_task(self._lease_loop(), name="console-lease")
+        if self.config.telemetry_hz > 0 and (
+            self._telemetry_task is None or self._telemetry_task.done()
+        ):
+            self._telemetry_task = asyncio.create_task(
+                self._telemetry_loop(), name="console-telemetry"
+            )
 
     async def aclose(self) -> None:
-        for task in (self._deadman, self._lease):
+        for task in (self._deadman, self._lease, self._telemetry_task):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
         self._deadman = None
         self._lease = None
+        self._telemetry_task = None
         # Never leave a robot walking because the console went away.
         with contextlib.suppress(Exception):
             await self._zero_driver()
@@ -241,7 +270,22 @@ class ConsoleService:
 
     @property
     def watching(self) -> bool:
-        return self._clients > 0
+        """Whether a browser is watching, over either transport.
+
+        A socket counts while it is open; an HTTP status request counts for
+        :data:`WATCH_WINDOW_S` afterwards. Without the second half, a console
+        polling because its socket could not open would be treated as nobody
+        watching — no telemetry, and nothing holding the links.
+        """
+        if self._clients > 0:
+            return True
+        if not self._last_watch_at:
+            return False
+        return (time.monotonic() - self._last_watch_at) < WATCH_WINDOW_S
+
+    def note_watch(self) -> None:
+        """Record that a browser asked for status. Called by :meth:`status`."""
+        self._last_watch_at = time.monotonic()
 
     async def _lease_loop(self) -> None:
         """Keep connected robots from releasing themselves while watched.
@@ -270,6 +314,59 @@ class ConsoleService:
                 raise
             except Exception as exc:  # noqa: BLE001 - a lease must not crash
                 logger.warning("lease loop error: %r", exc)
+
+    # ── telemetry ────────────────────────────────────────────────────
+
+    async def refresh_telemetry(self, robot_id: str) -> Optional[dict]:
+        """Read one robot's battery/IMU/gait and cache it.
+
+        Every read is cache-first — ``backend.latest`` returns the last
+        subscribed frame immediately — so once a topic has arrived this is
+        formatting rather than traffic.
+        """
+        runtime = self.fleet.get(robot_id)
+        if not runtime.session.is_connected:
+            self._telemetry.pop(robot_id, None)
+            return None
+        try:
+            snapshot = await asyncio.wait_for(
+                collect_lowstate(runtime.session, runtime.profile, include_motors=False),
+                timeout=TELEMETRY_TIMEOUT_S,
+            )
+        except Exception as exc:  # noqa: BLE001 - a quiet robot is not an error
+            logger.debug("telemetry(%s) failed: %r", robot_id, exc)
+            return self._telemetry.get(robot_id)
+        # The FSM view is a separate topic and is what says "standing" on a
+        # humanoid. On a Go2 it reports n/a, where the gait below carries it.
+        with contextlib.suppress(Exception):
+            snapshot["posture"] = await asyncio.wait_for(
+                runtime.session.state_view(), timeout=TELEMETRY_TIMEOUT_S
+            )
+        self._telemetry[robot_id] = snapshot
+        return snapshot
+
+    async def _telemetry_loop(self) -> None:
+        interval = 1.0 / max(0.1, self.config.telemetry_hz)
+        while True:
+            try:
+                if not self.watching:
+                    # Nobody is looking. Not reading is also what keeps the
+                    # robots releasable while the console merely sits open.
+                    await asyncio.sleep(interval)
+                    continue
+                # Sample *before* sleeping, so the first reading appears as
+                # soon as someone opens the console rather than up to a tick
+                # later — and so the sampler is not racy against a page that
+                # connects a robot while it loads.
+                await asyncio.gather(
+                    *(self.refresh_telemetry(rid) for rid in self.fleet.ids),
+                    return_exceptions=True,
+                )
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - a sampler must survive
+                logger.warning("telemetry loop error: %r", exc)
 
     # ── explicit connection control ──────────────────────────────────
 
@@ -342,8 +439,12 @@ class ConsoleService:
         }
 
     async def status(self, *, live: bool = False) -> Dict[str, Any]:
+        # Every status read — the socket loop and the HTTP route alike — is a
+        # browser watching. The lease and the telemetry sampler both key off it.
+        self.note_watch()
         return {
             "robots": await self.fleet.status_all(live=live),
+            "telemetry": dict(self._telemetry),
             "state": self.state.as_dict(),
             # Robots whose link is coming up because the operator started
             # driving. Without this the console looks dead for the seconds a

@@ -683,3 +683,118 @@ async def test_observer_mode_still_serves_frames_for_a_connected_robot(service):
 
     frame = await service.frame("dog1")
     assert frame is not None and frame[:2] == b"\xff\xd8"  # JPEG SOI
+
+
+# ─── telemetry ────────────────────────────────────────────────────────
+
+
+async def test_telemetry_reports_battery_and_gait(service):
+    """These two panels used to be dead: the UI read them off the *session*,
+    which carries connection counters and no robot state at all."""
+    await service.connect("dog1")
+
+    snapshot = await service.refresh_telemetry("dog1")
+
+    assert snapshot is not None
+    assert snapshot["battery"]["soc_percent"] is not None
+    assert snapshot["sport_state"]["gait_type"]
+    assert snapshot["posture"]["connected"] is True
+
+
+async def test_telemetry_caches_into_the_status_payload(service):
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    payload = await service.status()
+    assert payload["telemetry"]["dog1"]["battery"]["soc_percent"] is not None
+    # dog2 was never connected, so it has no telemetry rather than zeros.
+    assert "dog2" not in payload["telemetry"]
+
+
+async def test_telemetry_is_dropped_when_a_robot_goes_away(service):
+    await service.connect("dog1")
+    await service.refresh_telemetry("dog1")
+    assert "dog1" in service._telemetry  # noqa: SLF001
+
+    await service.disconnect("dog1")
+    await service.refresh_telemetry("dog1")
+
+    assert "dog1" not in service._telemetry  # noqa: SLF001
+
+
+async def test_the_status_push_does_not_read_the_robot(service):
+    """The push runs at 4 Hz; robot I/O belongs on the slower sampler. A
+    regression here would put a topic read inside a UI loop."""
+    await service.connect("dog1")
+
+    reads = []
+    original = service.refresh_telemetry
+
+    async def counting(robot_id):
+        reads.append(robot_id)
+        return await original(robot_id)
+
+    service.refresh_telemetry = counting  # type: ignore[assignment]
+    for _ in range(5):
+        await service.status()
+
+    assert reads == [], "status() must not refresh telemetry itself"
+
+
+async def test_the_sampler_only_runs_while_someone_is_watching(service):
+    service.config.telemetry_hz = 20.0
+    await service.connect("dog1")
+    await service.start()
+    try:
+        await asyncio.sleep(0.2)
+        assert service._telemetry == {}, "nobody is watching; nothing to read"  # noqa: SLF001
+
+        service.client_connected()
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if service._telemetry:
+                break
+        assert "dog1" in service._telemetry  # noqa: SLF001
+    finally:
+        for task in (service._telemetry_task, service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+
+async def test_telemetry_is_off_when_the_rate_is_zero(service):
+    service.config.telemetry_hz = 0
+    service.client_connected()
+    await service.start()
+    try:
+        await asyncio.sleep(0.15)
+        assert service._telemetry_task is None  # noqa: SLF001
+    finally:
+        for task in (service._deadman, service._lease):  # noqa: SLF001
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+
+async def test_an_http_status_request_also_counts_as_watching(service):
+    """The socket is the fast path, but a console polling because its socket
+    could not open is watching just as much. Counting only sockets meant that
+    in exactly that case the operator got no telemetry *and* no lease."""
+    assert service.watching is False
+
+    await service.status()  # what the polling fallback and the socket both do
+
+    assert service.watching is True
+
+
+async def test_the_watch_window_eventually_expires(service):
+    """Otherwise a single stray request would pin the robots forever."""
+    import time as _time
+
+    await service.status()
+    assert service.watching is True
+
+    service._last_watch_at -= 3600  # noqa: SLF001
+    assert service.watching is False

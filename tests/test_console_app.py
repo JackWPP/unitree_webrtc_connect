@@ -466,12 +466,17 @@ def test_an_open_websocket_arms_the_operator_lease(open_client):
         assert service.watching is True
         assert open_client.get("/api/fleet").json()["watching"] == 1
 
-    # Closing the socket must release the claim, or the lease would pin the
-    # robot forever after a browser tab was closed.
+    # Closing the socket must drop the socket claim. `watching` also honours a
+    # recent HTTP status request (the polling fallback is a browser watching
+    # too), so it stays true for the watch window — what must go is the client
+    # count, and the claim must expire rather than pin the robots forever.
     for _ in range(20):
-        if not service.watching:
+        if service._clients == 0:  # noqa: SLF001 - deliberate white-box
             break
         time.sleep(0.05)
+    assert service._clients == 0  # noqa: SLF001
+
+    service._last_watch_at -= 3600  # noqa: SLF001
     assert service.watching is False
 
 
@@ -576,3 +581,17 @@ def test_the_audit_limit_is_clamped_and_an_unknown_robot_is_a_404(open_client):
 
 def test_the_audit_endpoint_is_authenticated(locked_client):
     assert locked_client.get("/api/robot/dog1/audit").status_code == 401
+
+
+def test_the_status_payload_carries_telemetry(open_client):
+    """The UI reads `telemetry[robot_id].battery` and `.sport_state`; if the
+    key vanishes the panels silently go back to showing "—"."""
+    payload = open_client.get("/api/fleet/status").json()
+    assert "telemetry" in payload
+    assert isinstance(payload["telemetry"], dict)
+
+
+def test_the_console_js_reads_the_telemetry_it_is_given(open_client):
+    source = open_client.get("/static/console.js").text
+    for field in ("state.telemetry", "soc_percent", "gait_type", "posture"):
+        assert field in source, f"console.js no longer reads {field}"

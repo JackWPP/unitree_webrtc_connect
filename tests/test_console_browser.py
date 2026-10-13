@@ -15,6 +15,7 @@ covers the API.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import re
@@ -159,6 +160,18 @@ def rendered(tmp_path_factory):
         time.sleep(0.05)
     assert server.started
 
+    # Arrive at the render with the fleet already up and sampled. Otherwise the
+    # assertion races Chrome's virtual clock: the page connects the robots as
+    # its video elements load, but `--virtual-time-budget` finishes long before
+    # the server-side 1 Hz sampler has ticked in *real* time. The sampler itself
+    # is covered by unit tests; this file is about rendering.
+    async def prime():
+        for robot_id in fleet.ids:
+            await service.connect(robot_id)
+            await service.refresh_telemetry(robot_id)
+
+    asyncio.run(prime())
+
     try:
         yield render(f"http://{config.host}:{config.port}/")
     finally:
@@ -236,6 +249,22 @@ def test_the_link_pills_are_no_longer_placeholders(rendered):
         assert role_text(block, "link") in ("在线", "连接中…"), (
             f"{robot_id} still shows the initial placeholder"
         )
+
+
+def test_the_battery_and_posture_panels_show_real_values(rendered):
+    """These two were dead fields until the telemetry sampler existed.
+
+    The UI read them off `robots[].session`, which carries connection counters
+    and no robot state at all, so both sat on "—" no matter what the robot was
+    doing. A browser render is the only way to catch that going back.
+    """
+    for robot_id in ("dog1", "dog2"):
+        block = pen_block(rendered, robot_id)
+        battery = role_text(block, "battery")
+        state = role_text(block, "state")
+        assert battery and battery != "—", f"{robot_id} battery shows {battery!r}"
+        assert battery.endswith("%"), battery
+        assert state and state != "—", f"{robot_id} posture shows {state!r}"
 
 
 def test_the_fault_panel_says_it_has_not_heard_yet(rendered):
