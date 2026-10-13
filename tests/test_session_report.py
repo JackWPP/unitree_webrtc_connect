@@ -140,3 +140,189 @@ def _run(module, argv):
         return module.main()
     finally:
         sys.argv = original
+
+
+# ─── readiness: the decisive questions ────────────────────────────────
+
+
+def _mock_roster(tmp_path):
+    from unitree_robot_agent.fleet import Roster
+
+    return Roster.from_mapping({
+        "state_dir": str(tmp_path / "state"),
+        "default": "dog1",
+        "robots": [
+            {"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "SN-ONE"},
+            {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "SN-TWO"},
+        ],
+    })
+
+
+async def test_readiness_answers_the_questions_that_change_what_to_do(tmp_path):
+    """A report that only lists versions and topics leaves the operator to work
+    out what it means. Each of these answers one question whose answer changes
+    what the console can do."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from session_report import readiness
+
+    from unitree_robot_agent.fleet import FleetManager
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    roster = _mock_roster(tmp_path)
+    service = ConsoleService(
+        FleetManager(roster, backend="mock", audit_to_stderr=False),
+        config=ConsoleConfig(deadman_s=2.0),
+    )
+    try:
+        for spec in roster.robots:
+            await service.connect(spec.robot_id)
+        checks = await readiness(service, roster)
+    finally:
+        await service.aclose()
+
+    by_id = {check["id"]: check for check in checks}
+    # The odometry question is the one that decides whether `robot_walk` is a
+    # measurement or a guess, so its absence would be the report failing at its
+    # only job.
+    assert "odometry" in by_id, sorted(by_id)
+    assert by_id["odometry"]["verdict"] == "yes", by_id["odometry"]
+    assert "imu" in by_id
+
+    # The cross-robot check needs both dogs and is the hardware form of the
+    # routing bug.
+    assert "two_robots" in by_id, sorted(by_id)
+    assert by_id["two_robots"]["verdict"] == "yes", by_id["two_robots"]
+
+
+async def test_the_two_robot_check_does_not_cry_wolf_on_two_dogs_at_rest(tmp_path):
+    """**The first version of this check reported a failure on a healthy pair.**
+
+    It compared positions, and two mock dogs both sit at `(0.0, 0.0)` — which is
+    *correct*: each odometry has its own origin, so two dogs at their own
+    starting points read the same numbers. A readiness report that flags the
+    normal case is worse than one that says nothing, because somebody will
+    spend a session chasing it.
+
+    What has to differ is which robot the two calls reached, so the check
+    compares identity.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from session_report import readiness
+
+    from unitree_robot_agent.fleet import FleetManager
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    roster = _mock_roster(tmp_path)
+    service = ConsoleService(
+        FleetManager(roster, backend="mock", audit_to_stderr=False),
+        config=ConsoleConfig(deadman_s=2.0),
+    )
+    try:
+        for spec in roster.robots:
+            await service.connect(spec.robot_id)
+        positions = {
+            rid: await service.fleet.get(rid).motion.read_position()
+            for rid in roster.ids
+        }
+        # The precondition that made the old version wrong: identical positions,
+        # healthy pair.
+        assert len(set(str(v) for v in positions.values())) == 1, positions
+
+        checks = await readiness(service, roster)
+    finally:
+        await service.aclose()
+
+    two = {c["id"]: c for c in checks}["two_robots"]
+    assert two["verdict"] == "yes", (
+        f"two dogs at their own origins were reported as a problem: {two}"
+    )
+
+
+async def test_every_per_robot_check_says_which_robot(tmp_path):
+    """With two dogs the same question appears twice. An unlabelled list of
+    identical headings is a report nobody can act on."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from session_report import readiness
+
+    from unitree_robot_agent.fleet import FleetManager
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    roster = _mock_roster(tmp_path)
+    service = ConsoleService(
+        FleetManager(roster, backend="mock", audit_to_stderr=False),
+        config=ConsoleConfig(deadman_s=2.0),
+    )
+    try:
+        for spec in roster.robots:
+            await service.connect(spec.robot_id)
+        checks = await readiness(service, roster)
+    finally:
+        await service.aclose()
+
+    for check in checks:
+        if check["id"] == "two_robots":
+            continue  # it is about the pair, not one robot
+        assert check.get("robot_id"), check
+    # ...and both dogs are represented.
+    assert {c.get("robot_id") for c in checks} >= {"dog1", "dog2"}
+
+
+async def test_readiness_is_all_read_only(tmp_path):
+    """**Nothing here commands the robot.** The first thing an operator does
+    with a strange dog should not be to make it walk — so a readiness run must
+    leave the position and the skill lock exactly as it found them."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from session_report import readiness
+
+    from unitree_robot_agent.fleet import FleetManager
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+
+    roster = _mock_roster(tmp_path)
+    fleet = FleetManager(roster, backend="mock", audit_to_stderr=False)
+    service = ConsoleService(fleet, config=ConsoleConfig(deadman_s=2.0))
+    try:
+        for spec in roster.robots:
+            await service.connect(spec.robot_id)
+        before = {
+            rid: await fleet.get(rid).motion.read_position() for rid in roster.ids
+        }
+        await readiness(service, roster)
+        after = {
+            rid: await fleet.get(rid).motion.read_position() for rid in roster.ids
+        }
+        assert before == after, f"readiness moved something: {before} -> {after}"
+        for rid in roster.ids:
+            assert fleet.get(rid).motion.skill_owner == ""
+    finally:
+        await service.aclose()
+
+
+def test_the_firmware_check_does_not_claim_to_know_the_firmware(tmp_path):
+    """It was `no` when no key was cached, which reads as "this dog does not
+    need one" — **a claim about the robot made from a claim about a file.**
+    Whether the handshake wants `data2=3` is only knowable by trying it."""
+    import inspect
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import session_report
+
+    source = inspect.getsource(session_report.readiness)
+    firmware = source[source.index('"firmware"'):]
+    firmware = firmware[:firmware.index("robot_id=robot_id")]
+    assert '"info"' in firmware, (
+        "the firmware check is asserting a verdict it cannot know from a config file"
+    )

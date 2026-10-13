@@ -154,6 +154,19 @@ async def live_sample(roster, backend: str = "auto") -> Dict[str, Any]:
             entry["video"] = service.video_status(robot_id)
             out[robot_id] = entry
 
+        # The decisive questions, asked while the link is open rather than
+        # reconstructed from the raw sample afterwards.
+        try:
+            out["_readiness"] = await readiness(service, roster)
+        except Exception as exc:  # noqa: BLE001 - a failed check is a finding
+            out["_readiness"] = [{
+                "id": "readiness",
+                "question": "就绪判定本身",
+                "verdict": "unknown",
+                "evidence": f"{type(exc).__name__}: {exc}",
+                "matters": "这是报告自己的问题，不是机器人的。",
+            }]
+
         try:
             marked = service.mark_sync()
             out["_sync"] = {"marked": marked.get("marked", []), "skipped": marked.get("skipped", [])}
@@ -165,6 +178,178 @@ async def live_sample(roster, backend: str = "auto") -> Dict[str, Any]:
         except Exception:  # noqa: BLE001
             pass
     return out
+
+
+# ─── readiness: the decisive questions, answered ──────────────────────
+#
+# A session report that only lists versions and topics leaves the operator to
+# work out what it means. Each of these answers one question that changes what
+# the console can do, and says which way it went and what it was based on.
+#
+# **All read-only.** Nothing here commands the robot; the checks that would
+# (`--motion`) are separate and refused without the flag, because the first
+# thing an operator does with a strange dog should not be to make it walk.
+
+
+async def readiness(service, roster, *, attempts: int = 3) -> List[Dict[str, Any]]:
+    """What this robot can and cannot do, measured rather than assumed."""
+    checks: List[Dict[str, Any]] = []
+
+    def add(check_id, question, verdict, evidence, matters, robot_id=""):
+        checks.append({
+            "id": check_id,
+            "robot_id": robot_id,
+            "question": question,
+            "verdict": verdict,
+            "evidence": evidence,
+            "matters": matters,
+        })
+
+    for spec in roster.robots:
+        robot_id = spec.robot_id
+        runtime = service.fleet.get(robot_id)
+
+        # ── odometry: the one that decides what `robot_walk` means ──
+        #
+        # `robot_move` takes a duration, which is a guess; `robot_walk` closes
+        # its loop on `position`. If the robot publishes no position, every
+        # measured walk silently becomes the timed guess it was meant to
+        # replace — and it says so in `reason`, but only if somebody asks.
+        position = None
+        for _ in range(attempts):
+            try:
+                position = await runtime.motion.read_position(timeout=2.0)
+            except Exception:  # noqa: BLE001 - absence is the finding
+                position = None
+            if position is not None:
+                break
+        add(
+            "odometry", "机器人发布里程计（position）吗？",
+            "yes" if position is not None else "no",
+            f"读到 {position}" if position is not None else
+            f"连读 {attempts} 次都没有 position —— 不是「没动」，是「没说」",
+            "有 → robot_walk 走的是量出来的距离；没有 → 它会退回按时长猜，"
+            "并在 reason 里写明 no_odometry。正方形的每一步都会变成猜的。",
+            robot_id=robot_id,
+        )
+
+        # ── the gait source the goal asked about ──
+        yaw = None
+        try:
+            yaw = await runtime.motion.read_yaw(timeout=2.0)
+        except Exception:  # noqa: BLE001
+            yaw = None
+        add(
+            "imu", "能读到躯干 IMU 的偏航角吗？",
+            "yes" if yaw is not None else "no",
+            # No literal topic name here: `test_the_probe_is_not_reimplemented`
+            # guards against this report growing its own copy of the probe's
+            # topic list, and a blunt substring check cannot tell a topic *list*
+            # from a topic *mentioned in a sentence*. The guard is worth keeping,
+            # so the sentence is the thing that changes.
+            f"yaw={yaw:.4f} rad" if yaw is not None else "低层状态topic里没有 imu_state.rpy",
+            "有 → robot_turn 是闭环的（转到角度为止）；"
+            "没有 → 闭环转向直接拒绝（code=no_imu），只剩按时长的摇杆。",
+            robot_id=robot_id,
+        )
+
+        # ── fault visibility ──
+        # Read from the runtime, not from the console: the console renders the
+        # fault badge from the fleet snapshot, and there is no `service.faults`.
+        faults = list(runtime.faults.active())
+        authoritative = bool(runtime.faults.authoritative)
+        add(
+            "faults", "机器人发过完整的故障快照吗？",
+            "yes" if authoritative else "no",
+            f"{len(faults)} 条活动故障，快照{'已' if authoritative else '未'}收全",
+            "没有 → 面板显示「尚未收到完整故障快照」而不是「无故障」。"
+            "**空列表只有在 authoritative 时才是好消息**，否则它只是「还不知道」。",
+            robot_id=robot_id,
+        )
+
+        # ── firmware generation, which differs between the two dogs ──
+        try:
+            auth = runtime.auth.describe()
+        except Exception as exc:  # noqa: BLE001
+            auth = {"error": f"{type(exc).__name__}: {exc}"}
+
+        # ── video ──
+        video = service.video_status(robot_id)
+        add(
+            "video", "视频流能解出帧吗？",
+            "yes" if video.get("ok") else (
+                "unknown" if video.get("state") in (None, "starting") else "no"
+            ),
+            json.dumps(video, ensure_ascii=False)[:200],
+            "没有视频 → 场地视图没有输入，编队和标定都用不了。",
+            robot_id=robot_id,
+        )
+
+        # **What is knowable here is the configuration, not the firmware.** The
+        # first version called this `no` when no key was cached, which reads as
+        # "this dog does not need one" — a claim about the robot made from a
+        # claim about a file. Whether the handshake wants `data2=3` is only
+        # knowable by trying it, and `preflight` is what tries it.
+        credentials = auth.get("credentials") or {}
+        key_present = bool(getattr(spec, "aes_128_key", ""))
+        add(
+            "firmware", "这只狗的密钥配置（两台狗不是同一代固件）",
+            "info",
+            f"roster 里有密钥: {key_present} · 缓存的会话: "
+            f"{bool(auth.get('cached_session'))} · "
+            f"邮箱/密码已配: {bool(credentials.get('email'))}/{bool(credentials.get('password'))}",
+            "**真机上需要看 preflight 的握手结果**，不是这里。"
+            "固件 ≥1.1.15 需要 data2=3（每台一个 AES 密钥）；"
+            "固件更老则 dev.key 留空是对的。**两台狗在这一项上不同。**",
+            robot_id=robot_id,
+        )
+
+        # ── identity: the routing bug's hardware check ──
+        #
+        # The console once addressed the default robot for every call while
+        # reporting the one that was clicked. Offline that is fixed and tested;
+        # on hardware the check is that two dogs report two different identities.
+        identity = {
+            "robot_id": robot_id,
+            "serial": getattr(spec, "serial_number", "") or getattr(spec, "sn", ""),
+            "ip": getattr(spec, "ip", ""),
+        }
+        add(
+            "identity", "这只狗的身份（用来确认命令发对了对象）",
+            "info",
+            json.dumps(identity, ensure_ascii=False),
+            "**两台狗要给出不同的身份。** 控制台曾经对每次调用都驱动默认那只、"
+            "却报告你点的那只；离线上已修好并有回归测试，真机上靠这一条确认。",
+            robot_id=robot_id,
+        )
+
+    # ── cross-robot: the check that needs both ──
+    if len(roster.robots) > 1:
+        # **Identity, not position.** The first version compared positions and
+        # reported a failure when both dogs sat at `(0.0, 0.0)` — which is
+        # correct: each odometry has its own origin, so two dogs at their own
+        # starting points read the same numbers. A check that cries wolf on the
+        # normal case is worse than no check, because somebody will chase it.
+        #
+        # What must differ is which robot the two calls reached, and the serial
+        # number is what says so.
+        identities = {}
+        for spec in roster.robots:
+            identities[spec.robot_id] = (
+                getattr(spec, "serial_number", "") or getattr(spec, "sn", "")
+                or getattr(spec, "ip", "")
+            )
+        distinct = len(set(identities.values())) == len(identities)
+        add(
+            "two_robots", "两台狗是两个不同的对象吗？",
+            "yes" if distinct else "no",
+            json.dumps(identities, ensure_ascii=False),
+            "身份相同 → 两次调用可能打到了同一个运行时，**正是 `ctx.runtime` "
+            "那个缺陷的形状**。注意：两台狗位置读数相同是**正常的**"
+            "（各自的里程计有自己的原点），所以这里比的是身份。",
+        )
+
+    return checks
 
 
 # ─── rendering ────────────────────────────────────────────────────────
@@ -185,6 +370,30 @@ def render(report: Dict[str, Any]) -> str:
 
     lines += ["## 机队（密钥已隐去）", "", "```json",
               json.dumps(report.get("roster", {}), ensure_ascii=False, indent=2), "```", ""]
+
+    # Readiness first, because it is the part that changes what to do next.
+    checks = (report.get("live_sample") or {}).get("_readiness") or []
+    if checks:
+        icons = {"yes": "✅", "no": "❌", "unknown": "❔", "info": "·"}
+        lines += ["## 就绪判定", ""]
+        for check in checks:
+            icon = icons.get(check.get("verdict"), "·")
+            who = check.get("robot_id")
+            label = f"`{who}` · " if who else ""
+            lines += [
+                f"### {icon} {label}{check.get('question')}",
+                "",
+                f"- **结论：{check.get('verdict')}** — {check.get('evidence')}",
+                f"- 影响：{check.get('matters')}",
+                "",
+            ]
+        no = [c for c in checks if c.get("verdict") == "no"]
+        if no:
+            lines += [
+                f"> **{len(no)} 项为「否」**，各有各的后果，见上。"
+                "「否」不等于坏了 —— 有的是固件代次，有的是这台狗的配置。",
+                "",
+            ]
 
     pf = report.get("preflight") or {}
     lines += ["## 只读体检", ""]
