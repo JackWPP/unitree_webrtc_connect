@@ -389,11 +389,38 @@ def converged(
     # `tolerance_m`. Two different tolerances for two facets of one shape would
     # just be two ways to disagree.
     bearing_error = wrap_degrees(bearing - target.bearing_deg)
+
+    # **Which way round, measured the same way `plan` measures it.**
+    #
+    # `converged` checked two *scalars* — how far off the distance is, and how
+    # far off the bearing is — while `plan` checks the **positional error to the
+    # target point**. Those are not the same test, and the gap between them is
+    # reachable:
+    #
+    #     d = 0.40 m, bearing 10° off
+    #       converged -> not ready      (10° > 8°)
+    #       plan      -> no moves       (position error 8.7 cm < 10 cm)
+    #       the loop  -> "规划不出可执行的修正" and stops
+    #
+    #     d = 2.00 m, bearing 5° off
+    #       converged -> ready          (5° < 8°, distance right)
+    #       plan      -> two moves      (position error 17 cm > 10 cm)
+    #       the loop  -> would have reported 已到位 with the dogs 17 cm out
+    #
+    # The first is a loop that cannot satisfy its own exit condition; the second
+    # is "done" about a shape that is not. Both are the same root cause: two
+    # pieces of code disagreeing about what done means.
+    #
+    # So the positional error decides, computed exactly as `plan` computes it,
+    # and the invariant `ready == (plan().moves == [])` is asserted by a test.
+    radians = math.radians(target.bearing_deg)
+    want_x = a["x"] + target.distance_m * math.cos(radians)
+    want_y = a["y"] + target.distance_m * math.sin(radians)
+    position_error = math.hypot(want_x - b["x"], want_y - b["y"])
+
     return {
         "ready": (
-            abs(distance_error) <= tolerance_m
-            and abs(yaw_error) <= tolerance_deg
-            and abs(bearing_error) <= tolerance_deg
+            position_error <= tolerance_m and abs(yaw_error) <= tolerance_deg
         ),
         "a": names[0],
         "b": names[1],
@@ -401,6 +428,11 @@ def converged(
         "bearing_deg": round(bearing, 1),
         "heading_spread_deg": round(spread, 1),
         "distance_error_m": round(distance_error, 3),
+        #: How far B is from where it should be, which is the number `ready` is
+        #: decided on and the one `plan` acts on. `distance_error_m` and
+        #: `bearing_error_deg` are kept because they are what a person reads —
+        #: "半米太近，偏东 30 度" — but neither of them decides anything.
+        "position_error_m": round(position_error, 3),
         "yaw_error_deg": round(yaw_error, 1),
         "bearing_error_deg": round(bearing_error, 1),
     }

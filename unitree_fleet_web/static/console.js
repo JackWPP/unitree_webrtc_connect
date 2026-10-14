@@ -2117,6 +2117,29 @@ function renderArena(arena) {
 
   detail.textContent = arena.age_s != null ? `${arena.age_s}s 前` : '';
   legend.textContent = '';
+
+  // **Say it on the map, not only when 对齐 refuses.**
+  //
+  // A tag below the 64 px floor is not a missing measurement — the position is
+  // real and the *identity* is not certain. Two tags four bits apart in
+  // `DICT_APRILTAG_36h11` decode to each other under blur, which puts one dog's
+  // position on the other. The map looks completely normal in that state, so
+  // the warning has to be on the map.
+  if (arena.illegible && arena.illegible.length) {
+    const warn = document.createElement('span');
+    warn.className = 'pair warn';
+    const px = arena.illegible
+      .map((name) => {
+        const pose = (arena.poses || {})[name] || {};
+        return `${name} ${Math.round(pose.tag_px || 0)}px`;
+      })
+      .join('、');
+    warn.textContent =
+      `⚠️ 标签太小，认不出是哪只狗（${px}）—— 位置是真的，身份不一定。`
+      + `读错 id 会把一只狗算到另一只身上。让狗离相机近一点，或者用更大的标签。`;
+    legend.appendChild(warn);
+  }
+
   if (arena.separation) {
     const row = document.createElement('span');
     row.className = 'pair';
@@ -2360,6 +2383,15 @@ const FORMATION_STATES = {
   converged: ['已到位', 'on'],
   no_progress: ['没有进展', 'warn'],
   no_measurement: ['测不到位置', 'warn'],
+  // **A tag too small to trust its id, which is worse than not seeing it.**
+  // Missing data stops the loop; wrong data drives it — a misread id puts one
+  // dog's position on the other. The state used to fall through to the raw
+  // English token, so the operator read `illegible` with no tone and no idea
+  // what to do.
+  illegible: ['标签太小认不出', 'bad'],
+  // The planner found nothing it could command. Usually means the geometry and
+  // the tolerances disagree, which is worth saying in those words.
+  no_move: ['没有可执行的修正', 'warn'],
   budget: ['步数用完', 'warn'],
   estopped: ['急停中止', 'bad'],
   cancelled: ['已取消', ''],

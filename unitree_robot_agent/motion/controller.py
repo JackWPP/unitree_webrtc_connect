@@ -455,6 +455,21 @@ class MotionController:
         stall_after = float(getattr(self.config, "walk_stall_seconds", 1.5))
         still_since = time.monotonic()
         last_travelled = 0.0
+        # **A second flag, because the first one meant two things.**
+        #
+        # `aborted` is set by the e-stop and the dead-man (via `_abort`) *and*
+        # by the `while … else` clause, which runs when the loop exits without a
+        # `break` — that is, on the deadline. So "aborted" covered both "the
+        # operator stopped it" and "it ran out of time", and the two wanted
+        # different words.
+        #
+        # An earlier attempt at this rewrote the conditional from
+        # `("timeout" if not aborted else "stopped")` to
+        # `("stopped" if aborted else "timeout")` — **logically identical**, so
+        # all four exit paths were byte-for-byte unchanged and the deadline
+        # still reported "stopped". The review caught it by diffing the paths
+        # rather than reading the condition.
+        timed_out = False
         try:
             async with self._window("motion.forward"):
                 while time.monotonic() < deadline:
@@ -501,7 +516,7 @@ class MotionController:
                     frames += 1
                     await asyncio.sleep(TICK)
                 else:
-                    aborted = True
+                    timed_out = True
         finally:
             # Always, on every path out: a robot left with a live command keeps
             # walking, which is the failure this file exists to prevent.
@@ -519,7 +534,8 @@ class MotionController:
             "reason": (
                 "reached" if reached
                 else ("stalled" if stalled
-                      else ("stopped" if aborted else "timeout"))
+                      else ("stopped" if aborted else
+                            ("timeout" if timed_out else "stopped")))
             ),
             "requested_m": round(target_m, 3),
             # Always the requested sign, because the odometry only gives a

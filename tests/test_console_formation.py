@@ -339,3 +339,100 @@ def test_the_bearing_check_wraps_the_short_way_round():
     near_180 = converged(poses, Formation(distance_m=1.0, bearing_deg=179.0))
     assert abs(near_180["bearing_error_deg"]) <= 180.0
     assert abs(near_180["bearing_error_deg"]) < 5.0, near_180
+
+
+def test_converged_and_plan_agree_about_what_done_means():
+    """**The invariant, swept.**
+
+    `converged` decided `ready` from two scalars — how far off the distance is,
+    and how far off the bearing is — while `plan` decides from the **positional
+    error to the target point**. Not the same test, and the gap was reachable:
+
+        d = 0.40 m, bearing 10° off
+          converged -> not ready     (10° > 8°)
+          plan      -> no moves      (position error 8.7 cm < 10 cm)
+          the loop  -> "规划不出可执行的修正" — a loop that cannot satisfy
+                       its own exit condition
+
+        d = 2.00 m, bearing 5° off
+          converged -> ready         (5° < 8°, distance right)
+          plan      -> two moves     (position error 17 cm > 10 cm)
+          the loop  -> would say 已到位 with the dogs 17 cm out
+
+    Both are the same root cause. The sweep is the test: **`ready` must be
+    exactly "there is nothing to command"**, in every combination of distance
+    and bearing, not just the ones somebody thought to try.
+    """
+    import math
+
+    from unitree_fleet_web.formation import Formation, converged, plan
+
+    disagreements = []
+    for distance in (0.3, 0.4, 0.6, 0.72, 1.0, 1.5, 2.0, 3.0, 5.0):
+        for bearing in (0, 2, 5, 8, 9, 10, 20, 45, 90, 135, 179, -45):
+            radians = math.radians(bearing)
+            poses = {
+                "dog1": {"x": 0.0, "y": 0.0, "heading_deg": 0.0},
+                "dog2": {
+                    "x": distance * math.cos(radians),
+                    "y": distance * math.sin(radians),
+                    "heading_deg": 0.0,
+                },
+            }
+            target = Formation(distance_m=distance, bearing_deg=0.0)
+            ready = converged(poses, target)["ready"]
+            moves = plan(poses, target).moves
+            if ready != (not moves):
+                disagreements.append(
+                    f"d={distance} bearing={bearing}°: ready={ready}, "
+                    f"{len(moves)} move(s)"
+                )
+
+    assert not disagreements, (
+        "converged and plan disagree about what done means, so the loop either "
+        "stops when it should move or moves when it should stop:\n  "
+        + "\n  ".join(disagreements)
+    )
+
+
+def test_the_two_cases_that_used_to_disagree():
+    """The two concrete inputs, pinned. A sweep that stopped covering them would
+    otherwise go quiet."""
+    import math
+
+    from unitree_fleet_web.formation import Formation, converged, plan
+
+    def at(distance, bearing):
+        radians = math.radians(bearing)
+        return {
+            "dog1": {"x": 0.0, "y": 0.0, "heading_deg": 0.0},
+            "dog2": {
+                "x": distance * math.cos(radians),
+                "y": distance * math.sin(radians),
+                "heading_deg": 0.0,
+            },
+        }
+
+    # Small distance, bearing just outside the angle tolerance: the loop used to
+    # be unable to satisfy its own exit condition.
+    near = at(0.40, 10.0)
+    target = Formation(distance_m=0.40, bearing_deg=0.0)
+    verdict = converged(near, target)
+    assert verdict["ready"] is True, verdict
+    assert plan(near, target).moves == [], "plan still wants to move"
+    assert abs(verdict["bearing_error_deg"]) > 8.0, (
+        "the bearing is still outside the angle tolerance — which is fine, "
+        "because it is the position that decides"
+    )
+    # The reported number that says so.
+    assert verdict["position_error_m"] <= 0.10
+
+    # Large distance, bearing inside the angle tolerance: a small angle is a
+    # large lateral offset, and "ready" used to miss it.
+    far = at(2.0, 5.0)
+    target = Formation(distance_m=2.0, bearing_deg=0.0)
+    verdict = converged(far, target)
+    assert verdict["ready"] is False, verdict
+    assert len(plan(far, target).moves) == 2
+    assert abs(verdict["bearing_error_deg"]) <= 8.0
+    assert verdict["position_error_m"] > 0.10

@@ -759,3 +759,103 @@ def test_a_broken_manifest_falls_back_rather_than_crashing(tmp_path):
     result = service._marker_manifest()  # noqa: SLF001
     assert result["source"] == "roster"
     assert "读不了" in result["note"]
+
+
+# ─── a camera below the tags ──────────────────────────────────────────
+
+
+def _calibration_client(tmp_path, **config):
+    import json as _json
+
+    from starlette.testclient import TestClient
+
+    from unitree_robot_agent.fleet import FleetManager, Roster
+    from unitree_fleet_web import ConsoleConfig, ConsoleService
+    from unitree_fleet_web.app import create_app
+
+    path = tmp_path / "calib.json"
+    path.write_text(_json.dumps({
+        "image_points": [[80, 80], [720, 80], [720, 720], [80, 720]],
+        "world_points": [[0, 4], [4, 4], [4, 0], [0, 0]],
+    }), encoding="utf-8")
+    roster = Roster.from_mapping({
+        "state_dir": str(tmp_path / "state"),
+        "robots": [{"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"}],
+    })
+    cfg = ConsoleConfig(host="127.0.0.1", deadman_s=0.5,
+                        arena_calibration=str(path), **config)
+    app = create_app(
+        ConsoleService(FleetManager(roster, backend="mock", audit_to_stderr=False),
+                       config=cfg), cfg,
+    )
+    return TestClient(app), path
+
+
+def test_a_camera_below_the_tags_is_refused_not_saved(tmp_path):
+    """**Two free number fields with nothing cross-checking them.**
+
+    With the camera lower than the tags the parallax geometry does not exist:
+    `scale_factor` is infinite and `residual_m` has no value. That state used to
+    reach the API, where `round(inf)` and `round(None)` raised and **every
+    endpoint touching the calibration returned 500** — including the
+    four-a-second status push, whose body then carried `Infinity`. The page's
+    `JSON.parse` failed inside a `try` and **the live console froze silently**,
+    which is the worst way for it to fail.
+
+    Refusing at the door is better than papering over it at the call sites: a
+    calibration nobody can compute is not one to save.
+    """
+    client, path = _calibration_client(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    with client:
+        response = client.post("/api/arena/calibrate", json={
+            "image_points": [[80, 80], [720, 80], [720, 720], [80, 720]],
+            "world_points": [[0, 4], [4, 4], [4, 0], [0, 0]],
+            "tag_height_m": 0.35,
+            "camera_height_m": 0.30,
+        })
+
+    assert response.status_code == 400, response.text
+    assert response.json()["code"] == "bad_calibration"
+    # It has to say which of the two numbers is wrong, because the page offers
+    # them as two unlabelled boxes.
+    assert "相机" in response.json()["error"]
+    assert "填反" in response.json()["hint"]
+    # And it must not have been written.
+    assert path.read_text(encoding="utf-8") == before, "the bad calibration was saved"
+
+
+def test_the_normal_heights_are_accepted_and_every_endpoint_answers(tmp_path):
+    """The control. A guard that refuses a sane calibration is not a guard."""
+    client, _path = _calibration_client(tmp_path)
+    with client:
+        response = client.post("/api/arena/calibrate", json={
+            "image_points": [[80, 80], [720, 80], [720, 720], [80, 720]],
+            "world_points": [[0, 4], [4, 4], [4, 0], [0, 0]],
+            "tag_height_m": 0.35,
+            "camera_height_m": 2.5,
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()["residual_m"] > 0.3
+
+        # The endpoints that 500'd on the impossible geometry.
+        for path in ("/api/fleet/status", "/api/arena/calibration"):
+            assert client.get(path).status_code == 200, path
+        # The status body must be parseable by a browser, which is what froze.
+        import json as _json
+
+        _json.loads(client.get("/api/fleet/status").text)
+
+
+def test_equal_heights_are_also_refused(tmp_path):
+    """`camera == tag` is the same missing geometry, and it is the boundary the
+    first version would have let through with an infinite scale factor."""
+    client, _path = _calibration_client(tmp_path)
+    with client:
+        response = client.post("/api/arena/calibrate", json={
+            "image_points": [[80, 80], [720, 80], [720, 720], [80, 720]],
+            "world_points": [[0, 4], [4, 4], [4, 0], [0, 0]],
+            "tag_height_m": 2.5,
+            "camera_height_m": 2.5,
+        })
+    assert response.status_code == 400, response.text

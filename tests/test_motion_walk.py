@@ -350,3 +350,57 @@ def test_a_slow_walk_is_not_mistaken_for_a_stalled_one():
     assert result["reason"] != "stalled", (
         "a creeping robot was called stuck"
     )
+
+
+def test_every_exit_path_reports_its_own_reason():
+    """**The fix for this was a tautology, and a review caught it.**
+
+    `("timeout" if not aborted else "stopped")` was rewritten as
+    `("stopped" if aborted else "timeout")` — **logically identical**, so all
+    four exit paths came out byte-for-byte unchanged. The deadline still
+    reported "stopped", because `while … else` runs when the loop exits without
+    a `break`, and that sets `aborted`.
+
+    `aborted` meant two things at once: "the operator stopped it" (the e-stop
+    and the dead-man set `_abort`) and "it ran out of time". One flag, two
+    meanings, and the word the operator reads was wrong for one of them.
+
+    So this walks all four paths and asserts the word each one produces.
+    """
+    # 1. Arrived.
+    control = controller(FakeSession(position=(0.0, 0.0)))
+    position_sequence(control, [0.05, 0.10, 0.20, 0.30, 0.40])
+    assert asyncio.run(control.forward_m(0.35, speed=0.5))["reason"] == "reached"
+
+    # 2. Told to walk and not walking.
+    control = controller(FakeSession(position=(0.0, 0.0)))
+    position_sequence(control, [0.0] * 8)
+    assert asyncio.run(
+        control.forward_m(0.3, speed=0.5, timeout=30.0)
+    )["reason"] == "stalled"
+
+    # 3. Moving, but too slowly to arrive before the deadline.
+    control = controller(FakeSession(position=(0.0, 0.0)))
+    position_sequence(control, [round(0.001 * n, 4) for n in range(1, 4000)])
+    assert asyncio.run(
+        control.forward_m(5.0, speed=0.05, timeout=1.0)
+    )["reason"] == "timeout"
+
+
+async def test_an_abort_mid_walk_says_stopped_not_timeout():
+    """The fourth path, and the one the tautology got wrong.
+
+    The abort has to be set **while the walk is running**: `_window` clears
+    `_abort` on entry, so setting it first does nothing — which made the first
+    version of this probe report `timeout` and look like a code failure.
+    """
+    control = controller(FakeSession(position=(0.0, 0.0)))
+    position_sequence(control, [round(0.0005 * n, 5) for n in range(1, 8000)])
+
+    task = asyncio.create_task(control.forward_m(5.0, speed=0.05, timeout=5.0))
+    await asyncio.sleep(0.25)
+    control._abort.set()  # noqa: SLF001 - the e-stop's own flag
+    result = await task
+
+    assert result["reason"] == "stopped", result
+    assert result["ok"] is False

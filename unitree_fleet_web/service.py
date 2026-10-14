@@ -1734,7 +1734,7 @@ class ConsoleService:
             "reason": "",
             "calibrated": True,
             "residual_m": _maybe_round(self._calibration.residual_m, 3),
-            "scale_factor": round(self._calibration.scale_factor, 3),
+            "scale_factor": _maybe_round(self._calibration.scale_factor, 3),
         }
 
     async def _arena_loop(self) -> None:
@@ -1886,7 +1886,7 @@ class ConsoleService:
             "calibration": (
                 {
                     "residual_m": _maybe_round(self._calibration.residual_m, 3),
-                    "scale_factor": round(self._calibration.scale_factor, 3),
+                    "scale_factor": _maybe_round(self._calibration.scale_factor, 3),
                     "adequate": self._calibration.adequate,
                     # The corners, so the map can be drawn to scale instead of
                     # being given a size by the frontend that the calibration
@@ -2041,6 +2041,32 @@ class ConsoleService:
                     hint="按左上、右上、右下、左下围成四边形，不要交叉。",
                 )
 
+        # **A camera below the tags is not a calibration, it is a typo.**
+        #
+        # The panel collects both heights as free numbers and nothing
+        # cross-checked them. With the camera lower than the tags the parallax
+        # geometry does not exist — `scale_factor` is infinite and
+        # `residual_m` has no value — and that state used to reach the API,
+        # where `round(inf)`/`round(None)` raised and **every endpoint touching
+        # the calibration returned 500**, including the four-a-second status
+        # push. The page's `JSON.parse` then failed inside a `try` and the live
+        # console **froze silently**, which is the worst way for it to fail.
+        #
+        # `_maybe_round` at the call sites keeps that from ever being a 500
+        # again; this keeps the state from being created in the first place,
+        # which is better, because a calibration nobody can compute is not one
+        # to save.
+        tag_h = float(calibration.tag_height_m or 0.0)
+        camera_h = float(calibration.camera_height_m or 0.0)
+        if tag_h > 0 and camera_h > 0 and camera_h <= tag_h:
+            raise AgentError(
+                f"相机比标签还低（标签 {tag_h:.2f} m，相机 {camera_h:.2f} m）——"
+                f"这个几何关系不存在。",
+                code="bad_calibration",
+                hint="两个高度是「标签离地」和「相机离地」，相机必须更高。"
+                     "很可能是把两个数字填反了。",
+            )
+
         path = self.config.arena_calibration
         if not path:
             raise AgentError(
@@ -2095,7 +2121,7 @@ class ConsoleService:
             "path": str(path),
             "calibration": calibration.as_dict(),
             "adequate": calibration.adequate,
-            "residual_m": round(calibration.residual_m, 3),
+            "residual_m": _maybe_round(calibration.residual_m, 3),
         }
 
     # ── formation ────────────────────────────────────────────────────

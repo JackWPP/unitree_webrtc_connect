@@ -1231,3 +1231,24 @@ def test_the_page_says_when_a_number_is_old(open_client):
     source = open_client.get("/static/console.js").text
     assert "body.age_s" in source
     assert "前的读数" in source
+
+
+def test_the_new_refusal_states_have_words(open_client):
+    """**A refusal the operator cannot read is not a refusal.**
+
+    `illegible` and `no_move` were added to the server and not to the page's
+    state table, so the status line showed the raw English token with no tone —
+    for a state that means "I cannot tell which dog is which".
+    """
+    source = open_client.get("/static/console.js").text
+    for state, why in (
+        ("illegible", "标签太小认不出是哪只狗"),
+        ("no_move", "规划不出可执行的修正"),
+    ):
+        assert f"{state}:" in source, f"{state} has no entry in FORMATION_STATES"
+    assert "标签太小认不出" in source
+    assert "没有可执行的修正" in source
+
+    # ...and the map says it too, not only the button that refuses.
+    assert "arena.illegible" in source
+    assert "认不出是哪只狗" in source
