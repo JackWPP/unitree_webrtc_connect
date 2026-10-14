@@ -185,7 +185,7 @@ def test_omitting_a_parameter_uses_its_default():
 
 
 def test_the_catalogue_declares_the_params(open_client):
-    """The page draws the ⚙ from this, so a routine with knobs and no declared
+    """The page draws the 设置 button from this, so a routine with knobs and no declared
     params is a feature nobody can reach."""
     listed = {
         r["id"]: r for r in open_client.get("/api/fleet/routines").json()["routines"]

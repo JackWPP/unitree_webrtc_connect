@@ -1705,7 +1705,7 @@ const EDITOR_POLICIES = [
 ];
 
 function editorSteps() {
-  state.editor = state.editor || { steps: [], name: '', loop: false };
+  state.editor = state.editor || { steps: [], name: '', loop: false, editingId: '' };
   return state.editor.steps;
 }
 
@@ -1772,6 +1772,20 @@ function renderEditor() {
   steps.forEach((step, index) => {
     const row = document.createElement('li');
     row.className = 'step-row';
+    row.draggable = true;
+    row.dataset.index = String(index);
+
+    // **Dragging is added, not substituted.** The existing comment on this
+    // editor argued against drag-and-drop because it is "nicer with a mouse and
+    // unusable with a keyboard or a touch screen, and a console that two people
+    // share should not require one specific input device" — and that reasoning
+    // still holds. So both exist: the handle and the arrows do the same thing,
+    // and neither is the only way.
+    const grip = document.createElement('span');
+    grip.className = 'grip';
+    grip.textContent = '⠿';
+    grip.title = '拖动排序（也可以用 ↑ ↓ 按钮）';
+    grip.setAttribute('aria-hidden', 'true');
 
     const order = document.createElement('span');
     order.className = 'order';
@@ -1835,6 +1849,7 @@ function renderEditor() {
       renderEditor();
     });
 
+    row.appendChild(grip);
     row.appendChild(order);
     row.appendChild(what);
     row.appendChild(seconds);
@@ -1843,6 +1858,52 @@ function renderEditor() {
     row.appendChild(down);
     row.appendChild(remove);
     host.appendChild(row);
+  });
+  wireStepDrag();
+}
+
+/* Drag-to-reorder, on the rows the renderer just built.
+ *
+ * `renderEditor` rebuilds every row, so the listeners have to be re-bound each
+ * time — which is exactly the pattern that leaked `#routine-stop` once (a new
+ * handler per call, so N actions meant N stop requests). The difference is that
+ * these handlers are attached to elements that are **thrown away and rebuilt**,
+ * not to a long-lived element, so they cannot accumulate.
+ */
+function wireStepDrag() {
+  const host = document.getElementById('editor-steps');
+  if (!host) return;
+  let dragging = null;
+
+  host.querySelectorAll('.step-row').forEach((row) => {
+    row.addEventListener('dragstart', (event) => {
+      dragging = row;
+      row.classList.add('dragging');
+      // Firefox refuses to start a drag without data on the transfer.
+      if (event.dataTransfer) event.dataTransfer.setData('text/plain', row.dataset.index);
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      host.querySelectorAll('.step-row').forEach((r) => r.classList.remove('drop-before'));
+      dragging = null;
+    });
+    row.addEventListener('dragover', (event) => {
+      if (!dragging || dragging === row) return;
+      event.preventDefault();
+      row.classList.add('drop-before');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drop-before'));
+    row.addEventListener('drop', (event) => {
+      event.preventDefault();
+      if (!dragging || dragging === row) return;
+      const steps = editorSteps();
+      const from = Number(dragging.dataset.index);
+      const to = Number(row.dataset.index);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) return;
+      const [moved] = steps.splice(from, 1);
+      steps.splice(to, 0, moved);
+      renderEditor();
+    });
   });
 }
 
@@ -1870,8 +1931,13 @@ function editorDocument() {
   const steps = editorSteps();
   if (!name) throw new Error('先给它起个名字');
   if (!steps.length) throw new Error('序列是空的');
+  // **An edited routine keeps its id.** The id is otherwise derived from the
+  // name, so renaming a saved routine would create a second one and leave the
+  // first behind — and `save_routine` would happily accept both, since the id
+  // is new and does not shadow a built-in.
+  const editing = (state.editor && state.editor.editingId) || '';
   return {
-    id: editorRoutineId(name),
+    id: editing || editorRoutineId(name),
     label: name,
     loop: Boolean(document.getElementById('editor-loop').checked),
     steps: steps.map((step) => ({
@@ -1893,6 +1959,121 @@ async function saveEditor() {
   } catch (err) {
     editorStatus(err.message, 'bad');
     return null;
+  }
+}
+
+/* Load a saved routine back into the editor.
+ *
+ * **This was the editor's real problem.** `state.editor` was only ever assigned
+ * on boot and on clear, so a saved routine could be created and never changed or
+ * removed — "edit yesterday's routine" was simply not possible, which makes an
+ * editor a one-way pipe with a form on the end.
+ *
+ * A built-in can be opened too, and saving it under a new name is the intended
+ * way to say "like 走正方形 but with three laps on a different day".
+ */
+function loadIntoEditor(routine) {
+  state.editor = {
+    steps: (routine.steps || []).map((step) => ({
+      label: step.label,
+      tool: step.tool,
+      args: { ...(step.args || {}) },
+      policy: step.policy || 'all',
+      seconds: step.seconds || 3,
+    })),
+    name: routine.label || '',
+    loop: Boolean(routine.loop),
+    editingId: routine.builtin ? '' : routine.id,
+  };
+  document.getElementById('editor-name').value = state.editor.name;
+  document.getElementById('editor-loop').checked = state.editor.loop;
+  const panel = document.getElementById('editor');
+  if (panel) panel.open = true;
+  editorStatus(
+    routine.builtin
+      ? `已载入内置编排「${routine.label}」—— 改完保存会存成你自己的`
+      : `正在编辑「${routine.label}」`,
+    'ok',
+  );
+  renderEditor();
+}
+
+async function deleteCustomRoutine(routine) {
+  // **A confirm, because there is no undo.** The editor can recreate a routine
+  // but not the one you have just lost.
+  const ok = window.confirm(`删除编排「${routine.label}」？删了就找不回来了。`);
+  if (!ok) return;
+  try {
+    await api(`/api/fleet/routines/${encodeURIComponent(routine.id)}`, {
+      method: 'DELETE',
+    });
+    if (state.editor && state.editor.editingId === routine.id) {
+      state.editor = { steps: [], name: '', loop: false, editingId: '' };
+      renderEditor();
+    }
+    editorStatus(`已删除「${routine.label}」`, 'ok');
+    await loadRoutines();
+  } catch (err) {
+    editorStatus(`删除失败：${err.message}`, 'bad');
+  }
+}
+
+/* The operator's own routines, each with 编辑 and 删除.
+ *
+ * A built-in cannot be edited in place — `save_routine` refuses to shadow one,
+ * and that rule is right: the built-ins are the reference, and a fleet whose
+ * 走正方形 means something different on each console is worse than one that
+ * cannot change it.
+ */
+async function loadCustomRoutines() {
+  const host = document.getElementById('fleet-custom');
+  if (!host) return;
+  let spec;
+  try {
+    spec = await api('/api/fleet/routines');
+  } catch (_) { return; }
+  const mine = (spec.routines || []).filter((routine) => !routine.builtin);
+  host.textContent = '';
+  host.classList.toggle('hidden', !mine.length);
+  if (!mine.length) return;
+
+  const label = document.createElement('span');
+  label.className = 'group-label';
+  label.textContent = '我的';
+  host.appendChild(label);
+
+  for (const routine of mine) {
+    const chip = document.createElement('span');
+    chip.className = 'routine-chip';
+
+    const button = document.createElement('button');
+    button.className = 'btn routine-btn';
+    button.dataset.routine = routine.id;
+    labelled(
+      button,
+      ROUTINE_ICONS[routine.id] || '📝',
+      `${routine.label} · ${routine.steps.length}步/${Math.round(routine.seconds)}s`,
+    );
+    button.title = routine.title || routine.label;
+    button.addEventListener('click', () => startRoutine(routine, button));
+    chip.appendChild(button);
+
+    const edit = document.createElement('button');
+    edit.className = 'btn knob-btn';
+    edit.textContent = '编辑';
+    edit.title = `把「${routine.label}」载入编辑器`;
+    edit.addEventListener('click', () => loadIntoEditor(routine));
+    chip.appendChild(edit);
+
+    const remove = document.createElement('button');
+    remove.className = 'btn knob-btn danger';
+    remove.textContent = '✕';
+    remove.setAttribute('aria-label', `删除${routine.label}`);
+    remove.title = `删除「${routine.label}」`;
+    remove.addEventListener('click', () => deleteCustomRoutine(routine));
+    chip.appendChild(remove);
+
+    host.appendChild(chip);
   }
 }
 
@@ -1922,7 +2103,7 @@ function wireEditor() {
   if (save) save.addEventListener('click', saveEditor);
   if (run) run.addEventListener('click', runEditor);
   if (clear) clear.addEventListener('click', () => {
-    state.editor = { steps: [], name: '', loop: false };
+    state.editor = { steps: [], name: '', loop: false, editingId: '' };
     document.getElementById('editor-name').value = '';
     document.getElementById('editor-loop').checked = false;
     editorStatus('');
@@ -2598,20 +2779,204 @@ async function loadRoutines() {
   try {
     spec = await api('/api/fleet/routines');
   } catch (_) { return; }
+  // **Which panel was open, so a rebuild does not shut it.**
+  //
+  // `renderFleetTargets` re-fetches this list when the connected set changes —
+  // which is when an operator has just plugged a dog in and is most likely to be
+  // mid-edit. Clearing the host would close the panel under their hands and lose
+  // nothing visible, which is the worst kind of bug to be told about.
+  const openId = state.openRoutineParams || '';
   host.textContent = '';
   for (const routine of spec.routines || []) {
-    const button = document.createElement('button');
-    button.className = 'btn';
-    // The step count and the expected duration go on the button: a routine is
-    // a commitment of time as well as motion, and the operator should know
-    // both before pressing it rather than after.
-    button.textContent = `${routine.label} · ${routine.steps.length}步/${Math.round(routine.seconds)}s`;
-    button.title = routine.title + (routine.needs_dangerous
-      ? '（含需要危险动作许可的步骤）' : '');
-    button.addEventListener('click', () => startRoutine(routine, button));
-    host.appendChild(button);
+    if (routine.builtin) host.appendChild(routineButton(routine));
+  }
+  // The operator's own routines, in their own row: they are edited and deleted
+  // rather than just pressed, so they carry more controls than a built-in.
+  await loadCustomRoutines();
+  if (openId) {
+    const chip = host.querySelector(`.routine-chip .routine-btn[data-routine="${openId}"]`);
+    const routine = (spec.routines || []).find((r) => r.id === openId);
+    if (chip && routine) {
+      chip.parentElement.appendChild(buildRoutineParams(routine));
+    } else {
+      state.openRoutineParams = '';
+    }
   }
   renderRoutine(state.lastStatus && state.lastStatus.routine);
+}
+
+/* A built-in routine: press to run, plus a ⚙ when it has knobs. */
+function routineButton(routine) {
+  const wrap = document.createElement('span');
+  wrap.className = 'routine-chip';
+
+  const button = document.createElement('button');
+  button.className = 'btn routine-btn';
+  button.dataset.routine = routine.id;
+  // The step count and the duration are computed from **the current
+  // parameters**, so a routine with a 2 m side does not still claim 9 步/32s.
+  const summary = `${routine.steps.length}步/${Math.round(routine.seconds)}s`;
+  const hasKnobs = (routine.params || []).length > 0;
+  labelled(
+    button,
+    ROUTINE_ICONS[routine.id] || '',
+    `${routine.label} · ${summary}${hasKnobs ? ` ${KNOB_MARK}` : ''}`,
+  );
+  button.title = routine.title + (routine.needs_dangerous
+    ? '（含需要危险动作许可的步骤）' : '');
+  button.addEventListener('click', () => startRoutine(routine, button));
+  wrap.appendChild(button);
+
+  if (hasKnobs) {
+    // The knob count, so a closed panel still shows there is something in it.
+    const knobs = document.createElement('button');
+    knobs.className = 'btn knob-btn';
+    // The word, not just a marker: it has to be findable by someone who has
+    // never seen the panel, and "设置" is what the button does.
+    knobs.textContent = KNOB_MARK;
+    knobs.title = `设置${routine.label}（${routine.params.map((p) => p.label).join('、')}）`;
+    knobs.setAttribute(
+      'aria-label', `设置${routine.label}`,
+    );
+    knobs.addEventListener('click', () => toggleRoutineParams(routine, wrap));
+    wrap.appendChild(knobs);
+  }
+  return wrap;
+}
+
+/* The parameter panel for one routine.
+ *
+ * **The values live on the routine object in `state`**, keyed by id, so opening
+ * and closing the panel does not lose what was typed — and so a reload of the
+ * action list does not silently reset a distance somebody chose.
+ */
+function routineParams(routine) {
+  state.routineParams = state.routineParams || {};
+  if (!state.routineParams[routine.id]) {
+    const values = {};
+    for (const param of routine.params || []) values[param.key] = param.default;
+    state.routineParams[routine.id] = values;
+  }
+  return state.routineParams[routine.id];
+}
+
+function toggleRoutineParams(routine, wrap) {
+  const existing = wrap.querySelector('.routine-params');
+  if (existing) {
+    existing.remove();
+    state.openRoutineParams = '';
+    return;
+  }
+  // One panel at a time: two open panels are two places to look for the number
+  // you are about to change.
+  for (const open of document.querySelectorAll('.routine-params')) open.remove();
+  state.openRoutineParams = routine.id;
+  wrap.appendChild(buildRoutineParams(routine));
+}
+
+function buildRoutineParams(routine) {
+  const panel = document.createElement('div');
+  panel.className = 'routine-params';
+  const values = routineParams(routine);
+
+  for (const param of routine.params) {
+    const row = document.createElement('label');
+    row.className = 'param-row';
+    const name = document.createElement('span');
+    name.className = 'param-name';
+    name.textContent = param.label;
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = String(param.min);
+    input.max = String(param.max);
+    input.step = String(param.step);
+    input.value = String(values[param.key]);
+    input.id = `param-${routine.id}-${param.key}`;
+    input.addEventListener('input', () => {
+      const next = Number(input.value);
+      // Held locally even when out of range, so typing "0.05" on the way to
+      // "0.5" is not rewritten mid-keystroke. The server is what refuses it.
+      if (Number.isFinite(next)) values[param.key] = next;
+      schedulePreview(routine);
+    });
+    // A number input that is out of range is drawn with a native warning, but
+    // the refusal that matters comes from the server.
+    row.append(name, input, unitSpan(param.unit));
+    panel.appendChild(row);
+  }
+
+  const status = document.createElement('span');
+  status.className = 'param-preview muted';
+  status.id = `preview-${routine.id}`;
+  panel.appendChild(status);
+
+  const run = document.createElement('button');
+  run.className = 'btn param-run';
+  run.textContent = '按这个跑';
+  run.addEventListener('click', () => startRoutineWithParams(routine, run));
+  panel.appendChild(run);
+
+  schedulePreview(routine);
+  return panel;
+}
+
+function unitSpan(unit) {
+  const span = document.createElement('span');
+  span.className = 'param-unit';
+  span.textContent = (unit || '').trim();
+  return span;
+}
+
+/* Debounced preview of what the parameters currently produce.
+ *
+ * **The steps come from the server, not from arithmetic here.** Computing
+ * "parameters → steps" in two places is two implementations of one fact, and
+ * they drift — this project has already shipped a parallax formula disagreeing
+ * with its own scale factor ten lines away, and a `converged()` disagreeing with
+ * the `plan()` it was gating. A preview that has drifted from what runs is worse
+ * than no preview, because it is a promise.
+ *
+ * Debounced because this fires on every keystroke and the answer only changes
+ * when the number does.
+ */
+function schedulePreview(routine) {
+  state.previewTimers = state.previewTimers || {};
+  clearTimeout(state.previewTimers[routine.id]);
+  state.previewTimers[routine.id] = setTimeout(
+    () => refreshPreview(routine), 200,
+  );
+}
+
+async function refreshPreview(routine) {
+  const status = document.getElementById(`preview-${routine.id}`);
+  if (!status) return;
+  try {
+    const preview = await api('/api/fleet/routine/preview', {
+      method: 'POST',
+      body: JSON.stringify({ id: routine.id, params: routineParams(routine) }),
+    });
+    const walk = preview.steps.find((step) => step.args
+      && Object.prototype.hasOwnProperty.call(step.args, 'meters'));
+    const reach = walk ? ` · 每步 ${walk.args.meters} 米` : '';
+    status.className = 'param-preview muted';
+    status.textContent = `${preview.total} 步 · 约 ${Math.round(preview.seconds)} 秒${reach}`;
+    // The chip is updated too, so the summary on the closed panel is not
+    // describing a routine that no longer exists.
+    const chip = document.querySelector(
+      `.routine-chip .routine-btn[data-routine="${routine.id}"]`,
+    );
+    if (chip) {
+      const text = chip.querySelector('span:last-child');
+      if (text) {
+        text.textContent = `${routine.label} · ${preview.total}步/`
+          + `${Math.round(preview.seconds)}s ${KNOB_MARK}`;
+      }
+    }
+  } catch (err) {
+    status.className = 'param-preview warn-text';
+    status.textContent = err.message;
+  }
 }
 
 async function startRoutine(routine, button) {
@@ -2620,6 +2985,23 @@ async function startRoutine(routine, button) {
     await api('/api/fleet/routine', {
       method: 'POST',
       body: JSON.stringify({ id: routine.id }),
+    });
+  } catch (err) {
+    toast(`${routine.label} 无法开始：${err.message}`, 'bad');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+/* Start with whatever is in the boxes. A parameter outside its range is refused
+ * by the server with the field named, so there is no client-side copy of the
+ * bounds to drift from the tool's own. */
+async function startRoutineWithParams(routine, button) {
+  button.disabled = true;
+  try {
+    await api('/api/fleet/routine', {
+      method: 'POST',
+      body: JSON.stringify({ id: routine.id, params: routineParams(routine) }),
     });
   } catch (err) {
     toast(`${routine.label} 无法开始：${err.message}`, 'bad');
@@ -2739,9 +3121,79 @@ function renderTimeline(steps) {
   }
 }
 
+/* An icon per action, **for scanning and never for meaning**.
+ *
+ * The rule this table follows: **every icon is drawn next to its label, and
+ * there are no icon-only buttons.** Emoji render differently on every platform
+ * and can be missing entirely on a bare Linux box, where an icon-only button is
+ * a blank square. The icon speeds up finding a button you already know; the
+ * label is what tells you what it does.
+ *
+ * Keyed by the catalogue's action name, so it stays correct when the server
+ * adds or reorders actions. An unknown name simply gets no icon, which is a
+ * smaller failure than a wrong one.
+ */
+const ACTION_ICONS = {
+  // posture
+  stand: '🧍', recover: '🔄', lie_down: '⬇️',
+  // the safe actions
+  hello: '👋', stretch: '🙆', content: '😌', pose: '✨', scrape: '🙇',
+  wiggle_hips: '🕺', finger_heart: '🫶', sit: '🪑', rise_sit: '🧍',
+  // the hard ones
+  dance_1: '💃', dance_2: '🕺', handstand: '🤸',
+  front_jump: '⬆️', front_pounce: '🐆',
+  bound: '🐇', cross_step: '🚶', onesided_step: '🦵', moon_walk: '🌙',
+  front_flip: '🔄', back_flip: '🔃', left_flip: '↩️', right_flip: '↪️',
+};
+
+/* An icon per routine, by id. */
+const ROUTINE_ICONS = {
+  greet: '👋', dance: '💃', square: '⬛', formation: '➡️',
+};
+
+/* The marker for a routine that has knobs to turn.
+ *
+ * **A word, not a gear.** The gear was the obvious choice and it renders as an
+ * unclear grey blob at 12px on this background — measured in a headless render
+ * and again on screen. `设置` is unambiguous at any size, needs no emoji font,
+ * and says what the button does rather than what category it belongs to.
+ *
+ * It still carries no colour: colour is spoken for by state (running / done /
+ * failed), and a hint carried only by colour is invisible to a colour-blind
+ * operator. */
+const KNOB_MARK = '设置';
+/* The needs-space marker, drawn next to the label of a flip or a jump.
+ *
+ * This one keeps its glyph because it is a *warning* — a word would compete
+ * with the action's own label for attention, and `⚠` is universally recognised.
+ * U+FE0F asks for the pictograph rather than the thin text glyph, which at
+ * 12px on a dark background is a smudge. */
+const SPACE_MARK = '\u26A0\uFE0F';
+
+function iconFor(action) {
+  return ACTION_ICONS[action.key] || ACTION_ICONS[action.id] || '';
+}
+
+function labelled(button, icon, label) {
+  if (icon) {
+    const mark = document.createElement('span');
+    mark.className = 'btn-icon';
+    // The icon is decorative: a screen reader announcing "dancer" before
+    // "跳舞 1" is noise, and the label is already there.
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = icon;
+    button.appendChild(mark);
+  }
+  const text = document.createElement('span');
+  text.textContent = label;
+  button.appendChild(text);
+  return button;
+}
+
 async function loadFleetActions() {
-  const host = document.getElementById('fleet-posture');
+  const posture = document.getElementById('fleet-posture');
   const named = document.getElementById('fleet-named');
+  const hard = document.getElementById('fleet-hard');
   const targets = document.getElementById('fleet-targets');
   let spec;
   try {
@@ -2757,22 +3209,35 @@ async function loadFleetActions() {
       + (spec.skipped.length ? ` · 未连接：${spec.skipped.join('、')}` : '')
     : '没有已连接的机器狗';
 
-  host.textContent = '';
-  host.classList.toggle('posture', true);
-  for (const action of spec.posture || []) {
-    host.appendChild(fleetButton(action));
+  const fill = (host, actions) => {
+    host.textContent = '';
+    for (const action of actions || []) host.appendChild(fleetButton(action));
+  };
+  fill(posture, spec.posture);
+  fill(named, spec.named);
+  fill(hard, spec.hard);
+
+  // The count goes on the summary so a closed group still says how much is
+  // behind it — otherwise "高难动作" with nothing after it reads as empty.
+  const count = document.getElementById('fleet-hard-count');
+  if (count) {
+    count.textContent = (spec.hard || []).length ? `（${spec.hard.length} 个）` : '';
   }
-  named.textContent = '';
-  for (const action of spec.named || []) {
-    named.appendChild(fleetButton(action));
-  }
+  const wrap = document.getElementById('fleet-hard-wrap');
+  if (wrap) wrap.classList.toggle('hidden', !(spec.hard || []).length);
 }
 
 function fleetButton(action) {
   const button = document.createElement('button');
   button.className = 'btn';
-  button.textContent = action.label;
+  const needsSpace = action.needs_space === true;
+  labelled(
+    button,
+    iconFor(action),
+    needsSpace ? `${action.label} ${SPACE_MARK}` : action.label,
+  );
   button.title = action.title || action.label;
+  if (needsSpace) button.classList.add('needs-space');
   button.addEventListener('click', () => runFleetAction(action, button));
   return button;
 }
@@ -2857,6 +3322,27 @@ function renderFleetTargets() {
     ? `作用于 ${connected.join('、')}`
       + (spec.skipped.length ? ` · 未连接：${spec.skipped.join('、')}` : '')
     : '没有已连接的机器狗（先点「连接」）';
+
+  // **The catalogue needs a connected robot, so it has to be re-fetched when
+  // one arrives.**
+  //
+  // `named` and `hard` come from `robot_list_actions` on a live robot. At boot
+  // nothing is connected, so both come back empty — and nothing ever asked
+  // again, because this function only rewrote the text above. The bar looked
+  // right, the target line updated, and the buttons never appeared.
+  //
+  // It was survivable while only nine safe actions lived there. With thirteen
+  // more behind it, "the actions are missing until you reload" is the whole
+  // feature not working.
+  const wanted = new Set(connected);
+  const have = new Set(state.catalogueFor || []);
+  const same = wanted.size === have.size
+    && [...wanted].every((id) => have.has(id));
+  if (!same) {
+    state.catalogueFor = [...wanted];
+    loadFleetActions();
+    loadRoutines();
+  }
 }
 
 /* ── boot ──────────────────────────────────────────────────────────── */

@@ -658,13 +658,64 @@ select, input[type="range"] { accent-color: var(--accent); }
 .fleet-result.partial { color: var(--warn); }
 .fleet-result.bad { color: #ffb4b4; }
 
-.fleet-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.fleet-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: flex-start; }
 .fleet-row:empty { display: none; }
+
+/* ── the three groups ─────────────────────────────────────────────── */
+
+/* Three labelled columns on a wide screen, stacked when there is no room.
+   The label is what makes 姿态 / 动作 / 编排 distinguishable at a glance — as
+   two unlabelled rows of identical pills, "一起站立" and "扭屁股" read as the
+   same kind of thing and the eye has nothing to land on. */
+.fleet-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 8px 14px;
+  align-items: start;
+}
+.fleet-group { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.group-label {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: none;
+}
+
 .fleet-row .btn { padding: 4px 10px; font-size: 12.5px; }
 /* Posture first and slightly louder: standing a fleet up is what you reach
    for after something went wrong. */
-.fleet-row.posture .btn { border-color: #35507a; background: #172234; }
-.fleet-row.posture .btn:hover:not(:disabled) { background: #1d2c44; }
+.fleet-row.posture .btn,
+.fleet-group:first-child .fleet-row .btn {
+  border-color: #35507a;
+  background: #172234;
+}
+.fleet-group:first-child .fleet-row .btn:hover:not(:disabled) { background: #1d2c44; }
+
+/* The icon sits inside the button, before the label, and `aria-hidden` keeps a
+   screen reader from announcing "dancer" before "跳舞 1" — the label is already
+   the information, the icon is for scanning. */
+.btn-icon { margin-right: 5px; }
+
+/* A needs-space action. Marked with a character in the label as well as this
+   border, because a warning carried only by colour is invisible to a
+   colour-blind operator. */
+.btn.needs-space { border-color: #6b4a1f; }
+
+/* ── the dangerous group ──────────────────────────────────────────── */
+
+.fleet-hard { font-size: 12px; }
+.fleet-hard > summary {
+  cursor: pointer;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.fleet-hard > summary:hover { color: var(--fg); }
+.fleet-hard[open] > summary { color: var(--fg); }
+.fleet-hard .fleet-row { padding: 6px 0 2px; }
+.warn-text { color: var(--warn); font-size: 11px; }
 
 /* ── trim + stick ─────────────────────────────────────────────────── */
 
@@ -708,9 +759,61 @@ select, input[type="range"] { accent-color: var(--accent); }
 
 /* ── routines ─────────────────────────────────────────────────────── */
 
-.fleet-row.routines { border-top: 1px solid var(--line-soft); padding-top: 7px; }
 .fleet-row.routines .btn { border-color: #3a4a63; }
 .fleet-row.routines .btn:hover:not(:disabled) { background: #1d2c44; }
+
+/* A routine button plus its ⚙, kept together so the knob does not wrap away
+   from the thing it configures. */
+.routine-chip { display: inline-flex; align-items: stretch; gap: 0; }
+.routine-chip .routine-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.knob-btn {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: none;
+  border-color: #3a4a63;
+  color: var(--muted);
+}
+.knob-btn:hover:not(:disabled) { color: var(--fg); background: #1d2c44; }
+/* 编辑 and ✕ carry words, so they get their own corners back. */
+.fleet-row.custom .knob-btn { border-radius: 5px; border-left: 1px solid #3a4a63; }
+.fleet-row.custom .knob-btn.danger:hover:not(:disabled) { color: #ffb4b4; }
+.fleet-row.custom { align-items: center; gap: 6px; }
+.fleet-row.custom .group-label { margin-right: 2px; }
+
+/* The parameter panel. It opens under the routine it belongs to and carries the
+   preview, because "what will this do" and "what did I type" are the same
+   question. */
+.routine-params {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 6px;
+  padding: 7px 9px;
+  background: var(--panel-2);
+  border: 1px solid #3a4a63;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.param-row { display: inline-flex; align-items: center; gap: 5px; }
+.param-name { color: var(--muted); }
+.param-row input {
+  width: 62px;
+  background: var(--panel-3);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 5px;
+  font: inherit;
+  font-size: 12px;
+  text-align: right;
+}
+.param-unit { color: var(--muted); min-width: 12px; }
+.param-preview { margin-left: auto; }
+.param-run { border-color: #35507a; background: #172234; }
 
 .routine-run {
   display: flex;
@@ -870,6 +973,22 @@ select, input[type="range"] { accent-color: var(--accent); }
 }
 .step-row .icon:hover { color: var(--fg); }
 .step-row .icon.danger:hover { color: #ffb4b4; }
+
+/* Drag-to-reorder. A grab handle rather than making the whole row draggable:
+   the row contains a number input and a select, and a drag that starts on the
+   number field is a drag the operator did not ask for. The ↑ ↓ buttons remain,
+   so this is an addition and not the only path. */
+.step-row .grip {
+  color: var(--line);
+  cursor: grab;
+  font-size: 13px;
+  letter-spacing: -1px;
+  padding: 0 2px;
+  user-select: none;
+}
+.step-row .grip:hover { color: var(--muted); }
+.step-row.dragging { opacity: 0.45; cursor: grabbing; }
+.step-row.drop-before { border-top: 2px solid var(--accent); }
 
 .editor-foot { display: flex; align-items: center; gap: 8px; padding-top: 6px; flex-wrap: wrap; }
 .editor-name {

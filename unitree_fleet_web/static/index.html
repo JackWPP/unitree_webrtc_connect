@@ -36,13 +36,45 @@
     <span id="fleet-result" class="fleet-result"></span>
     <button id="fleet-repeat" class="btn hidden" title="再执行一次">再来一次</button>
   </div>
-  <div id="fleet-posture" class="fleet-row"></div>
-  <div id="fleet-named" class="fleet-row"></div>
+  <!-- Three groups, each labelled. Before this they were two unlabelled rows of
+       identical pills, so "一起站立" and "扭屁股" looked like the same kind of
+       thing and the eye had nothing to land on. The label is text, not a
+       button: it names the group, it does not do anything. -->
+  <div class="fleet-groups">
+    <div class="fleet-group">
+      <span class="group-label">姿态</span>
+      <div id="fleet-posture" class="fleet-row"></div>
+    </div>
+    <div class="fleet-group">
+      <span class="group-label">动作</span>
+      <div id="fleet-named" class="fleet-row"></div>
+    </div>
+    <div class="fleet-group">
+      <span class="group-label">编排</span>
+      <div class="fleet-row routines" id="fleet-routines"></div>
+      <!-- The operator's own routines, filled in when there are any. Kept
+           separate from the built-ins because they carry 编辑 and 删除 — a
+           built-in cannot be edited in place, and `save_routine` refusing to
+           shadow one is the right rule: a fleet whose 走正方形 means something
+           different on each console is worse than one that cannot change it. -->
+      <div class="fleet-row custom hidden" id="fleet-custom"></div>
+    </div>
+  </div>
 
-  <!-- Sequences: the one control that keeps issuing commands after the
-       operator has taken their hands off the keyboard, so its progress and its
-       stop button are always on screen while it runs. -->
-  <div class="fleet-row routines" id="fleet-routines"></div>
+  <!-- The dangerous half of the catalogue: dances, the handstand, four step
+       moves and four flips. **Collapsed by default.** They were always
+       reachable — `allow_dangerous` defaults to true — but the cost of
+       mistapping a bow and mistapping a backflip are not the same, and an
+       emergency is exactly when a flat list of twenty-five buttons gets
+       mistapped. Closed it costs one line; open it gives the capability. -->
+  <details class="fleet-hard" id="fleet-hard-wrap">
+    <summary>
+      高难动作
+      <span class="muted" id="fleet-hard-count"></span>
+      <span class="warn-text">需要空间，空翻和跳跃要在软地面上试</span>
+    </summary>
+    <div id="fleet-hard" class="fleet-row"></div>
+  </details>
 
   <!-- The arena, seen from above. Only useful with a camera and a calibration,
        so it says which of those is missing rather than drawing an empty field —

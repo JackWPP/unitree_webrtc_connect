@@ -96,6 +96,122 @@ DRIVER = r"""
     const robotId = pen.dataset.robot;
     record('第一个操作台有 robot id', !!robotId, robotId);
 
+    // ── the action bar ──
+    //
+    // **The catalogue needs a connected robot, and the page connects after it
+    // boots.** `loadFleetActions` ran once at boot, got an empty catalogue, and
+    // was never asked again — so every action but the three static posture
+    // buttons was missing until a reload. Survivable with nine actions; the
+    // whole feature not working with twenty-two.
+    for (let i = 0; i < 60; i++) {
+      if (document.querySelectorAll('#fleet-named button').length) break;
+      await sleep(200);
+    }
+    const actionGroups = {
+      posture: document.querySelectorAll('#fleet-posture button').length,
+      named: document.querySelectorAll('#fleet-named button').length,
+      routines: document.querySelectorAll('#fleet-routines button').length,
+      hard: document.querySelectorAll('#fleet-hard button').length,
+    };
+    record(
+      '四组动作都填上了',
+      actionGroups.posture >= 3 && actionGroups.named >= 9
+        && actionGroups.routines >= 4 && actionGroups.hard >= 13,
+      JSON.stringify(actionGroups),
+    );
+
+    // Every button carries a label *and* an icon. The rule is that no button is
+    // icon-only: emoji differ per platform and can be missing, and an
+    // icon-only button on a box without the glyph is a blank square.
+    const allActionButtons = [...document.querySelectorAll(
+      '#fleet-posture button, #fleet-named button, #fleet-hard button',
+    )];
+    const iconOnly = allActionButtons.filter(
+      (b) => !(b.textContent || '').trim(),
+    );
+    record(
+      '没有纯图标按钮',
+      allActionButtons.length > 0 && iconOnly.length === 0,
+      `${allActionButtons.length} 个按钮，${iconOnly.length} 个没有文字`,
+    );
+
+    // The dangerous group is closed until asked for — the whole point of the
+    // `<details>`.
+    const hardWrap = document.getElementById('fleet-hard-wrap');
+    record(
+      '高难动作默认折叠',
+      !!hardWrap && !hardWrap.open,
+      hardWrap ? `open=${hardWrap.open}` : '缺失',
+    );
+
+    // ── the routine knobs ──
+    const knobBtn = document.querySelector('#fleet-routines .knob-btn');
+    record('有带参数的编排（设置）', !!knobBtn, knobBtn ? knobBtn.title : '找不到');
+    let panel = null;
+    let inputs = [];
+    if (knobBtn) {
+      knobBtn.click();
+      await sleep(400);
+      panel = document.querySelector('.routine-params');
+      inputs = panel ? panel.querySelectorAll('input[type=number]') : [];
+      record('点「设置」打开参数面板', !!panel && inputs.length > 0,
+             `${inputs.length} 个输入框`);
+      const previewOf = (p) => ((p && p.querySelector('.param-preview')) || {}).textContent || '';
+      if (inputs.length) {
+        // Change it and watch the preview follow. The arithmetic is the
+        // server's, so this proves the round trip as well as the wiring.
+        const before = previewOf(panel);
+        inputs[0].value = String(Number(inputs[0].max));
+        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(900);
+        const after = previewOf(panel);
+        record('改参数后预览跟着变', !!after && after !== before,
+               `${before || '(空)'} -> ${after || '(空)'}`);
+        // Out of range must be refused with the field named, and that refusal
+        // is the server's — there is no client-side copy of the bounds.
+        inputs[0].value = '999';
+        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(900);
+        const bad = previewOf(panel);
+        record('越界参数被拒绝且点名',
+               bad.includes('边长') || bad.includes('之间'), bad);
+      }
+    }
+
+    // ── the panel survives a catalogue refresh ──
+    //
+    // `renderFleetTargets` re-fetches the catalogue when the connected set
+    // changes — exactly when somebody has just plugged a dog in and may be
+    // mid-edit. The rebuild must not shut the panel they are typing into.
+    if (panel) {
+      const typed = inputs.length ? inputs[0].value : '';
+      await fetch('/api/fleet/routines');
+      if (typeof renderFleetTargets === 'function') renderFleetTargets();
+      await sleep(1200);
+      const again = document.querySelector('.routine-params');
+      record('参数面板在刷新后还在', !!again, again ? '还在' : '被刷新关掉了');
+      const input = again ? again.querySelector('input[type=number]') : null;
+      record('刷新后参数值还在', !!input && input.value === typed,
+             `${typed} -> ${input ? input.value : '(没有输入框)'}`);
+    }
+
+    // ── the editor can load a saved routine back ──
+    const editBtn = [...document.querySelectorAll('#fleet-custom button')]
+      .find((b) => b.textContent.trim() === '编辑');
+    if (editBtn) {
+      editBtn.click();
+      await sleep(400);
+      const rows = document.querySelectorAll('#editor-steps .step-row');
+      const name = document.getElementById('editor-name').value;
+      record('编辑已保存的编排能读回步骤', rows.length > 0 && !!name,
+             `${rows.length} 步，名字「${name}」`);
+      record('步骤行有拖拽手柄',
+             !!document.querySelector('#editor-steps .grip'),
+             document.querySelectorAll('#editor-steps .grip').length + ' 个');
+    } else {
+      record('编辑已保存的编排能读回步骤', false, '没有已保存的编排可编辑');
+    }
+
     // ── keyboard reaches the state ──
     //
     // The keys are the product decision, so the test presses them at the window
@@ -267,6 +383,19 @@ def driven(tmp_path_factory):
     fleet = FleetManager(roster, backend="mock", audit_to_stderr=False)
     config = ConsoleConfig(host="127.0.0.1", port=_free_port(), deadman_s=0.5)
     service = ConsoleService(fleet, config=config)
+    # A saved routine, so the driver's 编辑 path has something to load. Without
+    # one the editor's read-back cannot be exercised at all, and "there was
+    # nothing to edit" would pass as a check.
+    service.save_routine({
+        "id": "browser_probe",
+        "label": "浏览器探针编排",
+        "steps": [
+            {"label": "站好", "tool": "robot_stand", "args": {"confirm": True},
+             "seconds": 2},
+            {"label": "打招呼", "tool": "robot_play_action",
+             "args": {"name": "hello", "confirm": True}, "seconds": 3},
+        ],
+    })
     app = create_app(service, config)
 
     from starlette.routing import Route
@@ -425,3 +554,97 @@ def test_the_driver_checked_everything_it_claims_to(driven, capsys):
         "交互之后状态还在",
     ):
         assert expected in names, f"{expected!r} did not run: {names}"
+
+
+# ─── the action bar and the editor, in a real browser ─────────────────
+
+
+def test_the_action_groups_fill_in_after_the_dogs_connect(driven):
+    """**The bug this found.**
+
+    `loadFleetActions` ran once at boot. The catalogue comes from
+    `robot_list_actions` on a *connected* robot, so at boot it is empty — and
+    nothing ever asked again, because `renderFleetTargets` only rewrote the text
+    above the buttons. Every action but the three static posture buttons was
+    missing until a page reload.
+
+    Survivable with nine actions. With thirteen more behind it, it is the whole
+    feature not working.
+    """
+    check = _checks(driven)["四组动作都填上了"]
+    assert check["ok"], check
+
+
+def test_no_button_is_icon_only(driven):
+    """Emoji render differently per platform and can be missing entirely, so an
+    icon-only button on a box without the glyph is a blank square. The icon is
+    for scanning; the label is the information."""
+    check = _checks(driven)["没有纯图标按钮"]
+    assert check["ok"], check
+
+
+def test_the_dangerous_group_starts_closed(driven):
+    """The cost of mistapping a bow and mistapping a backflip are not the same,
+    and an emergency is exactly when a flat list of twenty-five buttons gets
+    mistapped."""
+    check = _checks(driven)["高难动作默认折叠"]
+    assert check["ok"], check
+
+
+def test_the_routine_knobs_open_and_change_the_preview(driven):
+    """The whole parameter feature, through the page: the ⚙ opens a panel, a
+    number changes what the routine will do, and the arithmetic comes from the
+    server rather than from a second implementation in the browser."""
+    checks = _checks(driven)
+    assert checks["有带参数的编排（设置）"]["ok"], checks["有带参数的编排（设置）"]
+    assert checks["点「设置」打开参数面板"]["ok"], checks["点「设置」打开参数面板"]
+    assert checks["改参数后预览跟着变"]["ok"], checks["改参数后预览跟着变"]
+
+
+def test_an_out_of_range_parameter_is_refused_in_the_page(driven):
+    """There is no client-side copy of the bounds — the refusal comes from the
+    server, which is the only place that knows what the tool accepts."""
+    check = _checks(driven)["越界参数被拒绝且点名"]
+    assert check["ok"], check
+
+
+def test_a_saved_routine_can_be_loaded_back_into_the_editor(driven):
+    """**The editor's real defect.** `state.editor` was only ever assigned on
+    boot and on clear, so a saved routine could be created and never changed or
+    removed — "edit yesterday's routine" was not possible, which makes an editor
+    a one-way pipe with a form on the end."""
+    check = _checks(driven)["编辑已保存的编排能读回步骤"]
+    assert check["ok"], check
+
+
+def test_the_editor_offers_dragging_without_requiring_it(driven):
+    """Dragging is added, not substituted. The existing comment argued against
+    drag-and-drop because it is "nicer with a mouse and unusable with a keyboard
+    or a touch screen" — and that reasoning still holds, so the ↑ ↓ buttons
+    remain and this is the other path."""
+    check = _checks(driven)["步骤行有拖拽手柄"]
+    assert check["ok"], check
+
+
+def test_the_parameter_panel_survives_a_catalogue_refresh(driven):
+    """**The panel must not shut under the operator's hands.**
+
+    `renderFleetTargets` re-fetches the action and routine lists when the
+    connected set changes — which is exactly when an operator has just plugged a
+    dog in and is most likely to be mid-edit. Clearing the host would close the
+    panel and lose nothing visible, which is the worst kind of bug to be told
+    about: the numbers you typed are still on screen, they just stopped
+    mattering.
+
+    The driver refreshes the catalogue with the panel open and asserts it is
+    still there, with the value still in it.
+    """
+    check = _checks(driven)["参数面板在刷新后还在"]
+    assert check["ok"], check
+
+
+def test_the_panel_keeps_the_value_that_was_typed(driven):
+    """A panel that reopens with the default is a panel that forgot, which
+    looks the same as one that never had the value."""
+    check = _checks(driven)["刷新后参数值还在"]
+    assert check["ok"], check
