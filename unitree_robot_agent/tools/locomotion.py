@@ -187,11 +187,21 @@ def register(server, ctx: ToolContext) -> None:
     @server.tool(
         name="robot_move",
         description=(
-            "Move for a bounded time. vx (forward) / vy (left) / omega (turn) are "
-            "normalised to the robot's own limit (1.0 = full speed); positive "
-            "omega turns left. duration_s is clamped to the server's hard limit. "
-            "The call returns once the movement window has elapsed and the robot "
-            "has been told to stop."
+            "Move for a bounded time. vx (forward) / vy (left) / omega (turn); "
+            "positive omega turns left. duration_s is clamped to the server's "
+            "hard limit. The call returns once the movement window has elapsed "
+            "and the robot has been told to stop. "
+            "**UNITS ARE UNRESOLVED.** This sends Unitree's sport `Move` (1008), "
+            "whose SDK signature takes metres per second and radians per second, "
+            "while the WebRTC app protocol is widely described as taking a "
+            "normalised stick. Both readings agree at 0 and differ by the "
+            "robot's top speed — about 3.5x on a Go2 — and nothing in this "
+            "repository establishes which applies over the data channel. Values "
+            "are clamped to 1.0, which is safe either way (1 m/s, or full "
+            "speed). **If your distance matters, use robot_walk**, which drives "
+            "the joystick path and closes its loop on odometry. To settle it: "
+            "`robot_move(vx=1.0, duration_s=2)` travels about 2 m if these are "
+            "m/s and about 6-7 m if normalised."
         ),
         annotations=MOTION,
     )

@@ -95,3 +95,57 @@ def test_a_flip_is_still_marked_dangerous(actions):
     space and a soft floor, and the confirmation gate is what says so."""
     for name in ("front_flip", "back_flip", "left_flip"):
         assert actions[name].dangerous is True, name
+
+
+def test_robot_move_says_its_units_are_unresolved():
+    """**The most-used movement primitive carries a 3.5x ambiguity and the
+    project did not say so.**
+
+    `robot_move` sends Unitree's sport `Move` (1008). The SDK's signature takes
+    metres per second and radians per second; the WebRTC app protocol is widely
+    described as taking a normalised stick. Both readings agree at zero and
+    differ by the robot's top speed — about 3.5x on a Go2.
+
+    Nothing in this repository establishes which applies over the data channel:
+    the vendored library has no higher-level wrapper, the README does not say,
+    and the only statement anywhere was this tool's own docstring asserting the
+    normalised reading.
+
+    **Asserting it was the problem.** A caller who cannot tell whether `vx=0.5`
+    means half speed or half a metre per second will write code that is wrong by
+    3.5x and have nothing to check it against. The description now says so, and
+    says how to settle it in one measurement.
+    """
+    import inspect
+
+    from unitree_robot_agent.tools import locomotion
+
+    source = inspect.getsource(locomotion)
+    assert "UNITS ARE UNRESOLVED" in source, (
+        "the units ambiguity is not stated in the tool description"
+    )
+    # It has to say how to resolve it, or it is a shrug rather than a finding.
+    assert "duration_s=2" in source
+    assert "robot_walk" in source, (
+        "the description does not point at the primitive that has no ambiguity"
+    )
+
+
+def test_the_formation_says_it_depends_on_that_reading():
+    """The dependence has to be visible where it bites.
+
+    `DogMove.move_args` converts a speed in metres per second into a fraction of
+    the robot's maximum — an assumption about the same ambiguity. If the reading
+    is wrong, the correction travels about three times slower than its duration
+    expects and the loop reports `no_progress`, **which is what a units bug looks
+    like from the outside.**
+    """
+    import inspect
+
+    from unitree_fleet_web import formation
+
+    source = inspect.getsource(formation.DogMove.move_args)
+    assert "unresolved assumption" in source
+    assert "no_progress" in source, (
+        "the docstring does not say what the operator would actually see"
+    )

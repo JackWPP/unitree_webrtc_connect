@@ -187,7 +187,21 @@ class DogMove:
         The right way round:
           * **duration** = distance / the speed corrections travel at.
           * **vx/vy** = that speed as a fraction of the robot's maximum, which
-            is what `robot_move` actually takes.
+            is what `robot_move` is *documented* to take.
+
+        **And that documentation is an unresolved assumption.** Unitree's sport
+        `Move` takes metres per second in the SDK; the WebRTC protocol is
+        described as taking a normalised stick. This function assumes the
+        second, so if the first is true on this link then `vx = 0.4` means
+        0.4 m/s rather than 40% of maximum, the correction travels about three
+        times slower than its duration expects, and this loop reports
+        `no_progress` and stops — **which is exactly what a units bug looks like
+        from the outside.** `residual_m` and the step history would show the
+        correction shrinking far too slowly, and nothing would say why.
+
+        The forward correction prefers `robot_walk` now, which uses the joystick
+        path and has no such ambiguity; this affects the lateral and turning
+        shares. See `docs/OPEN_QUESTIONS.md` A5.
 
         `max_speed_mps` is the guess. The loop re-measures, so a wrong value
         makes the correction overshoot or undershoot by a constant factor and
