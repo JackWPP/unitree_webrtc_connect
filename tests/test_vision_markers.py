@@ -285,3 +285,84 @@ def test_the_manifest_is_json_and_round_trips(tmp_path):
     write_markers(tmp_path, default_markers(["dog1"]))
     raw = json.loads((tmp_path / "markers.json").read_text(encoding="utf-8"))
     assert raw["markers"][0]["size_m"] == DEFAULT_SIZE_M
+
+
+# ─── will this camera read a tag this size ────────────────────────────
+
+
+def test_the_legibility_calculator_counts_the_inset():
+    """**The parameter the earlier guidance did not have.**
+
+    The arena does not fill the frame: the operator clicks its four corners
+    *inside* the picture, and the panel's own default targets span about 80% of
+    the width. Dividing frame width by arena size treats the arena as
+    edge-to-edge and overstates the resolution by the reciprocal of the
+    fraction.
+
+    Measured against the test simulation, which carried the same mistake in a
+    comment: it claimed 400 px/m (1600 ÷ 4 m) and is actually 320 (1280 px of
+    clicked corners ÷ 4 m). **25% optimistic, in the direction that makes a rig
+    look like it will work.**
+    """
+    from unitree_robot_agent.vision.markers import legibility
+
+    edge_to_edge = legibility(
+        width_px=1600, arena_width_m=4.0, tag_size_m=0.30, arena_fraction=1.0
+    )
+    inset = legibility(width_px=1600, arena_width_m=4.0, tag_size_m=0.30)
+    assert inset["pixels_per_metre"] == pytest.approx(320.0, abs=1)
+    assert edge_to_edge["pixels_per_metre"] == pytest.approx(400.0, abs=1)
+    # The wrong version is the flattering one.
+    assert edge_to_edge["tag_px"] > inset["tag_px"]
+
+
+def test_the_default_tag_does_not_clear_a_1080p_camera_over_four_metres():
+    """**The number that was wrong in the documentation.**
+
+    The table said "1080p ✅ 刚够". It is 58 px against a 64 px floor — **not
+    enough**, and the correction matters because the project ships a 150 mm tag
+    as its default and a Go2's back will not take a 300 mm one.
+    """
+    from unitree_robot_agent.vision.markers import legibility
+
+    measured = {
+        (1280, "720p"): False,
+        (1920, "1080p"): False,
+        (2560, "1440p"): True,
+        (3840, "4K"): True,
+    }
+    for (width, name), expected in measured.items():
+        result = legibility(width_px=width, arena_width_m=4.0, tag_size_m=0.15)
+        assert result["ok"] is expected, f"{name}: {result}"
+
+    # And the three ways out, computed rather than described.
+    poor = legibility(width_px=1920, arena_width_m=4.0, tag_size_m=0.15)
+    assert poor["min_tag_m"] == pytest.approx(0.167, abs=0.005)
+    assert 2100 <= poor["min_width_px"] <= 2200
+    assert poor["max_arena_m"] == pytest.approx(3.6, abs=0.1)
+    assert "167mm" in poor["note"], poor["note"]
+
+
+def test_a_bigger_tag_rescues_the_720p_case():
+    """The other direction, so the calculator is not just saying no."""
+    from unitree_robot_agent.vision.markers import legibility
+
+    assert legibility(
+        width_px=1280, arena_width_m=4.0, tag_size_m=0.15
+    )["ok"] is False
+    assert legibility(
+        width_px=1280, arena_width_m=4.0, tag_size_m=0.30
+    )["ok"] is True
+
+
+def test_the_calculator_refuses_nonsense_instead_of_dividing_by_zero():
+    from unitree_robot_agent.vision.markers import legibility
+
+    for kwargs in (
+        {"width_px": 0, "arena_width_m": 4.0, "tag_size_m": 0.15},
+        {"width_px": 1920, "arena_width_m": 0.0, "tag_size_m": 0.15},
+        {"width_px": 1920, "arena_width_m": 4.0, "tag_size_m": 0.0},
+    ):
+        result = legibility(**kwargs)
+        assert result["ok"] is False
+        assert "正数" in result["reason"]

@@ -59,16 +59,18 @@ def render(poses, *, size: int = 1600, tag_size_m: float = 0.30):
     was drawn and not the area it covered, and a test that thought it was
     creating tiny tags measured 95.9 px ones.
 
-    Why 0.30 m rather than the 0.15 m a Go2 actually wears: at this camera's
-    resolution (1600 px across a 4 m arena, 400 px/m) a **150 mm tag is 60 px**,
-    under the 64 px floor the detector needs to trust a tag's *id*. So the
-    simulation draws tags big enough to be legible at its own resolution, and
-    the sub-floor case is a test that asks for it.
+    Why 0.30 m rather than the 0.15 m a Go2 actually wears: this camera resolves
+    **320 px/m** — the calibration corners span 1280 px over 4 m, not the frame's
+    1600 — so a 150 mm tag is **48 px**, under the 64 px floor the detector needs
+    to trust a tag's *id*. The simulation therefore draws tags big enough to be
+    legible at its own resolution, and the sub-floor case is a test that asks for
+    one.
 
-    The number this yields for a real session is worth carrying: 64 px for a
-    150 mm tag is about **430 px/m**, which over a 4 m arena means a camera
-    wider than 1700 px — a 1080p camera at four metres just clears it, and a
-    150 mm tag on a 720p camera does not. See `docs/OPEN_QUESTIONS.md`.
+    **An earlier version of this comment said 400 px/m** — the frame width
+    divided by the arena size, which treats the arena as edge-to-edge when the
+    operator clicks its corners *inside* the picture. 25% optimistic, in the
+    direction that makes a rig look like it will work. Use
+    `markers.legibility()` for the real arithmetic.
     """
     frame = np.full((size, size), 255, dtype=np.uint8)
     inverse = np.linalg.inv(cv2.getPerspectiveTransform(

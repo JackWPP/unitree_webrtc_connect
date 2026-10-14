@@ -142,6 +142,22 @@ def main() -> int:
     parser.add_argument("--simulate", metavar="OUT", help="a synthetic arena, read back")
     parser.add_argument("--frame", metavar="IMAGE", help="read a real photo")
     parser.add_argument("--json", action="store_true")
+    # The one question that has to be answered **before printing**, and the one
+    # the earlier guidance got wrong by dividing the frame width by the arena
+    # size — which treats the arena as edge-to-edge when the operator clicks its
+    # corners inside the picture.
+    parser.add_argument("--legibility", action="store_true",
+                        help="will this camera read a tag this size? give "
+                             "--width-px, --arena and --tag-mm")
+    parser.add_argument("--width-px", type=int, default=1920,
+                        help="camera frame width in pixels (default 1920)")
+    parser.add_argument("--arena", type=float, default=4.0,
+                        help="arena width in metres (default 4)")
+    parser.add_argument("--tag-mm", type=float, default=150.0,
+                        help="printed tag size in millimetres (default 150)")
+    parser.add_argument("--arena-fraction", type=float, default=0.8,
+                        help="how much of the frame width the arena fills "
+                             "(default 0.8; the panel's own click targets)")
     args = parser.parse_args()
 
     if args.markers:
@@ -160,6 +176,30 @@ def main() -> int:
         plan = render_calibration_targets(DEMO_CORNERS_WORLD)
         cv2.imwrite(args.plan, plan)
         print(f"标定图写到 {args.plan} —— 四个点要按编号顺序量，顺序错了会得到镜像的场地")
+        return 0
+
+    if args.legibility:
+        from unitree_robot_agent.vision.markers import legibility
+
+        result = legibility(
+            width_px=args.width_px,
+            arena_width_m=args.arena,
+            tag_size_m=args.tag_mm / 1000.0,
+            arena_fraction=args.arena_fraction,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            mark = "✅" if result["ok"] else "❌"
+            print(f"{mark} {result['note']}")
+            print(f"   {args.width_px}px 相机 · {args.arena} m 场地 · "
+                  f"{args.tag_mm:.0f}mm 标签 · 场地占画面 {args.arena_fraction:.0%}")
+            print(f"   → {result['pixels_per_metre']:.0f} px/m，标签 {result['tag_px']:.0f} px"
+                  f"（需要 {result['needed_px']:.0f}）")
+            if not result["ok"]:
+                print(f"   标签打到 {result['min_tag_m'] * 1000:.0f}mm 以上，"
+                      f"或相机 {result['min_width_px']}px 以上，"
+                      f"或场地收到 {result['max_arena_m']} m 以内")
         return 0
 
     if args.simulate:

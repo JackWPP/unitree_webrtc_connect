@@ -385,6 +385,68 @@ def pixels_per_metre_for(width_px: int, distance_m: float, hfov_deg: float) -> f
     return width_px / arena_width_m
 
 
+def legibility(
+    *,
+    width_px: int,
+    arena_width_m: float,
+    tag_size_m: float,
+    arena_fraction: float = 0.8,
+) -> Dict[str, Any]:
+    """Will this camera read a tag this size across an arena this wide?
+
+    **`arena_fraction` is the parameter the earlier arithmetic did not have, and
+    leaving it out made every number optimistic.** The arena does not fill the
+    frame: the operator clicks its four corners *inside* the picture, and the
+    panel's own default targets span about 80% of the width. Dividing the frame
+    width by the arena size — which is what the first version of this guidance
+    did — treats the arena as edge-to-edge and overstates the resolution by the
+    reciprocal of the fraction.
+
+    Measured against the test simulation, which had the same mistake in a
+    comment: it claimed 400 px/m (1600 px ÷ 4 m) and is actually 320 (1280 px of
+    clicked corners ÷ 4 m). **25% optimistic, in the direction that makes a rig
+    look like it will work.**
+
+    Returns the numbers *and* the three ways out, because a verdict alone does
+    not tell an operator whether to print bigger, move the camera, or shrink the
+    arena — and those cost very different amounts.
+    """
+    if width_px <= 0 or arena_width_m <= 0 or tag_size_m <= 0:
+        return {"ok": False, "reason": "宽度、场地和标签都必须是正数"}
+
+    needed = MIN_PX_PER_CELL * CELLS_ACROSS
+    across_px = width_px * max(0.0, min(1.0, arena_fraction))
+    per_metre = across_px / arena_width_m
+    tag_px = tag_size_m * per_metre
+
+    return {
+        "ok": tag_px >= needed,
+        "pixels_per_metre": round(per_metre, 1),
+        "tag_px": round(tag_px, 1),
+        "needed_px": needed,
+        "arena_fraction": arena_fraction,
+        # The three fixes, each computed rather than described.
+        "min_tag_m": round(needed / per_metre, 3) if per_metre > 0 else None,
+        "min_width_px": int(
+            math.ceil(needed * arena_width_m / (tag_size_m * max(arena_fraction, 1e-6)))
+        ),
+        "max_arena_m": round(
+            across_px * tag_size_m / needed, 2
+        ) if needed > 0 else None,
+        "note": (
+            f"{tag_size_m * 1000:.0f}mm 的标签在这个设置下是 {tag_px:.0f}px，"
+            f"需要 {needed:.0f}px。"
+            + (
+                "够用。"
+                if tag_px >= needed
+                else f"要么把标签打到 {needed / per_metre * 1000:.0f}mm 以上，"
+                     f"要么用 {int(math.ceil(needed * arena_width_m / (tag_size_m * max(arena_fraction, 1e-6))))}px 以上的相机，"
+                     f"要么把场地收到 {across_px * tag_size_m / needed:.1f} 米以内。"
+            )
+        ),
+    }
+
+
 def pixel_budget(marker: Marker, *, pixels_per_metre: float) -> Dict[str, Any]:
     """The arithmetic, exposed so a session can check it before printing.
 
