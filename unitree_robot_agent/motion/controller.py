@@ -408,6 +408,10 @@ class MotionController:
         # the wire as `ly=5`, which the robot clamps or refuses depending on the
         # firmware — neither of which is a thing to find out from a moving dog.
         speed = max(-1.0, min(1.0, speed))
+        # The same ramp `drive` will use, so the timing and the profile agree.
+        accel = float(
+            getattr(self.config, "motion_accel", DEFAULT_ACCEL) or DEFAULT_ACCEL
+        )
         fraction = float(
             arrival if arrival is not None
             else getattr(self.config, "arrival_fraction", 0.85)
@@ -426,16 +430,44 @@ class MotionController:
             # `speed` is a joystick magnitude in [-1, 1]; a full-scale stick is
             # `speed / 1.0` times faster than the timing assumes, and the size of
             # that error is the robot's top speed in metres per second.
-            reach = max(0.05, min(1.0, abs(speed))) * NOMINAL_FULL_STICK_MPS
+            stick = max(0.05, min(1.0, abs(speed)))
+            reach = stick * NOMINAL_FULL_STICK_MPS
+
+            # **And the duration has to allow for the ramp.** `drive` applies a
+            # symmetric profile from 0 up and back to 0, so the *mean* stick over
+            # the move is not the peak — it is about half of it for the durations
+            # involved here. Timing `metres / reach` as though the stick were
+            # constant made the robot travel about half as far as asked:
+            # measured 0.175 m for a 0.35 m request, 0.50 m for 1.0 m.
+            #
+            # `TrapezoidProfile.travel()` is the integral, in peak-scaled
+            # seconds, and it is what the distance actually comes from. The
+            # relation is monotonic, so a couple of scalings land on it.
             seconds = abs(target_m) / reach
+            for _ in range(4):
+                profile = TrapezoidProfile(peak=1.0, duration=seconds, accel=accel)
+                covered = profile.travel() or 0.0
+                if covered <= 1e-9:
+                    break
+                # `covered` is in peak-scaled seconds; the distance it covers is
+                # `covered × reach`.
+                wanted = abs(target_m) / reach
+                if abs(covered - wanted) <= 0.02 * max(wanted, 1e-6):
+                    break
+                seconds = max(0.05, seconds * (wanted / covered))
+
             result = await self.drive(
-                ly=math.copysign(min(1.0, abs(speed)), target_m), duration=seconds
+                ly=math.copysign(stick, target_m), duration=seconds
             )
             return {
                 "ok": bool(result.get("ok", True)),
                 "reason": "no_odometry",
                 "requested_m": round(target_m, 3),
-                "stick": round(min(1.0, abs(speed)), 3),
+                "stick": round(stick, 3),
+                "profile_travel": round(
+                    TrapezoidProfile(peak=1.0, duration=seconds, accel=accel).travel(),
+                    3,
+                ),
                 "note": (
                     "机器人没有发布里程计，所以**速度和距离都是猜的**："
                     f"按满杆 {NOMINAL_FULL_STICK_MPS:g} m/s、杆量 {min(1.0, abs(speed)):.2f} "

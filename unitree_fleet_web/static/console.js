@@ -2125,6 +2125,26 @@ function renderArena(arena) {
   // `DICT_APRILTAG_36h11` decode to each other under blur, which puts one dog's
   // position on the other. The map looks completely normal in that state, so
   // the warning has to be on the map.
+  // **Which tag belongs to which robot, and whether it was guessed.**
+  //
+  // The console derives tag→robot from roster order when no manifest is
+  // configured, and a roster listing dog2 first attributes every pose to the
+  // other dog — positions, headings and the separation all look plausible. The
+  // warning about that existed on the server and no page code read it, so a
+  // guessed mapping looked exactly like a printed one.
+  if (arena.marker_source && arena.marker_source !== 'manifest') {
+    const guess = document.createElement('span');
+    guess.className = 'pair warn';
+    guess.textContent = `⚠️ 标签对应关系是猜的（按名单顺序）：${arena.marker_note || ''}`;
+    legend.appendChild(guess);
+  } else if (arena.marker_note) {
+    // A manifest is in force and disagrees with the roster.
+    const clash = document.createElement('span');
+    clash.className = 'pair warn';
+    clash.textContent = `⚠️ ${arena.marker_note}`;
+    legend.appendChild(clash);
+  }
+
   if (arena.illegible && arena.illegible.length) {
     const warn = document.createElement('span');
     warn.className = 'pair warn';

@@ -177,14 +177,49 @@ def test_the_timed_fallback_is_not_a_sprint():
     control = controller(session)
     result = asyncio.run(control.forward_m(0.35, speed=0.28))
 
-    # Stick-seconds of command: the integral the robot actually receives. With
-    # the fix this is a fraction of the old 0.624, which was full-scale.
-    integral = sum(abs(ly) for _lx, ly, _rx in session.published) * (1.0 / 50.0)
-    assert integral < 0.35, (
-        f"{integral:.3f} stick-seconds for a 0.35 m shuffle at 0.28 stick — the "
-        f"full-scale version measured 0.624, which is 0.87 m at 1.4 m/s"
-    )
     assert result["stick"] == pytest.approx(0.28, abs=0.01)
+
+    # **The distance the profile will actually cover**, which is the number that
+    # matters. The first version of this test asserted an upper bound on
+    # stick-seconds and used 1/50 for the tick when `TICK` is 1/20 — so it was
+    # both loose and miscalibrated, and it passed while the fallback delivered
+    # *half* the requested distance: `drive` ramps 0 up and back to 0, so the
+    # mean stick is not the peak, and timing `metres / reach` as though it were
+    # constant under-travelled by about 2×.
+    from unitree_robot_agent.motion.controller import TICK
+
+    integral = sum(abs(ly) for _lx, ly, _rx in session.published) * TICK
+    covered = integral * 3.0        # NOMINAL_FULL_STICK_MPS
+    assert covered == pytest.approx(0.35, rel=0.25), (
+        f"the timed fallback covers about {covered:.2f} m for a 0.35 m request; "
+        f"it should err short rather than long, but not by half"
+    )
+    # Short is the safe direction on a robot; long is not.
+    assert covered <= 0.40, covered
+
+
+def test_the_fallback_allows_for_its_own_ramp():
+    """**The arithmetic that was wrong.** `seconds = metres / reach` treats the
+    stick as constant, but `drive` applies a symmetric profile whose mean is
+    about half its peak over these durations.
+
+    Measured before the fix: 0.175 m delivered for a 0.35 m request, 0.50 m for
+    1.0 m. After: 0.35 m and 0.92 m.
+    """
+    for meters, speed, tolerance in ((0.35, 0.28, 0.10), (1.0, 0.28, 0.20),
+                                     (0.2, 0.5, 0.06)):
+        control = controller(FakeSession(topic=False))
+        result = asyncio.run(control.forward_m(meters, speed=speed))
+
+        stick = result["stick"]
+        travel = result["profile_travel"]
+        covered = travel * stick * 3.0
+
+        assert covered == pytest.approx(meters, abs=tolerance), (
+            f"asked for {meters} m, the profile will cover about {covered:.2f} m"
+        )
+        # The profile the response describes must be the one that runs.
+        assert result["timed_s"] > 0
 
 
 def test_a_measured_walk_stops_when_it_has_gone_far_enough():

@@ -859,3 +859,51 @@ def test_equal_heights_are_also_refused(tmp_path):
             "camera_height_m": 2.5,
         })
     assert response.status_code == 400, response.text
+
+
+def test_the_arena_state_says_which_mapping_is_in_force(tmp_path):
+    """**A warning nobody reads is not a warning.**
+
+    `_marker_manifest()` was produced, used by the detector, and exposed on
+    `/api/fleet` — and no page code read it. So a console deriving tag→robot
+    from roster order, and therefore attributing every pose to the other dog,
+    looked exactly like one reading the printed sheet.
+    """
+    import json as _json
+
+    service = _console(
+        tmp_path,
+        [{"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+         {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"}],
+    )
+    state = service.arena_state()
+    assert state["marker_source"] == "roster"
+    assert "按名单顺序" in state["marker_note"]
+
+    manifest = tmp_path / "markers.json"
+    manifest.write_text(_json.dumps({
+        "family": "DICT_APRILTAG_36h11",
+        "markers": [
+            {"tag_id": 0, "robot_id": "dog1", "size_m": 0.15},
+            {"tag_id": 1, "robot_id": "dog2", "size_m": 0.15},
+        ],
+    }), encoding="utf-8")
+
+    configured = _console(
+        tmp_path,
+        [{"id": "dog1", "model": "Go2", "ip": "192.168.31.245", "sn": "A"},
+         {"id": "dog2", "model": "Go2", "ip": "192.168.31.246", "sn": "B"}],
+        manifest=str(manifest),
+    )
+    state = configured.arena_state()
+    assert state["marker_source"] == "manifest"
+    # No complaint when the sheet and the roster agree.
+    assert not state["marker_note"]
+
+
+def test_the_page_shows_the_mapping_warning(open_client):
+    """The map is where an operator looks, so the map is where it says so."""
+    source = open_client.get("/static/console.js").text
+    assert "arena.marker_source" in source
+    assert "按名单顺序" in source
+    assert "arena.marker_note" in source

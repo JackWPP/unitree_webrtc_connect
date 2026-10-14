@@ -1877,8 +1877,31 @@ class ConsoleService:
         operator, and one empty picture answers none of them.
         """
         camera = self._camera
+        # **Which tag belongs to which robot, computed before the early return.**
+        #
+        # It is a property of the printed sheet and the roster, not of whether a
+        # frame arrived — and a console with the camera off still deserves to
+        # know its mapping was guessed at. It was produced and exposed on
+        # `/api/fleet` and read by nothing, so a console deriving tag→robot from
+        # roster order, and therefore attributing every pose to the other dog,
+        # looked exactly like one reading the printed sheet.
+        manifest = self._marker_manifest()
+        mapping = {
+            "marker_source": manifest.get("source", "roster"),
+            "marker_note": (
+                manifest.get("note")
+                if manifest.get("source") != "manifest" or manifest.get("note")
+                else ""
+            ),
+        }
         if camera is None:
-            return {"state": "off", "detail": self._arena_error, "poses": {}, "missing": []}
+            return {
+                "state": "off",
+                "detail": self._arena_error,
+                "poses": {},
+                "missing": [],
+                **mapping,
+            }
 
         status = camera.status()
         out = {
@@ -1930,11 +1953,15 @@ class ConsoleService:
         illegible = sorted(
             name for name, pose in poses.items() if pose.get("legible") is False
         )
+        # **Which tag→robot mapping is in force, and whether it was guessed.**
+        #
+        # The mapping was computed above, before the early return.
         return {
             **out,
             **self._arena,
             "separation": gap,
             "illegible": illegible,
+            **mapping,
         }
 
     @staticmethod
