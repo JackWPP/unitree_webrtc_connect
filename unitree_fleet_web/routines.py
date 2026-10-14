@@ -23,9 +23,34 @@ matter on real hardware:
 
 One more thing the original got right by accident and is deliberate here: a
 routine is a *sequence*, so it needs a notion of "the previous step finished".
-It uses declared durations rather than waiting for the robot, because none of
-these actions reports completion — and pretending otherwise would be worse than
-a timing table that is honest about being one.
+It uses declared durations rather than waiting for the robot — and pretending
+otherwise would be worse than a timing table that is honest about being one.
+
+**But the premise of that sentence is wrong for the three primitives that matter,
+and that is worth more than the sentence.** It said "none of these actions
+reports completion". Measured, twice and independently:
+
+    robot_walk   → motion.forward_m()  closed loop on odometry, awaits until done
+    robot_turn   → motion.turn()       closed loop on the IMU,  awaits until done
+    robot_move   → _go2_move()         sleeps out its own duration
+
+All three **block until the motion is over**, so `seconds` is stacked *on top of*
+an already-finished call. Timed on the mock: `robot_walk(0.4 m)` returns after
+**1.59 s** but the shipped square waits 2.0 s after it; `robot_turn(-90°)`
+returns after **4.73 s** and the square waits 6.0 s. Of 走正方形's declared 34 s,
+**32 s is dead standing-still time**, about 16 s of it pure padding per lap.
+
+It is not only waste. The padding is a **hand-typed integer with no source** —
+真机上是 4.73 s 还是 5.1 s 取决于地面 — so the routine is slower than it says,
+and the "9步/34s" on the button is an under-promise.
+
+The other class is genuinely fire-and-forget: `robot_play_action` returns in
+**0.01 s** and the dance keeps going, so there `seconds` is the *only* timing
+there is. **One field, two meanings.** Distinguishing them is the change worth
+making: a `BLOCKING_TOOLS` table, `seconds=None` meaning "this step waits for
+itself", and a total that says what it can actually compute.
+
+See `docs/visual_editing_research.md` for the editor question this sits inside.
 """
 
 from __future__ import annotations
