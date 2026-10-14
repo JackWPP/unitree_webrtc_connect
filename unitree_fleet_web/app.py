@@ -478,8 +478,25 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
     async def post_routine_start(request) -> Response:
         body = await _read_body(request)
         routine_id = str((body or {}).get("id") or "")
+        params = (body or {}).get("params")
         try:
-            return JSONResponse(await service.start_routine(routine_id))
+            return JSONResponse(await service.start_routine(routine_id, params))
+        except Exception as exc:  # noqa: BLE001
+            return _error_response(exc)
+
+    async def post_routine_preview(request) -> Response:
+        """What the routine would do, without doing it.
+
+        The page shows the step list and the total time before the operator
+        commits, and it needs them for the parameters currently typed in — so
+        this is called on every keystroke (debounced). It touches no robot.
+        """
+        body = await _read_body(request)
+        routine_id = str((body or {}).get("id") or "")
+        try:
+            return JSONResponse(
+                service.preview_routine(routine_id, (body or {}).get("params"))
+            )
         except Exception as exc:  # noqa: BLE001
             return _error_response(exc)
 
@@ -609,6 +626,7 @@ def create_app(service: ConsoleService, config: Optional[ConsoleConfig] = None) 
         Route("/api/fleet/actions", get_fleet_actions),
         Route("/api/fleet/routines", get_routines),
         Route("/api/fleet/routine", post_routine_start, methods=["POST"]),
+        Route("/api/fleet/routine/preview", post_routine_preview, methods=["POST"]),
         Route("/api/fleet/routine/stop", post_routine_stop, methods=["POST"]),
         Route("/api/fleet/routine/insert", post_routine_insert, methods=["POST"]),
         Route("/api/fleet/sync", post_sync_mark, methods=["POST"]),

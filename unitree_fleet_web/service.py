@@ -627,6 +627,62 @@ class ConsoleService:
 
     # ── routine documents ────────────────────────────────────────────
 
+    def _routine_with_params(self, routine, params: Optional[Dict[str, Any]]):
+        """Apply the operator's parameter values, or refuse with the field named.
+
+        The validation itself lives on ``Routine.with_params`` so that the
+        preview and the run go through **the same code** — a preview built by one
+        path and a run by another is a preview of something else.
+
+        A ``ValueError`` from there is the operator's mistake, not the server's,
+        so it becomes a typed refusal rather than the 500 the error mapper would
+        otherwise produce.
+        """
+        if not params:
+            return routine
+        try:
+            return routine.with_params(params)
+        except ValueError as exc:
+            raise AgentError(
+                str(exc),
+                code="bad_routine_params",
+                hint="每个参数都要在它自己的范围内。GET /api/fleet/routines 里有范围和单位。",
+            ) from exc
+
+    def preview_routine(
+        self, routine_id: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """What this routine would do, without doing it.
+
+        The page shows the step list and the total time before the operator
+        commits, and it needs them **for the parameters currently in the boxes**
+        — 0.8 m sides is a different routine from 0.4 m ones.
+
+        **The arithmetic deliberately happens here and not in the browser.**
+        Computing "parameters → steps" in two places is two implementations of
+        one fact, and they drift: this project has already shipped a parallax
+        formula that disagreed with its own scale factor ten lines away, and a
+        `converged()` that disagreed with the `plan()` it was gating. A preview
+        is a pure function that touches no robot, so it is cheap to serve.
+        """
+        routine = self._resolve_routine(routine_id)
+        if routine is None:
+            raise AgentError(
+                f"没有名为 {routine_id!r} 的编排。",
+                code="unknown_routine",
+                hint="GET /api/fleet/routines 列出可用的编排。",
+            )
+        built = self._routine_with_params(routine, params)
+        return {
+            "id": built.id,
+            "label": built.label,
+            "steps": [step.as_dict() for step in built.steps],
+            "total": len(built.steps),
+            "seconds": round(built.seconds, 1),
+            "loop": built.loop,
+            "needs_dangerous": built.needs_dangerous,
+        }
+
     def _resolve_routine(self, routine_id: str):
         """A built-in first, then the operator's own. None if neither.
 
@@ -737,13 +793,19 @@ class ConsoleService:
 
     # ── routines ─────────────────────────────────────────────────────
 
-    async def start_routine(self, routine_id: str) -> Dict[str, Any]:
+    async def start_routine(
+        self, routine_id: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Run a sequence of steps against the whole fleet.
 
         The one control in this console that keeps sending commands after the
         operator has taken their hands off the keyboard, so it is also the one
         that most needs to be stoppable. Three things abort it: the stop button,
         a latched e-stop, and the console closing.
+
+        ``params`` are the operator's values for whatever knobs this routine
+        declares, validated here rather than in the page — see
+        ``Routine.with_params``.
         """
         routine = self._resolve_routine(routine_id)
         if routine is None:
@@ -752,6 +814,7 @@ class ConsoleService:
                 code="unknown_routine",
                 hint="GET /api/fleet/routines 列出可用的编排。",
             )
+        routine = self._routine_with_params(routine, params)
 
         if self._routine_task is not None and not self._routine_task.done():
             raise AgentError(
@@ -1073,28 +1136,71 @@ class ConsoleService:
             })
 
         named: List[Dict[str, Any]] = []
+        hard: List[Dict[str, Any]] = []
         if targets and "robot_list_actions" in self.tools_available:
             try:
-                from .controls import action_label
-
-                listed = await self.call_tool(
-                    targets[0], "robot_list_actions", {"include_dangerous": False}
+                from .controls import (
+                    _GO2_HARD_ACTIONS,
+                    _GO2_NEEDS_SPACE,
+                    _GO2_SAFE_ACTIONS,
+                    action_label,
                 )
-                for row in (listed or {}).get("actions") or []:
-                    name = row.get("name")
-                    if not name:
+
+                # **Ask without the dangerous filter.** `include_dangerous=False`
+                # was hiding thirteen reachable actions — dances, the handstand,
+                # four step moves and four flips — behind a console that simply
+                # did not offer them. They have always run: `allow_dangerous`
+                # defaults to true. The gate that matters is the group they land
+                # in, not whether they are listed.
+                listed = await self.call_tool(
+                    targets[0], "robot_list_actions", {"include_dangerous": True}
+                )
+                labels = {
+                    row.get("name"): row.get("description") or ""
+                    for row in (listed or {}).get("actions") or []
+                    if row.get("name")
+                }
+                # The dangerous ones, in the console's own risk order rather
+                # than the catalogue's.
+                for name, label in _GO2_HARD_ACTIONS:
+                    if name not in labels:
+                        # This firmware does not have it. The catalogue in
+                        # `robots/go2.py` is a superset — an MCF or older build
+                        # may not carry every flip.
+                        continue
+                    hard.append({
+                        "id": f"action_{name}", "tool": "robot_play_action",
+                        "args": {"name": name, "confirm": True},
+                        "label": label,
+                        "key": name,
+                        "needs_space": name in _GO2_NEEDS_SPACE,
+                        "title": labels.get(name) or f"所有狗一起执行 {name}",
+                    })
+
+                hard_names = {name for name, _label in _GO2_HARD_ACTIONS}
+                safe_names = [name for name, _label in _GO2_SAFE_ACTIONS]
+                # **In the console's order, not the catalogue's.** `labels` comes
+                # back dict-ordered by the robot's own table, so the buttons
+                # would shuffle between page loads — and a control surface whose
+                # buttons move is one you have to read every time instead of
+                # reaching for.
+                ordered = [n for n in safe_names if n in labels] + [
+                    n for n in labels if n not in hard_names and n not in safe_names
+                ]
+                for name in ordered:
+                    if name in hard_names:
                         continue
                     # The catalogue descriptions are English debug text
                     # ("Wave hello (1016)."). On a button that is noise, and it
                     # would not match what the per-dog picker calls the same
                     # action — so both go through one label table.
-                    label = action_label(name)
                     named.append({
                         "id": f"action_{name}", "tool": "robot_play_action",
                         "args": {"name": name, "confirm": True},
-                        "label": label,
+                        "label": action_label(name),
                         "key": name,
-                        "title": row.get("description") or f"所有狗一起执行 {name}",
+                        "needs_space": name in _GO2_NEEDS_SPACE,
+                        "title": labels[name] or f"所有狗一起执行 {name}",
                     })
             except Exception as exc:  # noqa: BLE001 - an empty bar beats a broken page
                 logger.info("fleet actions: catalogue unavailable (%r)", exc)
@@ -1104,6 +1210,7 @@ class ConsoleService:
             "skipped": [rid for rid in self.fleet.ids if rid not in targets],
             "posture": actions,
             "named": named,
+            "hard": hard,
         }
 
     # ── the velocity ramp ────────────────────────────────────────────

@@ -31,7 +31,63 @@ a timing table that is honest about being one.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+
+@dataclass(frozen=True)
+class Param:
+    """One knob on a routine, declared rather than hardcoded.
+
+    ``走正方形`` walked a fixed 0.4 m leg because the number was a literal in
+    this file. The operator who wants a bigger square had no way to say so, and
+    the one who wants a smaller one — indoors, with two dogs in a room — had no
+    way either.
+
+    Declared here rather than in the page for the same reason the step
+    durations are: **a routine is a commitment of time and motion, and the
+    operator should see both before pressing it.** The page renders these; it
+    does not invent them.
+    """
+
+    key: str
+    label: str
+    default: float
+    minimum: float
+    maximum: float
+    step: float = 0.1
+    unit: str = ""
+
+    def clamp(self, value: Any) -> float:
+        """Coerce and bound one value, refusing rather than guessing.
+
+        Raises ``ValueError`` naming the field, because a dataclass does not
+        type-check: `Formation(distance_m="far")` was accepted without complaint
+        in this project once and blew up inside a loop seconds later, with an
+        error that said nothing about the form the operator had filled in.
+        """
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{self.label}（{self.key}）要一个数字，收到 {value!r}") from None
+        if number != number or number in (float("inf"), float("-inf")):
+            raise ValueError(f"{self.label}（{self.key}）不是有限数")
+        if number < self.minimum or number > self.maximum:
+            raise ValueError(
+                f"{self.label}（{self.key}）要在 {self.minimum:g} 到 "
+                f"{self.maximum:g}{self.unit} 之间，收到 {number:g}"
+            )
+        return number
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "default": self.default,
+            "min": self.minimum,
+            "max": self.maximum,
+            "step": self.step,
+            "unit": self.unit,
+        }
 
 
 #: How many dogs must succeed for a step to count as done.
@@ -91,6 +147,55 @@ class Routine:
     steps: Tuple[Step, ...]
     #: Repeat until stopped, or run once and finish.
     loop: bool = False
+    #: Knobs the operator can turn. Empty for a routine that is what it is.
+    params: Tuple[Param, ...] = ()
+    #: ``params -> steps``. Required whenever ``params`` is non-empty.
+    #:
+    #: ``steps`` stays populated with the **default** build, so the catalogue,
+    #: the tests and every existing caller keep working unchanged — the
+    #: parameterised version is the same routine with different numbers, not a
+    #: different kind of object.
+    build: Optional[Callable[[Dict[str, float]], Tuple[Step, ...]]] = None
+
+    def with_params(self, raw: Optional[Dict[str, Any]] = None) -> "Routine":
+        """This routine with the operator's values applied.
+
+        Unknown keys are refused rather than ignored: a page sending
+        ``leg_m`` to a routine that takes ``side_m`` has a typo, and silently
+        using the default would look like the setting had no effect — which is
+        exactly how a UI bug survives a session.
+        """
+        if not self.params:
+            if raw:
+                raise ValueError(
+                    f"「{self.label}」不接受参数，但收到了 {sorted(raw)}"
+                )
+            return self
+        if self.build is None:  # pragma: no cover - a construction mistake
+            raise ValueError(f"「{self.label}」声明了参数却没有构建函数")
+
+        supplied = dict(raw or {})
+        known = {param.key for param in self.params}
+        unknown = sorted(set(supplied) - known)
+        if unknown:
+            raise ValueError(
+                f"「{self.label}」不认识参数 {unknown}；可用的有 {sorted(known)}"
+            )
+
+        values: Dict[str, float] = {}
+        for param in self.params:
+            values[param.key] = (
+                param.default if param.key not in supplied
+                else param.clamp(supplied[param.key])
+            )
+
+        steps = self.build(values)
+        if not steps:
+            raise ValueError(f"「{self.label}」用这些参数构建出了空的序列")
+        return Routine(
+            id=self.id, label=self.label, title=self.title, steps=steps,
+            loop=self.loop, params=self.params, build=self.build,
+        )
 
     @property
     def seconds(self) -> float:
@@ -110,6 +215,10 @@ class Routine:
             "seconds": round(self.seconds, 1),
             "needs_dangerous": self.needs_dangerous,
             "builtin": self.id in {routine.id for routine in ROUTINES},
+            # Empty for most routines, and the page only draws the ⚙ when it is
+            # not. Sending `[]` rather than omitting the key keeps the contract
+            # one shape.
+            "params": [param.as_dict() for param in self.params],
         }
 
 
@@ -195,6 +304,110 @@ def _action(name: str, label: str, seconds: float, *, dangerous: bool = False) -
     return Step(label, "robot_play_action", {"name": name, "confirm": True}, seconds, dangerous)
 
 
+#: Seconds allowed for a walk, for the *step's* declared wait.
+#:
+#: `robot_walk` closes its loop and stops when it has measured the distance, so
+#: this is a **ceiling** on the wait rather than a duration — except on a robot
+#: that publishes no odometry, where it falls back to a timed move and then it
+#: really is the duration.
+#:
+#: Which is why the rule is "generous", not "accurate": **a wait that is too
+#: short fires the next step while the dog is still walking**, and the failure
+#: that produces is a turn taken mid-stride. Too long only makes the routine
+#: slower, which is visible and harmless.
+#:
+#: The two shipped routines were 4.0 s/m (0.4 m → 1.6 s) and 6.7 s/m (0.3 m →
+#: 2.0 s) for the same primitive, which is not a rule at all — it is two numbers
+#: somebody typed. Rather than reverse-engineer a formula that reproduces both,
+#: this is a floor plus a rate, and the floor is the generous one.
+_WALK_SECONDS_PER_M = 4.0
+_WALK_SECONDS_FLOOR = 2.0
+
+
+def _walk_seconds(metres: float) -> float:
+    return max(_WALK_SECONDS_FLOOR, abs(metres) * _WALK_SECONDS_PER_M)
+
+
+# ── the two routines with knobs ───────────────────────────────────────
+
+
+#: ``走正方形``: how long a side, and how many laps.
+#:
+#: The numbers were literals — 0.4 m and four legs — which meant the operator
+#: who wanted a bigger square had no way to say so, and the one indoors with two
+#: dogs in a room had no way to ask for a smaller one.
+SQUARE_PARAMS: Tuple[Param, ...] = (
+    Param("leg_m", "边长", 0.4, 0.2, 2.0, step=0.1, unit=" m"),
+    Param("laps", "圈数", 1, 1, 4, step=1, unit=" 圈"),
+)
+
+
+def _build_square(values: Dict[str, float]) -> Tuple[Step, ...]:
+    leg = values["leg_m"]
+    laps = int(round(values["laps"]))
+    seconds = _walk_seconds(leg)
+    return (
+        # **Standing first is not optional.** The firmware refuses `robot_move`
+        # from a lying robot with code 3201, and the first version of this
+        # routine went straight to a forward step and failed on both dogs.
+        _stand(),
+        *(
+            step
+            # **Four sides per lap.** `laps` counts trips round the square, and
+            # a square has four sides — the first version of this used one leg
+            # per lap, which quietly turned the shipped nine-step routine into a
+            # three-step one. The default has to reproduce what is on the button
+            # today, not merely something plausible.
+            for _ in range(laps * 4)
+            for step in (
+                # **A measured leg, not a timed one.** `robot_move` takes a
+                # duration, so how far a dog goes in 0.6 s depends on the floor,
+                # the battery and the gait — and a square walked four times
+                # compounds it. `robot_walk` stops when it has measured the
+                # distance.
+                #
+                # It falls back to a timed move, and says so, on a robot that
+                # publishes no odometry — which the Go2 used for testing does
+                # not. So this is not worse there and better everywhere else.
+                Step("前进", "robot_walk",
+                     {"meters": leg, "confirm": True}, seconds),
+                Step("右转 90°", "robot_turn", {"degrees": -90, "confirm": True}, 6.0),
+            )
+        ),
+    )
+
+
+#: ``列队前进``: how far each leg is, how many legs, and how long to pause.
+FORMATION_PARAMS: Tuple[Param, ...] = (
+    Param("step_m", "每步距离", 0.3, 0.1, 1.0, step=0.1, unit=" m"),
+    Param("legs", "步数", 3, 1, 10, step=1, unit=" 步"),
+    Param("pause_s", "组间停顿", 1.0, 0.5, 3.0, step=0.5, unit=" s"),
+)
+
+
+def _build_formation(values: Dict[str, float]) -> Tuple[Step, ...]:
+    distance = values["step_m"]
+    legs = int(round(values["legs"]))
+    pause = values["pause_s"]
+    seconds = _walk_seconds(distance)
+    return (
+        _stand(),
+        *(
+            step
+            for _ in range(legs)
+            for step in (
+                # The same distance for both dogs, rather than the same
+                # duration: two timed moves of one second do not travel the same
+                # distance on two floors, and keeping them in line is the entire
+                # point of this routine.
+                Step("一起前进", "robot_walk",
+                     {"meters": distance, "confirm": True}, seconds),
+                Step("停下", "robot_stop", {}, pause),
+            )
+        ),
+    )
+
+
 #: The routines offered. Deliberately short and gentle: a routine is the one
 #: control that keeps sending commands after the operator has taken their hand
 #: off the keyboard, so the bar for including one is that it is obviously safe
@@ -235,50 +448,18 @@ ROUTINES: Tuple[Routine, ...] = (
     Routine(
         id="square",
         label="走正方形",
-        title="站好 → (前进 0.4m → 右转 90°) ×4，回到原点。两条狗各走各的正方形。",
-        steps=(
-            _stand(),
-            *(
-                step
-                for _ in range(4)
-                for step in (
-                    # **A measured leg, not a timed one.** `robot_move` takes a
-                    # duration, so how far a dog goes in 0.6 s depends on the
-                    # floor, the battery and the gait — and a square walked four
-                    # times compounds it. `robot_walk` stops when it has measured
-                    # the distance.
-                    #
-                    # It falls back to a timed move, and says so, on a robot
-                    # that publishes no odometry — which the Go2 used for
-                    # testing does not. So this is not worse there and better
-                    # everywhere else.
-                    Step("前进", "robot_walk",
-                         {"meters": 0.4, "confirm": True}, 1.6),
-                    Step("右转 90°", "robot_turn", {"degrees": -90, "confirm": True}, 6.0),
-                )
-            ),
-        ),
+        title="站好 → (前进 → 右转 90°) × 圈数。两条狗各走各的正方形。",
+        params=SQUARE_PARAMS,
+        build=_build_square,
+        steps=_build_square({p.key: p.default for p in SQUARE_PARAMS}),
     ),
     Routine(
         id="formation",
         label="列队前进",
-        title="站好 → (一起前进 0.3m → 一起停下) ×3。用于确认同驱时序。",
-        steps=(
-            _stand(),
-            *(
-                step
-                for _ in range(3)
-                for step in (
-                    # The same distance for both dogs, rather than the same
-                    # duration: two timed moves of one second do not travel the
-                    # same distance on two floors, and keeping them in line is
-                    # the entire point of this routine.
-                    Step("一起前进", "robot_walk",
-                         {"meters": 0.3, "confirm": True}, 2.0),
-                    Step("停下", "robot_stop", {}, 1.0),
-                )
-            ),
-        ),
+        title="站好 → (一起前进 → 一起停下) × 步数。用于确认同驱时序。",
+        params=FORMATION_PARAMS,
+        build=_build_formation,
+        steps=_build_formation({p.key: p.default for p in FORMATION_PARAMS}),
     ),
 )
 

@@ -33,6 +33,19 @@ STOP = ToolAnnotations(
 #: (1.0 forward by default), so 1.0 means "as fast as the robot allows".
 SPEED_LIMIT = 1.0
 
+#: Furthest a single ``robot_walk`` may be asked to travel, in metres.
+#:
+#: **A named constant rather than a literal in the body** so the console can
+#: offer a range that matches what the tool actually accepts. It was `5.0`
+#: inline, which meant the only way to find it was to read this file — and a
+#: parameter panel that guesses a range is one that offers values the tool will
+#: reject.
+MAX_WALK_M = 5.0
+
+#: Largest single ``robot_turn``, in degrees, in either direction. Named for the
+#: same reason as ``MAX_WALK_M``.
+MAX_TURN_DEG = 1080.0
+
 
 def register(server, ctx: ToolContext) -> None:
     # ── stop ─────────────────────────────────────────────────────────
@@ -334,10 +347,11 @@ def register(server, ctx: ToolContext) -> None:
             guard.require_confirm(
                 confirm, f"robot_turn({target:g}° — the robot will rotate in place)"
             )
-            if abs(target) > 360 * 3:
+            if abs(target) > MAX_TURN_DEG:
                 raise GuardRejected(
-                    f"{target:g}° is beyond the hard limit (±1080°). Turn in smaller steps.",
-                    detail={"requested": target},
+                    f"{target:g}° is beyond the hard limit (±{MAX_TURN_DEG:g}°). "
+                    f"Turn in smaller steps.",
+                    detail={"requested": target, "limit": MAX_TURN_DEG},
                 )
 
             await ctx.session.ensure_connected()
@@ -400,10 +414,11 @@ def register(server, ctx: ToolContext) -> None:
             if abs(target) < 1e-3:
                 return ctx.ok(action="walk", skipped=True,
                               note="0 m is a no-op; nothing was sent.")
-            if abs(target) > 5.0:
+            if abs(target) > MAX_WALK_M:
                 raise GuardRejected(
-                    f"{target:g} m is beyond the ±5 m limit. Walk in smaller legs.",
-                    detail={"requested": target},
+                    f"{target:g} m is beyond the ±{MAX_WALK_M:g} m limit. "
+                    f"Walk in smaller legs.",
+                    detail={"requested": target, "limit": MAX_WALK_M},
                 )
 
             guard.require_confirm(confirm, f"robot_walk({target:g} m)")

@@ -198,6 +198,43 @@ _GO2_SAFE_ACTIONS: Tuple[Option, ...] = (
     ("rise_sit", "从坐姿站起"),
 )
 
+#: The dangerous half of the same catalogue, in the order they are offered.
+#:
+#: **These were always reachable and never shown.** ``allow_dangerous`` defaults
+#: to true, so every one of them would run — the console simply did not offer
+#: them, which meant the capability existed for anyone willing to read
+#: ``robots/go2.py`` and not for the operator.
+#:
+#: The console shows them in a group that is **collapsed by default**, because
+#: the cost of mistapping a bow and mistapping a backflip are not the same, and
+#: an emergency is when a flat list of twenty-two buttons gets mistapped. The
+#: order runs from "on the spot" to "needs a runway", so the list reads as a
+#: risk gradient rather than alphabetically.
+_GO2_HARD_ACTIONS: Tuple[Option, ...] = (
+    ("dance_1", "跳舞 1"),
+    ("dance_2", "跳舞 2"),
+    ("handstand", "单手倒立"),
+    ("front_jump", "前跳"),
+    ("front_pounce", "前扑"),
+    ("bound", "奔跑跳步 Bound"),
+    ("cross_step", "交叉步 CrossStep"),
+    ("onesided_step", "单侧步 OnesidedStep"),
+    ("moon_walk", "月球步 MoonWalk"),
+    ("front_flip", "前空翻"),
+    ("back_flip", "后空翻"),
+    ("left_flip", "左空翻"),
+    ("right_flip", "右空翻"),
+)
+
+#: Actions that need space and a soft floor, and are marked ``⚠`` wherever they
+#: appear. A **character** rather than a colour: colour is spoken for by state
+#: (running / done / failed), and a warning carried only by colour is invisible
+#: to a colour-blind operator.
+_GO2_NEEDS_SPACE: Tuple[str, ...] = (
+    "front_jump", "front_pounce",
+    "front_flip", "back_flip", "left_flip", "right_flip",
+)
+
 #: Step/gallop moves from the same catalog. All four are ``dangerous=True``
 #: (they need ``UNITREE_AGENT_ALLOW_DANGEROUS``, default true) and all four are
 #: one-shot moves: this is the closest thing to gait selection that any tool
