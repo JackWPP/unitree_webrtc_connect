@@ -548,3 +548,75 @@ def test_legibility_travels_with_the_pose():
     payload = frame.as_dict()
     assert payload["poses"]["dog1"]["legible"] is True
     assert payload["poses"]["dog2"]["legible"] is False
+
+
+# ─── a geometry that does not exist ───────────────────────────────────
+
+
+def test_an_impossible_camera_height_does_not_break_the_endpoint():
+    """**A 500 I introduced while fixing a bug of the same class.**
+
+    `parallax_m` returned `float("inf")` when the camera is at or below tag
+    height. That flowed into `residual_m` and `as_dict()`, and out through a
+    `JSONResponse` — whose `json.dumps(..., allow_nan=False)` **raises**. The
+    endpoint returned 500 and the whole arena panel was unreachable.
+
+    `json.dumps` on its own accepts `inf` (it writes the non-standard
+    `Infinity`), which is why the first check of this passed and the real one did
+    not. `None` is the honest answer: "I cannot compute it" is not "it is fine".
+    """
+    import json
+
+    from starlette.responses import JSONResponse
+
+    from unitree_robot_agent.vision.detect import Calibration
+
+    impossible = Calibration(
+        [(0, 0), (100, 0), (100, 100), (0, 100)],
+        [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
+        tag_height_m=3.0,      # the tag is above the camera
+        camera_height_m=2.5,
+    )
+
+    assert impossible.parallax_m((0.0, 0.0)) is None
+    assert impossible.residual_m is None
+    # Not adequate, because there is no bound to be under.
+    assert impossible.adequate is False
+
+    payload = impossible.as_dict()
+    assert payload["residual_m"] is None
+    assert payload["scale_factor"] is None
+    # The check that matters: the response the page actually receives.
+    response = JSONResponse(payload)
+    assert response.status_code == 200
+    json.loads(response.body)  # the browser does this, and would throw on Infinity
+
+
+def test_the_ordinary_floor_calibration_still_reports_numbers():
+    """The control. A guard that suppresses the normal answer is not a guard."""
+    from unitree_robot_agent.vision.detect import Calibration
+
+    ordinary = Calibration(
+        [(0, 0), (100, 0), (100, 100), (0, 100)],
+        [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
+        tag_height_m=0.35,
+        camera_height_m=2.5,
+    )
+    assert isinstance(ordinary.residual_m, float)
+    assert ordinary.residual_m > 0.3
+    assert ordinary.as_dict()["residual_m"] is not None
+
+
+def test_a_zero_height_calibration_reports_no_parallax_at_all():
+    """`tag_height_m = 0` means "calibrated at tag height", which has no error
+    to report — a real zero, not a missing number."""
+    from unitree_robot_agent.vision.detect import Calibration
+
+    at_height = Calibration(
+        [(0, 0), (100, 0), (100, 100), (0, 100)],
+        [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
+        tag_height_m=0.0,
+        camera_height_m=2.5,
+    )
+    assert at_height.residual_m == 0.0
+    assert at_height.as_dict()["residual_m"] == 0.0

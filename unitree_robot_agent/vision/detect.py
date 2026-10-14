@@ -152,7 +152,7 @@ class Calibration:
         ys = [y for _x, y in self.world_points]
         return (sum(xs) / len(xs), sum(ys) / len(ys))
 
-    def parallax_m(self, world_point: Point) -> float:
+    def parallax_m(self, world_point: Point) -> Optional[float]:
         """How far the reported point is from the floor point under the dog.
 
         The line of sight from a camera at height `H` through a tag at height
@@ -181,15 +181,22 @@ class Calibration:
             return 0.0
         if self.camera_height_m <= self.tag_height_m:
             # The camera is at or below tag height, so the geometry this is the
-            # small-angle form of does not exist. `scale_factor` says the same
-            # thing with infinity; here there is no meaningful bound at all.
-            return float("inf")
+            # small-angle form of does not exist — there is no parallax to
+            # bound, only a configuration that cannot happen.
+            #
+            # **`None`, not `inf`.** The first version returned infinity, which
+            # flowed into `residual_m` and `as_dict` and out through a
+            # `JSONResponse` — whose `json.dumps(..., allow_nan=False)` raises.
+            # The endpoint returned 500 and the whole arena panel was
+            # unreachable. Exactly the class of bug this change was part of
+            # fixing, introduced by the fix.
+            return None
         origin = self.camera_world_xy or self._centre
         lateral = math.dist(world_point, origin)
         return self.tag_height_m * lateral / (self.camera_height_m - self.tag_height_m)
 
     @property
-    def residual_m(self) -> float:
+    def residual_m(self) -> Optional[float]:
         """The **worst** parallax over the calibrated area — an upper bound.
 
         Zero when the calibration was taken on a plane at tag height, which is
@@ -204,9 +211,12 @@ class Calibration:
         """
         if self.tag_height_m <= 0 or self.camera_height_m <= 0:
             return 0.0
-        return max(
-            (self.parallax_m(point) for point in self.world_points), default=0.0
-        )
+        values = [self.parallax_m(point) for point in self.world_points]
+        if any(value is None for value in values):
+            # "I cannot compute it" is not "it is fine". A bound that does not
+            # exist is not a small bound.
+            return None
+        return max(values, default=0.0)
 
     @property
     def scale_factor(self) -> float:
@@ -241,7 +251,9 @@ class Calibration:
         dogs' relative positions are still meaningful for formation, above it
         the numbers describe the floor under where the tags *appear* to be.
         """
-        return self.residual_m <= 0.15
+        bound = self.residual_m
+        # A calibration whose bound cannot be computed is not one to act on.
+        return bound is not None and bound <= 0.15
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -249,9 +261,16 @@ class Calibration:
             "world_points": [list(p) for p in self.world_points],
             "tag_height_m": self.tag_height_m,
             "camera_height_m": self.camera_height_m,
-            "residual_m": round(self.residual_m, 3),
+            # `None` when the geometry does not exist, which serialises as
+            # `null`. It used to be `inf`, which does not serialise at all.
+            "residual_m": (
+                round(self.residual_m, 3) if self.residual_m is not None else None
+            ),
             "adequate": self.adequate,
-            "scale_factor": round(self.scale_factor, 3),
+            "scale_factor": (
+                round(self.scale_factor, 3)
+                if self.scale_factor != float("inf") else None
+            ),
             "camera_world_xy": list(self.camera_world_xy) if self.camera_world_xy else None,
             # **`mirrored` is deliberately not here.** It is inverted with
             # respect to the convention the page generates (see the property),
@@ -287,8 +306,9 @@ class DogPose:
     #: How many pixels across the tag was in this frame — the honest measure of
     #: how much to trust the numbers beside it.
     tag_px: float = 0.0
-    #: Estimated parallax error from the tag's height, in metres.
-    parallax_m: float = 0.0
+    #: Estimated parallax error from the tag's height, in metres. `None` when
+    #: the calibration cannot compute one — see `Calibration.parallax_m`.
+    parallax_m: Optional[float] = 0.0
 
     @property
     def position(self) -> Point:
@@ -333,7 +353,9 @@ class DogPose:
             "heading_deg": round(self.heading_deg, 1),
             "tag_px": round(self.tag_px, 1),
             "legible": self.legible,
-            "parallax_m": round(self.parallax_m, 3),
+            "parallax_m": (
+                round(self.parallax_m, 3) if self.parallax_m is not None else None
+            ),
         }
 
 

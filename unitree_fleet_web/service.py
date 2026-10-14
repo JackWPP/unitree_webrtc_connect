@@ -36,6 +36,16 @@ from .sync import SyncMonitor
 logger = logging.getLogger("unitree_fleet_web.service")
 
 
+def _maybe_round(value, digits: int):
+    """`round`, or `None` if there is no number.
+
+    The parallax bound is `None` when the calibration's geometry does not exist
+    — a camera at or below tag height. Rounding that raises, and the raise would
+    come out of an endpoint as a 500 rather than as the missing number it is.
+    """
+    return round(value, digits) if isinstance(value, (int, float)) else None
+
+
 def _shoelace(points) -> float:
     """Twice the area of a quadrilateral, unsigned.
 
@@ -1723,7 +1733,7 @@ class ConsoleService:
             "started": True,
             "reason": "",
             "calibrated": True,
-            "residual_m": round(self._calibration.residual_m, 3),
+            "residual_m": _maybe_round(self._calibration.residual_m, 3),
             "scale_factor": round(self._calibration.scale_factor, 3),
         }
 
@@ -1875,7 +1885,7 @@ class ConsoleService:
             "camera": status,
             "calibration": (
                 {
-                    "residual_m": round(self._calibration.residual_m, 3),
+                    "residual_m": _maybe_round(self._calibration.residual_m, 3),
                     "scale_factor": round(self._calibration.scale_factor, 3),
                     "adequate": self._calibration.adequate,
                     # The corners, so the map can be drawn to scale instead of
@@ -2072,9 +2082,13 @@ class ConsoleService:
             ) from exc
 
         self._calibration = calibration
+        # `%s`, not `%.2f`: either number can be absent, and a logging call that
+        # raises on a legitimate state is a crash in the one place that is
+        # supposed to explain what happened.
         logger.info(
-            "arena calibration saved: residual %.2f m, scale x%.3f",
-            calibration.residual_m, calibration.scale_factor,
+            "arena calibration saved: residual %s m, scale x%s",
+            _maybe_round(calibration.residual_m, 3),
+            _maybe_round(calibration.scale_factor, 3),
         )
         return {
             "saved": True,
