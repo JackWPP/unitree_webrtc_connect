@@ -13,6 +13,8 @@ would let the loop "converge" on a picture that never changed.
 from __future__ import annotations
 
 import asyncio
+import sys
+from dataclasses import replace
 import math
 import time
 from pathlib import Path
@@ -27,8 +29,19 @@ from unitree_robot_agent.vision.markers import default_markers, render_tag  # no
 from unitree_fleet_web import ConsoleConfig, ConsoleService  # noqa: E402
 from unitree_fleet_web.formation import Formation  # noqa: E402
 
+#: The simulated camera, at a **realistic resolution**.
+#:
+#: It used to map 640 px across a 4 m arena — 160 px/m — which rendered a 0.30 m
+#: tag at **48 px**, below the 64 px floor the detector needs to trust a tag's
+#: *id*. So these tests were running in the regime `markers.py` describes as
+#: "低于这个数检测器不是失败，是开始瞎猜 id", and treating the poses as
+#: trustworthy. A real 1080p camera over the same arena is nearer 400 px/m.
+#:
+#: Raising it was the honest fix rather than weakening the guard: the tests
+#: should exercise the setup a session actually aims for, and the sub-floor case
+#: now has its own test that asks for it deliberately.
 CALIBRATION = {
-    "image_points": [[80, 80], [720, 80], [720, 720], [80, 720]],
+    "image_points": [[160, 160], [1440, 160], [1440, 1440], [160, 1440]],
     "world_points": [[0, 4], [4, 4], [4, 0], [0, 0]],
     "tag_height_m": 0.0,
     "camera_height_m": 0.0,
@@ -37,8 +50,26 @@ CALIBRATION = {
 MARKERS = default_markers(["dog1", "dog2"])
 
 
-def render(poses, *, size: int = 800):
-    """The arena as the camera would see it, from the dogs' poses."""
+def render(poses, *, size: int = 1600, tag_size_m: float = 0.30):
+    """The arena as the camera would see it, from the dogs' poses.
+
+    **`tag_size_m` is the simulation's own choice, and it has to be explicit.**
+    This drew every tag at a hardcoded 0.30 m of world size while ignoring the
+    marker's declared `size_m` — so shrinking a marker changed the pattern that
+    was drawn and not the area it covered, and a test that thought it was
+    creating tiny tags measured 95.9 px ones.
+
+    Why 0.30 m rather than the 0.15 m a Go2 actually wears: at this camera's
+    resolution (1600 px across a 4 m arena, 400 px/m) a **150 mm tag is 60 px**,
+    under the 64 px floor the detector needs to trust a tag's *id*. So the
+    simulation draws tags big enough to be legible at its own resolution, and
+    the sub-floor case is a test that asks for it.
+
+    The number this yields for a real session is worth carrying: 64 px for a
+    150 mm tag is about **430 px/m**, which over a 4 m arena means a camera
+    wider than 1700 px — a 1080p camera at four metres just clears it, and a
+    150 mm tag on a 720p camera does not. See `docs/OPEN_QUESTIONS.md`.
+    """
     frame = np.full((size, size), 255, dtype=np.uint8)
     inverse = np.linalg.inv(cv2.getPerspectiveTransform(
         np.float32(CALIBRATION["image_points"]),
@@ -46,7 +77,7 @@ def render(poses, *, size: int = 800):
     ))
     for marker, (x, y, heading) in zip(MARKERS, poses):
         tag = render_tag(marker)
-        tag_size, half = 0.30, 0.15
+        half = tag_size_m / 2.0
         theta = math.radians(heading)
         nose = (math.cos(theta), math.sin(theta))
         right = (math.sin(theta), -math.cos(theta))
@@ -81,8 +112,10 @@ class SimulatedArena:
     entire reason the loop exists.
     """
 
-    def __init__(self, poses, *, max_speed_mps: float = 1.9):
+    def __init__(self, poses, *, max_speed_mps: float = 1.9,
+                 tag_size_m: float = 0.30):
         self.poses = [list(pose) for pose in poses]
+        self.tag_size_m = tag_size_m
         self.max_speed_mps = max_speed_mps
         self.commands = []
         self._frame = None
@@ -97,7 +130,9 @@ class SimulatedArena:
     def latest(self):
         from unitree_robot_agent.vision.arena import Frame
 
-        self._frame = Frame(image=render(self.poses), at=self._at)
+        self._frame = Frame(
+            image=render(self.poses, tag_size_m=self.tag_size_m), at=self._at
+        )
         return self._frame
 
     @property
@@ -604,3 +639,92 @@ async def test_stop_all_stops_a_running_formation(loop_service):
                      loop_service._lease):  # noqa: SLF001
             if task is not None:
                 task.cancel()
+
+
+async def test_the_formation_refuses_to_steer_from_an_illegible_tag(loop_service):
+    """**A tag too small to read is worse than one that is missing.**
+
+    Below the floor the detector does not fail, it starts misreading ids — and a
+    misread id puts one dog's position on the other, from data that looks
+    entirely plausible. This loop would then steer each physical dog by the
+    wrong error. Missing data stops the loop; wrong data drives it.
+    """
+    from unitree_fleet_web.formation import Formation
+
+    arena = SimulatedArena([(1.0, 2.0, 0.0), (2.8, 2.0, 0.0)])
+    detector = await _settled(loop_service, arena)
+    try:
+        # The dogs are visible and their positions are real; only the identity
+        # is uncertain.
+        loop_service._arena["poses"]["dog2"]["legible"] = False  # noqa: SLF001
+
+        result = await loop_service.align_formation(
+            Formation(distance_m=1.0, bearing_deg=0.0, mover="b"),
+            max_steps=3, settle_s=0.05,
+        )
+
+        assert result["outcome"] == "illegible", result
+        assert not result["steps"], "it moved the dogs on an unreadable tag"
+        assert "另一只" in result["detail"]
+    finally:
+        detector.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await detector
+
+
+async def test_arena_state_surfaces_which_poses_are_uncertain(loop_service):
+    """The operator has to be able to see it, or the refusal is a mystery."""
+    arena = SimulatedArena([(1.0, 2.0, 0.0), (2.8, 2.0, 0.0)])
+    detector = await _settled(loop_service, arena)
+    try:
+        assert loop_service.arena_state().get("illegible") == []
+        loop_service._arena["poses"]["dog2"]["legible"] = False  # noqa: SLF001
+        assert loop_service.arena_state()["illegible"] == ["dog2"]
+    finally:
+        detector.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await detector
+
+
+async def test_an_unreadable_tag_stops_the_loop_and_says_which(loop_service):
+    """**The sub-floor case, asked for deliberately.**
+
+    The simulated camera is realistic now, so this reaches the regime by
+    shrinking the tags rather than by hoping the scene happens to be too far
+    away. Below the floor the detector does not fail, it starts misreading ids —
+    and two tags four bits apart in `DICT_APRILTAG_36h11` decode to each other
+    under blur, which puts one dog's position on the other.
+    """
+    from unitree_fleet_web.formation import Formation
+
+    # 0.06 m at this camera's 400 px/m is 24 px — well under the 64 px floor.
+    #
+    # Passed as an argument rather than by monkeypatching `MARKERS`, which the
+    # first version of this test did: `render` ignored the marker's declared
+    # size and drew a hardcoded 0.30 m, so the patch changed the pattern that
+    # was drawn and not the area it covered, and the test quietly measured
+    # 95.9 px tags while claiming to create unreadable ones.
+    arena = SimulatedArena([(1.0, 2.0, 0.0), (2.8, 2.0, 0.0)], tag_size_m=0.06)
+    detector = await _settled(loop_service, arena)
+    try:
+        state = loop_service.arena_state()
+        sizes = {
+            rid: pose.get("tag_px") for rid, pose in (state.get("poses") or {}).items()
+        }
+        assert sizes, "nothing was detected at all, so this tests nothing"
+        assert all(px < 64 for px in sizes.values()), (
+            f"the tags are still readable at {sizes}; the test does not reach "
+            f"the regime it is about"
+        )
+        assert state["illegible"], state
+
+        result = await loop_service.align_formation(
+            Formation(distance_m=1.0, mover="b"), max_steps=3, settle_s=0.02,
+        )
+        assert result["outcome"] == "illegible", result
+        assert not result["steps"], "it moved the dogs on an unreadable tag"
+        assert "比看不到更糟" in result["detail"]
+    finally:
+        detector.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await detector

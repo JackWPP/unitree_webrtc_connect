@@ -294,6 +294,36 @@ class DogPose:
     def position(self) -> Point:
         return (self.x, self.y)
 
+    @property
+    def legible(self) -> bool:
+        """Whether the tag was big enough in this frame to trust its **id**.
+
+        **This is what `tag_px` is for, and nothing checked it.** The value was
+        computed, documented as "the honest measure of how much to trust the
+        numbers beside it", put on the wire — and compared to nothing. A tag
+        detected at 40 px was treated exactly like one at 200 px.
+
+        That matters more than a position being slightly off, because the
+        failure below the floor is not a refusal, it is a **misread id**: two
+        tags four bits apart in `DICT_APRILTAG_36h11` decode to each other under
+        blur, and a misread id puts one dog's position on the other. The
+        formation then steers each dog by the wrong error, from data that looks
+        entirely plausible. `markers.py` says the same thing about the same
+        number: "低于这个数检测器不是失败，是开始瞎猜 id".
+
+        The floor is the module's own — `MIN_PX_PER_CELL × CELLS_ACROSS`, 64 px
+        for a 36h11 tag at 8 cells — and it is deliberately above the measured
+        detection cliff (σ≤1.8 px, about 40 px), because the cliff is where
+        *detection* fails and this is about *identity*.
+        """
+        from .markers import CELLS_ACROSS, MIN_PX_PER_CELL
+
+        floor = MIN_PX_PER_CELL * CELLS_ACROSS
+        # A pose with no measurement at all is not legible; one from a synthetic
+        # scene that did not fill in the field should not be silently trusted
+        # either.
+        return self.tag_px >= floor
+
     def as_dict(self) -> Dict[str, Any]:
         return {
             "robot_id": self.robot_id,
@@ -302,6 +332,7 @@ class DogPose:
             "y": round(self.y, 3),
             "heading_deg": round(self.heading_deg, 1),
             "tag_px": round(self.tag_px, 1),
+            "legible": self.legible,
             "parallax_m": round(self.parallax_m, 3),
         }
 

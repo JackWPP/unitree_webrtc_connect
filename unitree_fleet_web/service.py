@@ -1914,7 +1914,18 @@ class ConsoleService:
         # one implementation of it instead of one per consumer.
         poses = self._arena.get("poses") or {}
         gap = self._separation_from(poses)
-        return {**out, **self._arena, "separation": gap}
+        # Surfaced next to the measurement, because it is a property of the
+        # measurement rather than of the dogs: the position is real, the
+        # *identity* is not certain.
+        illegible = sorted(
+            name for name, pose in poses.items() if pose.get("legible") is False
+        )
+        return {
+            **out,
+            **self._arena,
+            "separation": gap,
+            "illegible": illegible,
+        }
 
     @staticmethod
     def _separation_from(poses: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -2228,6 +2239,35 @@ class ConsoleService:
                 return self._formation_result(
                     steps, target, "no_measurement",
                     "看不到两只狗 —— 相机没画面、出画了、或者没标定",
+                )
+
+            # **A tag too small to read is worse than one that is missing.**
+            #
+            # Below `MIN_PX_PER_CELL × CELLS_ACROSS` the detector does not fail,
+            # it starts misreading ids — and two tags four bits apart in
+            # `DICT_APRILTAG_36h11` decode to each other under blur. A misread
+            # id puts one dog's position on the other, from data that looks
+            # entirely plausible, and this loop would then steer each physical
+            # dog by the wrong error. Missing data stops the loop; wrong data
+            # drives it.
+            #
+            # `tag_px` was already computed, documented as "the honest measure
+            # of how much to trust the numbers beside it", and put on the wire —
+            # and compared to nothing.
+            unclear = sorted(
+                name for name, pose in poses.items()
+                if pose.get("legible") is False
+            )
+            if unclear:
+                detail = ", ".join(
+                    f"{name} 的标签只有 {poses[name].get('tag_px', 0):.0f}px"
+                    for name in unclear
+                )
+                return self._formation_result(
+                    steps, target, "illegible",
+                    f"标签太小，认不出是哪只狗（{detail}）—— "
+                    f"读错 id 会把一只狗的位置算到另一只身上，比看不到更糟。"
+                    f"让狗离相机近一点，或者用更大的标签。",
                 )
 
             current = converged(poses, target,

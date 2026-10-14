@@ -505,3 +505,46 @@ def test_the_residual_is_a_bound_and_not_an_optimistic_estimate():
         floor.parallax_m(point) for point in floor.world_points
     )
     assert floor.residual_m == pytest.approx(farthest, abs=1e-9)
+
+
+# ─── a tag too small to trust its id ──────────────────────────────────
+
+
+def test_a_big_tag_is_legible_and_a_small_one_is_not():
+    """**`tag_px` was computed, documented as "the honest measure of how much to
+    trust the numbers beside it", put on the wire — and compared to nothing.**
+
+    Below `MIN_PX_PER_CELL × CELLS_ACROSS` the detector does not fail, it starts
+    misreading ids, and two tags four bits apart in `DICT_APRILTAG_36h11` decode
+    to each other under blur. The position is real; the *identity* is not.
+    """
+    from unitree_robot_agent.vision.detect import DogPose
+    from unitree_robot_agent.vision.markers import CELLS_ACROSS, MIN_PX_PER_CELL
+
+    floor = MIN_PX_PER_CELL * CELLS_ACROSS
+    assert floor == 64.0, f"the floor moved to {floor}; the reasoning below assumes 64"
+
+    def pose(tag_px):
+        return DogPose(robot_id="dog1", tag_id=0, x=0.0, y=0.0,
+                       heading_deg=0.0, tag_px=tag_px)
+
+    assert pose(200.0).legible is True
+    assert pose(floor).legible is True
+    assert pose(floor - 0.1).legible is False
+    # The measured regime the review reached: `locate` reports a pose for a
+    # 40 × 40 px tag, and 40 px is where the detector starts guessing.
+    assert pose(40.0).legible is False
+    assert pose(0.0).legible is False, "a pose with no measurement is not legible"
+
+
+def test_legibility_travels_with_the_pose():
+    """It has to reach the server, or the flag is a private opinion."""
+    from unitree_robot_agent.vision.detect import DogPose, FrameResult
+
+    frame = FrameResult(poses={
+        "dog1": DogPose("dog1", 0, 1.0, 2.0, 90.0, tag_px=180.0),
+        "dog2": DogPose("dog2", 1, 3.0, 2.0, 90.0, tag_px=38.0),
+    })
+    payload = frame.as_dict()
+    assert payload["poses"]["dog1"]["legible"] is True
+    assert payload["poses"]["dog2"]["legible"] is False
